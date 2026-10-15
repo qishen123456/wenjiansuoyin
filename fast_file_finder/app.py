@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 import sqlite3
 import threading
 import time
 import unicodedata
 import math
+import secrets
+import uuid
 from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Literal
@@ -22,14 +25,21 @@ from pydantic import BaseModel, Field
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 APP_DIR = Path(__file__).resolve().parent
 load_dotenv(APP_DIR / ".env")
-DB_PATH = Path(os.getenv("INDEX_DB_PATH", str(APP_DIR / "data" / "file_index.db")))
+_raw_db_path = Path(os.getenv("INDEX_DB_PATH", str(APP_DIR / "data" / "file_index.db"))).expanduser()
+DB_PATH = _raw_db_path if _raw_db_path.is_absolute() else (APP_DIR / _raw_db_path).resolve()
 FILE_ROOT = os.getenv("FILE_ROOT", "").strip()
+APP_ACCESS_TOKEN = os.getenv("APP_ACCESS_TOKEN", "").strip()
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("file_finder")
 ALLOWED_EXTENSIONS = {
     x.strip().lower() if x.strip().startswith(".") else "." + x.strip().lower()
     for x in os.getenv("ALLOWED_EXTENSIONS", ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods").split(",")
@@ -46,13 +56,26 @@ PREVIEW_ROWS = int(os.getenv("PREVIEW_ROWS", "100"))
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    if not APP_ACCESS_TOKEN:
+        logger.warning("APP_ACCESS_TOKEN is empty; API routes have no shared-token gate. Use localhost or configure enterprise SSO/reverse proxy before LAN exposure.")
     yield
 
 
-app = FastAPI(title="企业文件检索与轻量 BI 分析中心", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="企业文件检索与轻量 BI 分析中心", version="0.3.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 
+
+@app.middleware("http")
+async def optional_shared_access_token(request: Request, call_next):
+    """Optional shared token gate for internal deployments; not a replacement for user ACL/SSO."""
+    if APP_ACCESS_TOKEN and request.url.path.startswith("/api/"):
+        supplied = request.headers.get("x-app-token", "")
+        if not supplied or not secrets.compare_digest(supplied, APP_ACCESS_TOKEN):
+            return JSONResponse(status_code=401, content={"detail": "系统启用了访问令牌，请输入管理员配置的 APP_ACCESS_TOKEN。"})
+    return await call_next(request)
+
 _scan_lock = threading.Lock()
+_scan_state_lock = threading.RLock()
 _scan_state: dict[str, Any] = {
     "running": False,
     "phase": "idle",
@@ -68,18 +91,99 @@ _scan_state: dict[str, Any] = {
 
 
 def db_connect() -> sqlite3.Connection:
+    """Open one connection. Callers should use db_session() to guarantee closure."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA temp_store=MEMORY")
     conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
+@contextmanager
+def db_session():
+    """Commit on success, roll back on error, and always close the connection."""
+    conn = db_connect()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _scan_state_snapshot() -> dict[str, Any]:
+    with _scan_state_lock:
+        return dict(_scan_state)
+
+
+def _scan_state_replace(value: dict[str, Any]) -> None:
+    with _scan_state_lock:
+        _scan_state.clear()
+        _scan_state.update(value)
+
+
+def _scan_state_update(**changes: Any) -> None:
+    with _scan_state_lock:
+        _scan_state.update(changes)
+
+
+def _scan_state_increment(key: str, amount: int = 1) -> None:
+    with _scan_state_lock:
+        _scan_state[key] = int(_scan_state.get(key, 0)) + amount
+
+
+_root_scope_cache_lock = threading.Lock()
+_root_scope_cache_source: str | None = None
+_root_scope_cache_value = ""
+
+
+def root_scope_key() -> str:
+    """Stable, filesystem-I/O-free scope key for the configured root.
+
+    Do not call realpath/stat on every search: resolving a UNC path may touch the network share,
+    which would defeat the purpose of an index-only query path. A symlink alias is treated as a
+    different configured root and is rebuilt explicitly, which is safer than accidental mixing.
+    """
+    global _root_scope_cache_source, _root_scope_cache_value
+    source = FILE_ROOT.strip()
+    if not source:
+        return ""
+    with _root_scope_cache_lock:
+        if source != _root_scope_cache_source:
+            normalized = os.path.abspath(str(Path(source).expanduser()))
+            _root_scope_cache_value = os.path.normcase(os.path.normpath(normalized))
+            _root_scope_cache_source = source
+        return _root_scope_cache_value
+
+
+def _delete_index_rows(conn: sqlite3.Connection, where_sql: str, params: tuple[Any, ...], batch_size: int = 400) -> int:
+    """Delete file metadata and FTS rows in bounded keyset batches, without loading all paths into RAM."""
+    total = 0
+    last_id = 0
+    while True:
+        rows = conn.execute(
+            f"SELECT id FROM files WHERE ({where_sql}) AND id > ? ORDER BY id LIMIT ?",
+            (*params, last_id, batch_size),
+        ).fetchall()
+        if not rows:
+            break
+        ids = [int(row[0]) for row in rows]
+        last_id = ids[-1]
+        slots = ",".join("?" for _ in ids)
+        conn.execute(f"DELETE FROM file_fts WHERE rowid IN ({slots})", ids)
+        conn.execute(f"DELETE FROM files WHERE id IN ({slots})", ids)
+        total += len(ids)
+    return total
+
+
 def init_db() -> None:
-    with db_connect() as conn:
+    with db_session() as conn:
+        # WAL is a database-level setting. Do it once at startup, not on every request.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY,
@@ -89,12 +193,21 @@ def init_db() -> None:
                 ext TEXT NOT NULL,
                 size INTEGER NOT NULL,
                 mtime REAL NOT NULL,
-                indexed_at REAL NOT NULL
+                indexed_at REAL NOT NULL,
+                root_key TEXT NOT NULL DEFAULT '',
+                last_seen_scan TEXT NOT NULL DEFAULT ''
             )
         """)
+        # In-place migration for databases created by earlier MVP versions.
+        file_columns = {row["name"] for row in conn.execute("PRAGMA table_info(files)").fetchall()}
+        if "root_key" not in file_columns:
+            conn.execute("ALTER TABLE files ADD COLUMN root_key TEXT NOT NULL DEFAULT ''")
+        if "last_seen_scan" not in file_columns:
+            conn.execute("ALTER TABLE files ADD COLUMN last_seen_scan TEXT NOT NULL DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_name ON files(name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_ext ON files(ext)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_root_scan ON files(root_key,last_seen_scan)")
         # 通过文件名/路径的二元字符片段建立 FTS 候选召回。查询时不读取 Excel 内容。
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS file_fts USING fts5(
@@ -103,7 +216,7 @@ def init_db() -> None:
             )
         """)
         conn.execute("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        conn.execute("INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '1')")
+        conn.execute("INSERT OR REPLACE INTO app_meta(key, value) VALUES ('schema_version', '3')")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS saved_analyses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,29 +269,49 @@ def get_root() -> Path:
     root = Path(FILE_ROOT).expanduser()
     if not root.exists() or not root.is_dir():
         raise HTTPException(status_code=400, detail=f"文件根目录不可访问：{FILE_ROOT}。请检查路径、挂载状态和服务账号权限。")
-    return root
+    return root.resolve()
 
 
-def update_index_file(conn: sqlite3.Connection, file_path: Path, stat: os.stat_result) -> str:
-    path_str = str(file_path)
-    row = conn.execute("SELECT id, size, mtime, name FROM files WHERE path = ?", (path_str,)).fetchone()
+def update_index_file(
+    conn: sqlite3.Connection,
+    file_path: Path,
+    stat: os.stat_result,
+    *,
+    root_key: str | None = None,
+    scan_id: str | None = None,
+) -> str:
+    """Upsert one file and stamp it for the current scan generation."""
+    path_str = str(file_path.resolve(strict=False))
+    root_key = root_key if root_key is not None else root_scope_key()
+    scan_id = scan_id or uuid.uuid4().hex
+    row = conn.execute(
+        "SELECT id, size, mtime, name, root_key FROM files WHERE path = ?", (path_str,)
+    ).fetchone()
     name = file_path.name
     parent = str(file_path.parent)
     ext = file_path.suffix.lower()
     size = int(stat.st_size)
     mtime = float(stat.st_mtime)
     now = time.time()
-    if row and row["size"] == size and abs(row["mtime"] - mtime) < 0.0001 and row["name"] == name:
+    unchanged = row and row["size"] == size and abs(row["mtime"] - mtime) < 0.0001 and row["name"] == name
+    if unchanged and row["root_key"] == root_key:
+        conn.execute("UPDATE files SET last_seen_scan=? WHERE id=?", (scan_id, row["id"]))
         return "unchanged"
     if row:
         file_id = row["id"]
-        conn.execute("UPDATE files SET name=?, parent=?, ext=?, size=?, mtime=?, indexed_at=? WHERE id=?",
-                     (name, parent, ext, size, mtime, now, file_id))
+        conn.execute(
+            "UPDATE files SET name=?, parent=?, ext=?, size=?, mtime=?, indexed_at=?, root_key=?, last_seen_scan=? WHERE id=?",
+            (name, parent, ext, size, mtime, now, root_key, scan_id, file_id),
+        )
+        if unchanged:
+            return "updated"
         conn.execute("DELETE FROM file_fts WHERE rowid=?", (file_id,))
         action = "updated"
     else:
-        cur = conn.execute("INSERT INTO files(path,name,parent,ext,size,mtime,indexed_at) VALUES(?,?,?,?,?,?,?)",
-                           (path_str, name, parent, ext, size, mtime, now))
+        cur = conn.execute(
+            "INSERT INTO files(path,name,parent,ext,size,mtime,indexed_at,root_key,last_seen_scan) VALUES(?,?,?,?,?,?,?,?,?)",
+            (path_str, name, parent, ext, size, mtime, now, root_key, scan_id),
+        )
         file_id = cur.lastrowid
         action = "indexed"
     conn.execute("INSERT INTO file_fts(rowid,name,name_grams,path_grams) VALUES(?,?,?,?)",
@@ -186,72 +319,100 @@ def update_index_file(conn: sqlite3.Connection, file_path: Path, stat: os.stat_r
     return action
 
 
-def _scan_worker() -> None:
-    global _scan_state
-    if not _scan_lock.acquire(blocking=False):
+def _scan_worker(lock_already_acquired: bool = False) -> None:
+    """Build/update the index in the background; only prune entries after a clean full scan."""
+    if not lock_already_acquired and not _scan_lock.acquire(blocking=False):
         return
     start = time.time()
-    _scan_state = {
+    scan_id = uuid.uuid4().hex
+    logger.info("index scan started; scan_id=%s", scan_id)
+    _scan_state_replace({
         "running": True, "phase": "scanning", "started_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None, "seen": 0, "indexed": 0, "updated": 0, "deleted": 0, "errors": 0,
-        "message": "正在扫描目录并增量更新索引；查询不需要等待扫描结束。"
-    }
-    seen_paths: set[str] = set()
-    walk_errors: list[OSError] = []
+        "message": "正在扫描目录并增量更新索引；查询不需要等待扫描结束。",
+    })
+    walk_error_count = 0
+    walk_error_samples: list[str] = []
+
+    def on_walk_error(exc: OSError) -> None:
+        nonlocal walk_error_count
+        walk_error_count += 1
+        if len(walk_error_samples) < 5:
+            walk_error_samples.append(f"{type(exc).__name__}: {exc}")
+
     try:
         root = get_root()
-        with db_connect() as conn:
-            for current, dirs, filenames in os.walk(root, followlinks=False, onerror=lambda exc: walk_errors.append(exc)):
-                # 跳过常见临时/系统目录，避免无意义遍历。
-                dirs[:] = [d for d in dirs if d not in {"$RECYCLE.BIN", "System Volume Information", ".snapshot", "~$"}]
+        root_key = root_scope_key()
+        with db_session() as conn:
+            for current, dirs, filenames in os.walk(root, followlinks=False, onerror=on_walk_error):
+                dirs[:] = [d for d in dirs if d not in {"$RECYCLE.BIN", "System Volume Information", ".snapshot"}]
                 for filename in filenames:
                     if filename.startswith("~$"):
-                        continue  # 排除 Excel 正在编辑时创建的临时锁文件
+                        continue  # Excel editing lock/temp files are not real business workbooks.
                     ext = Path(filename).suffix.lower()
                     if ALLOWED_EXTENSIONS and ext not in ALLOWED_EXTENSIONS:
                         continue
                     fp = Path(current) / filename
                     try:
+                        # Avoid indexing file symlinks that may point outside the approved root.
+                        if fp.is_symlink():
+                            continue
                         stat = fp.stat()
                         if not fp.is_file():
                             continue
-                        p = str(fp)
-                        seen_paths.add(p)
-                        _scan_state["seen"] += 1
-                        action = update_index_file(conn, fp, stat)
+                        _scan_state_increment("seen")
+                        action = update_index_file(conn, fp, stat, root_key=root_key, scan_id=scan_id)
                         if action in ("indexed", "updated"):
-                            _scan_state[action] += 1
-                        if _scan_state["seen"] % 300 == 0:
+                            _scan_state_increment(action)
+                        seen = _scan_state_snapshot()["seen"]
+                        if seen % 300 == 0:
                             conn.commit()
-                            _scan_state["message"] = f"已检查 {_scan_state['seen']:,} 个表格文件，新增 {_scan_state['indexed']:,} 个。"
+                            _scan_state_update(message=f"已检查 {seen:,} 个表格文件，新增 {_scan_state_snapshot()['indexed']:,} 个。")
                     except (PermissionError, FileNotFoundError, OSError):
-                        _scan_state["errors"] += 1
+                        _scan_state_increment("errors")
                 conn.commit()
-            # 只有完整遍历且没有权限/IO 异常时才清理失效记录，避免误删未能访问目录中的索引。
-            scan_complete = not walk_errors and _scan_state["errors"] == 0
+
+            state = _scan_state_snapshot()
+            scan_complete = walk_error_count == 0 and state["errors"] == 0
             if scan_complete:
-                db_paths = conn.execute("SELECT path FROM files").fetchall()
-                stale = [r["path"] for r in db_paths if r["path"] not in seen_paths]
-                for stale_path in stale:
-                    row = conn.execute("SELECT id FROM files WHERE path=?", (stale_path,)).fetchone()
-                    if row:
-                        conn.execute("DELETE FROM file_fts WHERE rowid=?", (row["id"],))
-                        conn.execute("DELETE FROM files WHERE id=?", (row["id"],))
-                        _scan_state["deleted"] += 1
-            conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES('last_scan_at',?)",
-                         (datetime.now().isoformat(timespec="seconds"),))
-            conn.commit()
-        _scan_state["phase"] = "complete"
+                # Generation markers mean we do not need to keep every path in memory or load all DB paths.
+                stale_deleted = _delete_index_rows(
+                    conn, "root_key = ? AND last_seen_scan <> ?", (root_key, scan_id)
+                )
+                # This service indexes one configured root at a time. When FILE_ROOT changes,
+                # old-root entries are hidden from search during scanning and purged only after
+                # the new root has completed successfully.
+                old_root_deleted = _delete_index_rows(conn, "root_key <> ?", (root_key,))
+                _scan_state_update(deleted=stale_deleted + old_root_deleted)
+                conn.execute(
+                    "DELETE FROM saved_analyses WHERE file_id NOT IN (SELECT id FROM files WHERE root_key = ?)",
+                    (root_key,),
+                )
+                conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES('indexed_root',?)", (root_key,))
+                conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES(?,?)",
+                             (f"last_scan_at:{root_key}", datetime.now().isoformat(timespec="seconds")))
+                # Keep the legacy key for older deployments that may still read it.
+                conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES('last_scan_at',?)",
+                             (datetime.now().isoformat(timespec="seconds"),))
+                conn.commit()
+
+        elapsed = time.time() - start
+        _scan_state_update(phase="complete" if scan_complete else "partial")
         if scan_complete:
-            _scan_state["message"] = f"索引更新完成，用时 {time.time() - start:.1f} 秒。"
+            state = _scan_state_snapshot()
+            _scan_state_update(message=f"索引更新完成，用时 {elapsed:.1f} 秒；新增 {state['indexed']:,}，更新 {state['updated']:,}，清理 {state['deleted']:,}。")
+            logger.info("index scan completed; scan_id=%s seen=%s indexed=%s updated=%s deleted=%s elapsed=%.2f errors=%s",
+                        scan_id, state["seen"], state["indexed"], state["updated"], state["deleted"], elapsed, state["errors"])
         else:
-            _scan_state["message"] = f"扫描结束，用时 {time.time() - start:.1f} 秒；发现 {len(walk_errors) + _scan_state['errors']} 个访问异常，已保留疑似失效索引，避免误删。建议检查共享盘权限后重试。"
+            sample = "；示例：" + " | ".join(walk_error_samples) if walk_error_samples else ""
+            _scan_state_update(message=f"扫描结束，用时 {elapsed:.1f} 秒；发现 {walk_error_count + _scan_state_snapshot()['errors']} 个访问异常，已保留疑似失效索引，避免误删。建议检查共享盘权限后重试。{sample}")
+            logger.warning("index scan partial; scan_id=%s walk_errors=%s file_errors=%s elapsed=%.2f",
+                           scan_id, walk_error_count, _scan_state_snapshot()["errors"], elapsed)
     except Exception as exc:
-        _scan_state["phase"] = "error"
-        _scan_state["message"] = f"建索引失败：{type(exc).__name__}: {exc}"
+        logger.exception("index scan failed; scan_id=%s", scan_id)
+        _scan_state_update(phase="error", message=f"建索引失败：{type(exc).__name__}: {exc}")
     finally:
-        _scan_state["running"] = False
-        _scan_state["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        _scan_state_update(running=False, finished_at=datetime.now().isoformat(timespec="seconds"))
         _scan_lock.release()
 
 
@@ -262,50 +423,68 @@ def home() -> str:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    with db_connect() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-    return {"ok": True, "root_configured": bool(FILE_ROOT), "ai_configured": bool(AI_BASE_URL and AI_API_KEY and AI_MODEL), "indexed_files": count}
+    active_root_key = root_scope_key()
+    with db_session() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM files WHERE root_key=?", (active_root_key,)).fetchone()[0] if active_root_key else 0
+    return {"ok": True, "root_configured": bool(FILE_ROOT), "ai_configured": bool(AI_BASE_URL and AI_API_KEY and AI_MODEL),
+            "access_token_enabled": bool(APP_ACCESS_TOKEN), "indexed_files": count}
 
 
 @app.get("/api/index/status")
 def index_status() -> dict[str, Any]:
-    with db_connect() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-        total_size = conn.execute("SELECT COALESCE(SUM(size),0) FROM files").fetchone()[0]
-        last = conn.execute("SELECT value FROM app_meta WHERE key='last_scan_at'").fetchone()
-    return {**_scan_state, "indexed_files": count, "indexed_size_bytes": total_size,
+    active_root_key = root_scope_key()
+    with db_session() as conn:
+        if active_root_key:
+            count = conn.execute("SELECT COUNT(*) FROM files WHERE root_key=?", (active_root_key,)).fetchone()[0]
+            total_size = conn.execute("SELECT COALESCE(SUM(size),0) FROM files WHERE root_key=?", (active_root_key,)).fetchone()[0]
+        else:
+            count, total_size = 0, 0
+        last = conn.execute("SELECT value FROM app_meta WHERE key=?", (f"last_scan_at:{active_root_key}",)).fetchone() if active_root_key else None
+    return {**_scan_state_snapshot(), "indexed_files": count, "indexed_size_bytes": total_size,
             "last_scan_at": last[0] if last else None, "root_configured": bool(FILE_ROOT),
-            "root_display": FILE_ROOT or "尚未配置", "ai_configured": bool(AI_BASE_URL and AI_API_KEY and AI_MODEL)}
+            "root_display": FILE_ROOT or "尚未配置", "ai_configured": bool(AI_BASE_URL and AI_API_KEY and AI_MODEL),
+            "access_token_enabled": bool(APP_ACCESS_TOKEN)}
 
 
 @app.post("/api/index/start")
 def start_index() -> dict[str, Any]:
-    get_root()  # 先做目录和权限的快速校验
-    if _scan_state.get("running"):
-        return {"started": False, "message": "索引任务已经在运行。", **_scan_state}
-    t = threading.Thread(target=_scan_worker, daemon=True)
-    t.start()
+    get_root()  # Fast path validation before taking the scan lock.
+    # Acquire in the request handler to prevent two near-simultaneous requests from both claiming success.
+    if not _scan_lock.acquire(blocking=False):
+        return {"started": False, "message": "索引任务已经在运行。", **_scan_state_snapshot()}
+    t = threading.Thread(target=_scan_worker, kwargs={"lock_already_acquired": True}, daemon=True)
+    try:
+        t.start()
+    except Exception:
+        _scan_lock.release()
+        raise
     return {"started": True, "message": "索引任务已启动，可继续搜索已建立的索引。"}
 
 
-def candidate_search(conn: sqlite3.Connection, q: str, limit: int = 500, ext: str = "") -> list[dict[str, Any]]:
+def candidate_search(
+    conn: sqlite3.Connection, q: str, limit: int = 500, ext: str = "", root_key: str | None = None
+) -> list[dict[str, Any]]:
     match = fts_query_for(q)
     if not match:
+        return []
+    root_key = root_key if root_key is not None else root_scope_key()
+    if not root_key:
         return []
     try:
         if ext:
             rows = conn.execute("""
                 SELECT f.id, f.path, f.name, f.parent, f.ext, f.size, f.mtime, bm25(file_fts, 5.0, 2.0, 0.8) AS rank
                 FROM file_fts JOIN files f ON f.id = file_fts.rowid
-                WHERE file_fts MATCH ? AND f.ext = ? ORDER BY rank LIMIT ?
-            """, (match, ext, limit)).fetchall()
+                WHERE file_fts MATCH ? AND f.ext = ? AND f.root_key = ? ORDER BY rank LIMIT ?
+            """, (match, ext, root_key, limit)).fetchall()
         else:
             rows = conn.execute("""
                 SELECT f.id, f.path, f.name, f.parent, f.ext, f.size, f.mtime, bm25(file_fts, 5.0, 2.0, 0.8) AS rank
                 FROM file_fts JOIN files f ON f.id = file_fts.rowid
-                WHERE file_fts MATCH ? ORDER BY rank LIMIT ?
-            """, (match, limit)).fetchall()
-    except sqlite3.OperationalError:
+                WHERE file_fts MATCH ? AND f.root_key = ? ORDER BY rank LIMIT ?
+            """, (match, root_key, limit)).fetchall()
+    except sqlite3.OperationalError as exc:
+        logger.warning("local FTS search failed (%s); returning no candidates", type(exc).__name__)
         return []
     qgrams = set(char_grams(q))
     qcompact = normalize_text(q)
@@ -370,7 +549,8 @@ def ai_expand_query(q: str) -> list[str]:
                 if term and term not in cleaned and term != q:
                     cleaned.append(term)
         return cleaned[:5]
-    except Exception:
+    except Exception as exc:
+        logger.warning("AI query expansion failed (%s); continuing with local index only", type(exc).__name__)
         return []
 
 
@@ -419,7 +599,8 @@ def ai_rerank(q: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen = {x["id"] for x in ranked}
         ranked.extend(c for c in candidates if c["id"] not in seen)
         return ranked
-    except Exception:
+    except Exception as exc:
+        logger.warning("AI candidate reranking failed (%s); retaining local ranking", type(exc).__name__)
         return candidates
 
 
@@ -429,10 +610,14 @@ def search(q: str = Query(default="", max_length=300), limit: int = Query(defaul
     query = q.strip()
     if not query:
         return {"query": q, "count": 0, "results": [], "ai_used": False, "message": "请输入文件名、业务关键词或自然语言描述。"}
+    if not FILE_ROOT:
+        return {"query": query, "count": 0, "results": [], "ai_used": False,
+                "message": "尚未配置 FILE_ROOT。请在 .env 中设置文件根目录。"}
     start = time.perf_counter()
     wanted_ext = (ext.lower() if ext.startswith(".") else "." + ext.lower()) if ext else ""
-    with db_connect() as conn:
-        candidates = candidate_search(conn, query, limit=500, ext=wanted_ext)
+    active_root_key = root_scope_key()
+    with db_session() as conn:
+        candidates = candidate_search(conn, query, limit=500, ext=wanted_ext, root_key=active_root_key)
         ai_used = False
         ai_expanded = False
         # 第一步始终是本地索引。完全无候选时，AI 只改写查询词，不接收全量文件名；
@@ -441,7 +626,7 @@ def search(q: str = Query(default="", max_length=300), limit: int = Query(defaul
             expanded_terms = ai_expand_query(query)
             merged: dict[int, dict[str, Any]] = {}
             for term in expanded_terms:
-                for item in candidate_search(conn, term, limit=120, ext=wanted_ext):
+                for item in candidate_search(conn, term, limit=120, ext=wanted_ext, root_key=active_root_key):
                     current = merged.get(item["id"])
                     if current is None or item["score"] > current["score"]:
                         item["match_reason"] = f"AI 扩展关键词：{term}"
@@ -461,6 +646,8 @@ def search(q: str = Query(default="", max_length=300), limit: int = Query(defaul
             candidates.sort(key=lambda x: x["name"].lower())
         results = candidates[:limit]
     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+    logger.info("search completed; query_length=%s results=%s candidates=%s elapsed_ms=%s ai_used=%s ai_expanded=%s",
+                len(query), len(results), len(candidates), elapsed_ms, ai_used, ai_expanded)
     return {"query": query, "count": len(results), "total_candidates": len(candidates), "results": results,
             "elapsed_ms": elapsed_ms, "ai_used": ai_used, "ai_expanded": ai_expanded,
             "message": "已使用索引检索" + ("；AI 扩展关键词并对索引候选进行重排。" if ai_used and ai_expanded else ("；AI 对索引候选进行重排。" if ai_used else ("；已使用 AI 扩展关键词。" if ai_expanded else "。")))}
@@ -468,8 +655,11 @@ def search(q: str = Query(default="", max_length=300), limit: int = Query(defaul
 
 @app.get("/api/recent")
 def recent(limit: int = Query(default=10, ge=1, le=100)) -> dict[str, Any]:
-    with db_connect() as conn:
-        rows = conn.execute("SELECT id,path,name,parent,ext,size,mtime FROM files ORDER BY mtime DESC LIMIT ?", (limit,)).fetchall()
+    active_root_key = root_scope_key()
+    if not active_root_key:
+        return {"results": []}
+    with db_session() as conn:
+        rows = conn.execute("SELECT id,path,name,parent,ext,size,mtime FROM files WHERE root_key=? ORDER BY mtime DESC LIMIT ?", (active_root_key, limit)).fetchall()
     return {"results": [{"id": r["id"], "path": r["path"], "name": r["name"], "parent": r["parent"],
                          "ext": r["ext"], "size": r["size"], "mtime": r["mtime"], "score": None,
                          "match_reason": "最近修改"} for r in rows]}
@@ -482,16 +672,17 @@ def config_check() -> dict[str, Any]:
     return {"root_configured": bool(root), "root_exists": bool(path and path.exists() and path.is_dir()),
             "root_display": root or "尚未配置", "allowed_extensions": sorted(ALLOWED_EXTENSIONS),
             "ai_configured": bool(AI_BASE_URL and AI_API_KEY and AI_MODEL),
-            "note": "服务进程必须能直接读取配置的共享目录。"}
+            "access_token_enabled": bool(APP_ACCESS_TOKEN),
+            "note": "服务进程必须能直接读取配置的共享目录；访问令牌是共享入口保护，不替代企业登录与逐用户文件权限。"}
 
 
 # ---------------------------------------------------------------------------
 # 轻量 BI 分析模块：只分析用户主动选择且已在索引中的文件
 # ---------------------------------------------------------------------------
 class AnalysisFilter(BaseModel):
-    field: str
+    field: str = Field(min_length=1, max_length=200)
     operator: Literal["contains", "equals", "not_equals", "gt", "gte", "lt", "lte", "is_empty", "not_empty"] = "contains"
-    value: str = ""
+    value: str = Field(default="", max_length=500)
 
 
 class AnalysisRequest(BaseModel):
@@ -499,9 +690,9 @@ class AnalysisRequest(BaseModel):
     sheet_name: str | None = None
     row_field: str | None = None
     column_field: str | None = None
-    value_fields: list[str] = Field(default_factory=list)
+    value_fields: list[str] = Field(default_factory=list, max_length=5)
     aggregation: Literal["sum", "count", "mean", "median", "min", "max", "nunique"] = "sum"
-    filters: list[AnalysisFilter] = Field(default_factory=list)
+    filters: list[AnalysisFilter] = Field(default_factory=list, max_length=20)
     max_categories: int = Field(default=30, ge=5, le=100)
 
 
@@ -513,7 +704,7 @@ class SaveAnalysisRequest(BaseModel):
 
 def _get_indexed_file(file_id: int) -> tuple[dict[str, Any], Path]:
     """Only allow files already present in the metadata index and still under FILE_ROOT."""
-    with db_connect() as conn:
+    with db_session() as conn:
         row = conn.execute(
             "SELECT id,path,name,parent,ext,size,mtime FROM files WHERE id=?", (file_id,)
         ).fetchone()
@@ -547,13 +738,16 @@ def _engine_for(path: Path) -> str | None:
 def _read_table(path: Path, sheet_name: str | None = None, nrows: int | None = None) -> pd.DataFrame:
     ext = path.suffix.lower()
     if ext in {".csv", ".tsv"}:
+        if sheet_name not in (None, "数据"):
+            raise HTTPException(status_code=422, detail="CSV/TSV 文件只有一个工作表：数据。")
         sep = "\t" if ext == ".tsv" else None
         last_error: Exception | None = None
         for encoding in ("utf-8-sig", "gb18030"):
             try:
+                # Do not silently discard malformed rows: a partial dataset can yield plausible but wrong BI figures.
                 if sep is None:
-                    return pd.read_csv(path, encoding=encoding, sep=None, engine="python", nrows=nrows, on_bad_lines="skip")
-                return pd.read_csv(path, encoding=encoding, sep=sep, nrows=nrows, on_bad_lines="skip")
+                    return pd.read_csv(path, encoding=encoding, sep=None, engine="python", nrows=nrows, on_bad_lines="error")
+                return pd.read_csv(path, encoding=encoding, sep=sep, nrows=nrows, on_bad_lines="error")
             except UnicodeDecodeError as exc:
                 last_error = exc
         raise HTTPException(status_code=422, detail=f"CSV 编码无法识别：{last_error}")
@@ -562,7 +756,11 @@ def _read_table(path: Path, sheet_name: str | None = None, nrows: int | None = N
     engine = _engine_for(path)
     try:
         with pd.ExcelFile(path, engine=engine) as workbook:
-            target_sheet = sheet_name if sheet_name in workbook.sheet_names else workbook.sheet_names[0]
+            if sheet_name is not None and sheet_name not in workbook.sheet_names:
+                raise HTTPException(status_code=422, detail=f"工作表不存在：{sheet_name}。可用工作表：{', '.join(workbook.sheet_names[:20])}")
+            if not workbook.sheet_names:
+                raise HTTPException(status_code=422, detail="工作簿中没有可读取的工作表。")
+            target_sheet = sheet_name or workbook.sheet_names[0]
         return pd.read_excel(path, sheet_name=target_sheet, engine=engine, nrows=nrows)
     except ImportError as exc:
         raise HTTPException(status_code=501, detail=f"缺少读取 {ext} 的依赖：{exc}。请按 requirements.txt 安装依赖。")
@@ -656,7 +854,11 @@ def _workbook_sheets(path: Path) -> list[str]:
 
 def _load_analysis_frame(file_info: dict[str, Any], path: Path, sheet_name: str | None) -> tuple[pd.DataFrame, bool, list[str]]:
     sheets = _workbook_sheets(path)
-    chosen = sheet_name if sheet_name in sheets else sheets[0]
+    if not sheets:
+        raise HTTPException(status_code=422, detail="文件中没有可分析的工作表。")
+    if sheet_name is not None and sheet_name not in sheets:
+        raise HTTPException(status_code=422, detail=f"工作表不存在：{sheet_name}。请刷新工作表列表后重试。")
+    chosen = sheet_name or sheets[0]
     df = _read_table(path, None if chosen == "数据" and path.suffix.lower() in {".csv", ".tsv"} else chosen,
                      nrows=MAX_ANALYSIS_ROWS + 1)
     truncated = len(df) > MAX_ANALYSIS_ROWS
@@ -692,7 +894,8 @@ def _apply_filters(df: pd.DataFrame, filters: list[AnalysisFilter]) -> pd.DataFr
             if op == "not_equals":
                 mask = ~mask
         else:
-            if pd.api.types.is_datetime64_any_dtype(series):
+            date_like_value = bool(re.match(r"^\s*\d{4}[-/.年]\d{1,2}([-/ .月年]\d{1,2})?", value))
+            if pd.api.types.is_datetime64_any_dtype(series) or date_like_value:
                 val = pd.to_datetime(value, errors="coerce")
                 comp = pd.to_datetime(series, errors="coerce")
             else:
@@ -738,8 +941,17 @@ def _analysis_compute(req: AnalysisRequest) -> dict[str, Any]:
     if req.aggregation in {"sum", "mean", "median"}:
         for metric in metrics:
             if not pd.api.types.is_numeric_dtype(df[metric]):
-                converted = pd.to_numeric(df[metric], errors="coerce")
-                if int(converted.notna().sum()) == 0 and int(df[metric].notna().sum()) > 0:
+                original = df[metric]
+                converted = pd.to_numeric(original, errors="coerce")
+                non_empty = original.notna() & original.astype("string").str.strip().ne("")
+                invalid = non_empty & converted.isna()
+                if invalid.any():
+                    examples = original[invalid].astype("string").drop_duplicates().head(3).tolist()
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"指标“{metric}”有 {int(invalid.sum())} 条非空值无法转为数字（示例：{'、'.join(examples)}），为避免静默漏算，请先清理数据或改用计数。",
+                    )
+                if int(converted.notna().sum()) == 0 and int(original.notna().sum()) > 0:
                     raise HTTPException(status_code=422, detail=f"指标“{metric}”不是数值字段，无法执行{req.aggregation}。请换一个指标或改用计数。")
                 df[metric] = converted
     filtered = _apply_filters(df, req.filters)
@@ -753,7 +965,6 @@ def _analysis_compute(req: AnalysisRequest) -> dict[str, Any]:
     aggregation = req.aggregation
     row_field, column_field = req.row_field, req.column_field
     measure_fields = metrics if metrics else []
-    metric_label = lambda f: f if aggregation in {"sum", "count", "mean", "median", "min", "max", "nunique"} else f
     pivot_headers: list[str] = []
     pivot_rows: list[list[Any]] = []
     chart_categories: list[str] = []
@@ -768,195 +979,22 @@ def _analysis_compute(req: AnalysisRequest) -> dict[str, Any]:
         omitted_categories = len(row_counts) > len(row_categories) or len(col_counts) > len(col_categories)
         work = work[work[row_field].isin(row_categories) & work[column_field].isin(col_categories)]
         pivot_headers = [row_field]
-        pivot_frames: list[tuple[str, pd.DataFrame]] = []
-        if measure_fields:
-            for metric in measure_fields:
-                p = pd.pivot_table(work, index=row_field, columns=column_field, values=metric,
-                                   aggfunc=aggregation, fill_value=0 if aggregation in {"sum", "count", "nunique"} else None,
-                                   dropna=False, observed=False)
-                for cat in col_categories:
-                    if cat in p.columns:
-                        colname = f"{metric} / {cat}" if len(measure_fields) > 1 else str(cat)
-                        pivot_headers.append(colname)
-                        chart_series.append({"name": colname, "values": []})
-                        pivot_frames.append((colname, p[[cat]]))
-            # Build cells in the exact same column order as pivot_headers.
-            row_index = row_categories
-            for ridx, category in enumerate(row_index):
-                cells: list[Any] = [category]
-                for metric in measure_fields:
-                    p = pd.pivot_table(work, index=row_field, columns=column_field, values=metric,
-                                       aggfunc=aggregation, fill_value=0 if aggregation in {"sum", "count", "nunique"} else None,
-                                       dropna=False, observed=False)
-                    for cat in col_categories:
-                        if cat in p.columns:
-                            val = p.at[category, cat] if category in p.index else None
-                            cells.append(_json_value(val))
-                pivot_rows.append(cells)
-            chart_categories = row_categories[:15]
-            chart_series = []
-            for metric in measure_fields:
-                p = pd.pivot_table(work, index=row_field, columns=column_field, values=metric,
-                                   aggfunc=aggregation, fill_value=0 if aggregation in {"sum", "count", "nunique"} else None,
-                                   dropna=False, observed=False)
-                for cat in col_categories[:6]:
-                    if cat in p.columns:
-                        series_name = f"{metric} / {cat}" if len(measure_fields) > 1 else str(cat)
-                        vals = [_json_value(p.at[c, cat]) if c in p.index else 0 for c in chart_categories]
-                        chart_series.append({"name": series_name, "values": vals})
-        else:
-            p = pd.crosstab(work[row_field], work[column_field])
-            for cat in col_categories:
-                if cat in p.columns:
-                    pivot_headers.append(str(cat))
-            for category in row_categories:
-                vals = [int(p.at[category, cat]) if category in p.index and cat in p.columns else 0 for cat in col_categories if cat in p.columns]
-                pivot_rows.append([category] + vals)
-            chart_categories = row_categories[:15]
-            chart_series = [{"name": str(cat), "values": [int(p.at[c, cat]) if c in p.index and cat in p.columns else 0 for c in chart_categories]} for cat in col_categories[:6] if cat in p.columns]
-    elif row_field or column_field:
-        dim = row_field or column_field
-        work[dim] = work[dim].map(lambda v: "(空白)" if pd.isna(v) else str(v))
-        counts = work[dim].value_counts(dropna=False)
-        categories = counts.head(req.max_categories).index.astype(str).tolist()
-        omitted_categories = len(counts) > len(categories)
-        work = work[work[dim].isin(categories)]
-        pivot_headers = [dim]
-        if measure_fields:
-            pivot_headers.extend(measure_fields)
-        else:
-            pivot_headers.append("记录数")
-        out_rows = []
-        for category in categories:
-            part = work[work[dim] == category]
-            cells: list[Any] = [category]
-            if measure_fields:
-                for metric in measure_fields:
-                    cells.append(_json_value(_aggregate(part[metric], aggregation)))
-            else:
-                cells.append(int(len(part)))
-            out_rows.append(cells)
-        # Sort by first value if numerical; otherwise keep frequency order.
-        if len(pivot_headers) > 1:
-            try:
-                out_rows.sort(key=lambda x: (float(x[1]) if x[1] is not None else float("-inf")), reverse=True)
-            except (TypeError, ValueError):
-                pass
-        pivot_rows = out_rows
-        chart_categories = [str(r[0]) for r in out_rows[:15]]
+        chart_categories = row_categories[:15]
         chart_series = []
-        val_headers = pivot_headers[1:]
-        for j, header in enumerate(val_headers, start=1):
-            chart_series.append({"name": header, "values": [r[j] for r in out_rows[:15]]})
-    else:
-        pivot_headers = ["指标", "结果"]
-        pivot_rows = []
+
         if measure_fields:
+            # Compute each metric pivot once. The previous implementation recalculated the same
+            # groupby for each output cell and again for charts, which was very costly on 200k rows.
+            pivot_by_metric: dict[str, pd.DataFrame] = {}
+            fill_value = 0 if aggregation in {"sum", "count", "nunique"} else None
             for metric in measure_fields:
-                pivot_rows.append([metric, _json_value(_aggregate(work[metric], aggregation))])
-        else:
-            pivot_rows.append(["记录数", int(len(work))])
-        chart_categories = [str(r[0]) for r in pivot_rows]
-        chart_series = [{"name": "结果", "values": [r[1] for r in pivot_rows]}]
-
-    # KPIs always refer to the full filtered data, not only the displayed top categories.
-    kpis: list[dict[str, Any]] = [
-        {"label": "读取记录数", "value": int(len(df)), "format": "integer"},
-        {"label": "筛选后记录", "value": int(len(filtered)), "format": "integer"},
-    ]
-    if row_field:
-        kpis.append({"label": f"{row_field}去重数", "value": int(filtered[row_field].nunique(dropna=True)), "format": "integer"})
-    if measure_fields:
-        primary = measure_fields[0]
-        if pd.api.types.is_numeric_dtype(filtered[primary]):
-            kpis.append({"label": f"{primary}合计", "value": _json_value(pd.to_numeric(filtered[primary], errors="coerce").sum(min_count=1)), "format": "number"})
-            kpis.append({"label": f"{primary}平均值", "value": _json_value(pd.to_numeric(filtered[primary], errors="coerce").mean()), "format": "number"})
-    return {
-        "file": {"id": file_info["id"], "name": file_info["name"], "path": file_info["path"], "ext": file_info["ext"], "size": file_info["size"], "mtime": file_info["mtime"]},
-        "sheet_names": sheets, "sheet_name": req.sheet_name if req.sheet_name in sheets else sheets[0],
-        "columns": _column_metadata(df), "preview": _json_records(df, PREVIEW_ROWS),
-        "preview_rows": min(len(df), PREVIEW_ROWS), "rows_read": int(len(df)), "rows_matched": int(len(filtered)),
-        "is_truncated": truncated, "max_analysis_rows": MAX_ANALYSIS_ROWS,
-        "filters_applied": len(req.filters), "aggregation": aggregation,
-        "pivot": {"headers": pivot_headers, "rows": pivot_rows, "omitted_categories": omitted_categories,
-                  "display_limit": req.max_categories},
-        "chart": {"categories": chart_categories, "series": chart_series},
-        "kpis": kpis,
-    }
-
-
-@app.get("/api/analysis/file/{file_id}")
-def analysis_file_info(file_id: int, sheet_name: str | None = None) -> dict[str, Any]:
-    file_info, path = _get_indexed_file(file_id)
-    sheets = _workbook_sheets(path)
-    sheet = sheet_name if sheet_name in sheets else (sheets[0] if sheets else None)
-    df = _normalise_df(_read_table(path, None if sheet == "数据" and path.suffix.lower() in {".csv", ".tsv"} else sheet, nrows=PREVIEW_ROWS))
-    return {"file": {"id": file_info["id"], "name": file_info["name"], "path": file_info["path"], "ext": file_info["ext"], "size": file_info["size"], "mtime": file_info["mtime"]},
-            "sheet_names": sheets, "sheet_name": sheet, "columns": _column_metadata(df),
-            "preview": _json_records(df, PREVIEW_ROWS), "preview_rows": len(df),
-            "max_analysis_rows": MAX_ANALYSIS_ROWS, "max_analysis_file_mb": MAX_ANALYSIS_FILE_MB}
-
-
-@app.post("/api/analysis/run")
-def run_analysis(req: AnalysisRequest) -> dict[str, Any]:
-    started = time.perf_counter()
-    result = _analysis_compute(req)
-    result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 1)
-    return result
-
-
-@app.post("/api/analysis/export")
-def export_analysis(req: AnalysisRequest) -> StreamingResponse:
-    result = _analysis_compute(req)
-    table = pd.DataFrame(result["pivot"]["rows"], columns=result["pivot"]["headers"])
-    detail_info, file_path = _get_indexed_file(req.file_id)
-    full_df, _, _ = _load_analysis_frame(detail_info, file_path, req.sheet_name)
-    filtered = _apply_filters(full_df, req.filters)
-    output = BytesIO()
-    safe_name = Path(detail_info["name"]).stem[:60]
-    try:
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            table.to_excel(writer, index=False, sheet_name="交叉汇总")
-            filtered.head(200000).to_excel(writer, index=False, sheet_name="筛选后明细")
-            pd.DataFrame([{"文件": detail_info["name"], "工作表": result["sheet_name"],
-                           "聚合方式": req.aggregation, "行维度": req.row_field or "", "列维度": req.column_field or "",
-                           "分析时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                           "读取记录数": result["rows_read"], "筛选后记录数": result["rows_matched"],
-                           "是否达到读取上限": result["is_truncated"]}]).to_excel(writer, index=False, sheet_name="分析说明")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"生成 Excel 失败：{str(exc)[:180]}")
-    output.seek(0)
-    filename = quote(f"{safe_name}_分析结果.xlsx")
-    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"})
-
-
-@app.get("/api/analysis/saved")
-def list_saved_analyses(file_id: int | None = None) -> dict[str, Any]:
-    with db_connect() as conn:
-        if file_id is None:
-            rows = conn.execute("SELECT id,name,file_id,config_json,created_at,updated_at FROM saved_analyses ORDER BY updated_at DESC LIMIT 100").fetchall()
-        else:
-            rows = conn.execute("SELECT id,name,file_id,config_json,created_at,updated_at FROM saved_analyses WHERE file_id=? ORDER BY updated_at DESC LIMIT 100", (file_id,)).fetchall()
-    return {"results": [{"id": r["id"], "name": r["name"], "file_id": r["file_id"],
-                          "config": json.loads(r["config_json"]), "created_at": r["created_at"], "updated_at": r["updated_at"]} for r in rows]}
-
-
-@app.post("/api/analysis/saved")
-def save_analysis(req: SaveAnalysisRequest) -> dict[str, Any]:
-    _get_indexed_file(req.file_id)  # Validate access before storing a config.
-    now = datetime.now().isoformat(timespec="seconds")
-    with db_connect() as conn:
-        cur = conn.execute("INSERT INTO saved_analyses(name,file_id,config_json,created_at,updated_at) VALUES(?,?,?,?,?)",
-                           (req.name.strip(), req.file_id, json.dumps(req.config, ensure_ascii=False), now, now))
-        saved_id = cur.lastrowid
-    return {"ok": True, "id": saved_id, "name": req.name.strip(), "message": "分析方案已保存。"}
-
-
-@app.delete("/api/analysis/saved/{saved_id}")
-def delete_saved_analysis(saved_id: int) -> dict[str, Any]:
-    with db_connect() as conn:
-        cur = conn.execute("DELETE FROM saved_analyses WHERE id=?", (saved_id,))
-    if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail="未找到这条分析方案。")
-    return {"ok": True, "message": "已删除保存的分析方案。"}
+                pivot = pd.pivot_table(
+                    work, index=row_field, columns=column_field, values=metric,
+                    aggfunc=aggregation, dropna=False, observed=True,
+                )
+                pivot = pivot.reindex(index=row_categories, columns=col_categories)
+                if fill_value is not None:
+                    pivot = pivot.fillna(fill_value)
+                pivot_by_metric[metric] = pivot
+                for category in col_categories:
+                    header = f"{metric} / {category}" if len(measure_fields) > 1 else str(category)

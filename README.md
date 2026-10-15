@@ -1,55 +1,40 @@
 # 企业文件检索与轻量 BI 分析中心
 
-这是文件检索 + 轻量表格分析的可运行 MVP。完整源码位于 `fast_file_finder/`。
+本项目以企业共享盘中的 Excel/CSV 文件为数据源，先建立本地元数据索引，再提供文件检索和按需轻量 BI。目标是让普通检索只查索引，不在每次输入时扫描整个网盘；AI 仅作为可选的关键词扩展/候选重排，BI 则对用户主动选中的单个工作簿执行字段筛选、聚合、交叉表、图表和 Excel 导出。
 
-## 功能
-
-- SQLite FTS5 文件元数据索引：普通搜索只查本地索引，不对每次查询全盘扫描。
-- 后台建立/更新索引，支持文件名、目录关键词、扩展名筛选和相关度排序。
-- 可选 AI 检索兜底：先扩展查询词或重排少量索引候选，不扫描所有文件，也不把整本工作簿发给模型。
-- 轻量 BI：读取指定 Excel 工作表，查看字段和数据预览，多条件筛选、聚合计算、交叉表、柱形/折线图。
-- 导出新 Excel，保存分析配置；不会覆盖原始工作簿。
-- 附带虚构样例数据和 BI API 自动化测试。
-
-## 快速启动
-
-进入源码目录：
+## 快速开始
 
 ```bash
 cd fast_file_finder
 python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
-# Windows PowerShell 请使用 .\.venv\Scripts\Activate.ps1
+# Windows PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 cp .env.example .env
 ```
 
-编辑 `.env`，先使用样例数据验证：
+编辑 `.env`：先用样例数据体验可设置 `FILE_ROOT=./demo_data`；连接真实共享盘时替换成服务运行机器可访问的 UNC 路径或已挂载目录。详细参数见 [`fast_file_finder/README.md`](fast_file_finder/README.md)。
 
-```dotenv
-FILE_ROOT=./demo_data
-INDEX_DB_PATH=./data/file_index.db
-```
-
-启动：
+本机体验默认只监听 localhost：
 
 ```bash
-uvicorn app:app --host 0.0.0.0 --port 8080
+uvicorn app:app --host 127.0.0.1 --port 8080
 ```
 
-访问 http://127.0.0.1:8080，点击“建立 / 更新索引”，搜索“供应商结算明细”，再点击“开始分析”试用透视表、筛选和导出。
+打开 http://127.0.0.1:8080，点击“建立 / 更新索引”，搜索样例供应商结算表，进入“开始分析”尝试交叉表、筛选、图表和 Excel 导出。
 
-接入内网共享盘时，把 `FILE_ROOT` 改成运行服务的机器实际可访问的 UNC 路径或挂载路径。SQLite 索引建议保存在服务机器本地磁盘。
+需要给其他内网机器访问时，**先在 `.env` 配置随机长 ASCII 令牌 `APP_ACCESS_TOKEN`**，再使用 `--host 0.0.0.0`。当前共享令牌只是基础入口保护，不等于企业登录或逐用户文件 ACL；生产上线前仍需公司 SSO、权限过滤、审计与实际 SMB/Excel 环境验证。
 
-## 项目结构
+## 代码目录
 
-- `fast_file_finder/app.py`：FastAPI 接口、索引与 BI 处理逻辑
-- `fast_file_finder/static/index.html`：检索及 BI 前端
-- `fast_file_finder/tests/`：自动化测试
+- `fast_file_finder/app.py`：FastAPI 服务、SQLite FTS5 索引、后台增量扫描、BI 分析逻辑
+- `fast_file_finder/static/index.html`：检索页与轻量 BI 工作区
+- `fast_file_finder/tests/`：搜索、索引、BI、权限门槛与边界情况的自动化回归测试
 - `fast_file_finder/demo_data/`：虚构样例工作簿
-- `fast_file_finder/README.md`：详细部署说明、配置项和常见问题
+- `.github/workflows/tests.yml`：Python 3.10/3.11/3.12 自动化测试
+- `docs/ENGINEERING_CHECKLIST.md`：架构不变量、试点验收指标和生产上线前检查清单
 
-## 当前边界
+## 状态
 
-该版本是内测 MVP，尚未完成公司级统一登录、逐用户文件 ACL 过滤、审计和终端一键启动 Excel 的全环境验证。不要直接面向全员生产开放；接真实共享盘前应先在授权目录进行小范围测试。
+当前是可运行的内测 MVP，真实共享盘性能和大工作簿行为仍需要在授权测试目录验证。它尚未完成公司级 SSO、逐用户文件 ACL、生产审计和所有终端上的一键启动 Excel 验收，不应直接无保护地对全员开放。
