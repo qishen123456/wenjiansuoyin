@@ -1,0 +1,30 @@
+# 构建上下文 = fast_file_finder/。这里排除的内容不会进入镜像，也不会让缓存失效。
+# 真实配置只从容器环境变量注入，绝对不要把令牌/口令打进镜像层。
+.env
+.env.*
+!.env.example
+
+# 本地虚拟环境与已构建产物
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# 索引库（含本地 237MB 的开发库）不进镜像；由挂载卷提供
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 版本控制与编辑器
+.git/
+.gitignore
+.idea/
+.vscode/
+*.code-workspace
+
+# 文档与本地调试产物
+*.log
+.DS_Store

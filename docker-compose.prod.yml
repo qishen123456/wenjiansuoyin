@@ -1,0 +1,47 @@
+# 生产服务器覆盖编排：与 docker-compose.yml 叠加使用，不单独跑。
+#
+#   SHARE_HOST_PATH=/mnt/netapp/企业网盘 \
+#   APP_ACCESS_TOKEN='<随机长令牌>' \
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# 前置条件（都在宿主机上做，容器不管）：
+#   1. 共享盘已由 systemd auto-join / fstab 挂好，且服务账号有只读权限；
+#      例：mount -t cifs //fileserver/部门共享 /mnt/netapp/企业网盘 -o ro,uid=10001,gid=10001,...
+#   2. /srv/file-finder/data 存在且属主 uid=10001（镜像内 appuser 的固定 uid）；
+#      例：install -d -o 10001 -g 10001 /srv/file-finder/data
+#   3. TLS / SSO / 审计由反向代理或网关负责，本容器只听 HTTP，且只绑 127.0.0.1。
+name: file-search
+
+services:
+  app:
+    # 生产用带摘要/版本号的镜像标签，禁止 latest；由发布流水线推送
+    image: ${IMAGE:?必须指定生产镜像，如 registry.intranet/file-finder:1.4.2}
+    build: !reset null          # 生产不允许在服务器上 build
+    restart: always
+    ports: !override
+      # 只监听回环，外部访问一律走反向代理
+      - "${APP_BIND_ADDR:-127.0.0.1}:${HOST_PORT:-8080}:8080"
+    environment:
+      # 生产必须显式给出共享盘在容器内的挂载点，避免悄悄用了镜像默认值
+      FILE_ROOT: ${CONTAINER_SHARE_PATH:?必须指定容器内网盘挂载点，如 /data/share}
+      APP_ACCESS_TOKEN: ${APP_ACCESS_TOKEN:?生产必须配置非空访问令牌}
+    volumes: !override
+      - ${SHARE_HOST_PATH:?必须指定宿主机上的共享盘绝对路径}:${CONTAINER_SHARE_PATH:-/data/share}:ro
+      # 索引库落到宿主机目录，方便纳入现有备份任务；容器删除后重建即恢复
+      - ${INDEX_DB_HOST_PATH:-/srv/file-finder/data}:/app/data
+    # 扫描期间 pandas + FTS5 写入是主要内存来源
+    mem_limit: ${APP_MEM_LIMIT:-3g}
+    cpus: ${APP_CPUS:-2}
+    pids_limit: 256
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt: !override
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

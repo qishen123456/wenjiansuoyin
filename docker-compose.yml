@@ -1,0 +1,59 @@
+# 本地/开发环境编排。生产部署请看 docker-compose.prod.yml。
+#
+#   docker compose up -d --build          # 构建并启动
+#   docker compose logs -f app            # 看日志
+#   docker compose down                   # 停止（索引卷保留）
+#
+# 可调变量都写在同目录 .env（从 .env.example 复制），命令行临时导出也可覆盖。
+name: file-search
+
+services:
+  app:
+    image: file-finder:local
+    build:
+      context: ./fast_file_finder
+      target: runtime
+    restart: unless-stopped
+    # 默认只绑 127.0.0.1：开发机上也只有本机能访问，避免网盘检索结果被同网段同事直接拿到。
+    ports:
+      - "${APP_BIND_ADDR:-127.0.0.1}:${HOST_PORT:-8080}:8080"
+    environment:
+      # 容器内看到的挂载点，与宿主机共享盘路径解耦
+      FILE_ROOT: ${CONTAINER_SHARE_PATH:-/data/share}
+      INDEX_DB_PATH: /app/data/file_index.db
+      ALLOWED_EXTENSIONS: ${ALLOWED_EXTENSIONS:-.xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods}
+      # 空令牌 = 无入口保护，仅适合只监听 127.0.0.1 的开发场景
+      APP_ACCESS_TOKEN: ${APP_ACCESS_TOKEN:-}
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-12}
+      MAX_ANALYSIS_FILE_MB: ${MAX_ANALYSIS_FILE_MB:-256}
+      MAX_ANALYSIS_ROWS: ${MAX_ANALYSIS_ROWS:-200000}
+      PREVIEW_ROWS: ${PREVIEW_ROWS:-100}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # 共享盘只读挂进容器：服务永远不应该有写网盘的权限
+      - ${SHARE_HOST_PATH:-./网盘模拟数据}:${CONTAINER_SHARE_PATH:-/data/share}:ro
+      # 索引库用独立具名卷，且不要和宿主机 fast_file_finder/data 共用：
+      # app.py 扫描成功清理阶段会删除 root_key 不同的全部行，两个 FILE_ROOT 口径
+      # 来回切换会导致每次启动都全量重建。
+      - index_db:/app/data
+    # 扫描 13 万条目时 CPU 占用会明显升高，这里做双向限制，防止拖垮开发机
+    cpus: "${APP_CPUS:-2.0}"
+    mem_limit: ${APP_MEM_LIMIT:-2g}
+    security_opt:
+      - no-new-privileges:true
+
+  # 一次性容器：在镜像里跑仓库自带 pytest（镜像含 tests/，生产镜像不含）
+  test:
+    image: file-finder:local-dev
+    build:
+      context: ./fast_file_finder
+      target: dev
+    profiles: ["test"]
+    restart: "no"
+
+volumes:
+  index_db:

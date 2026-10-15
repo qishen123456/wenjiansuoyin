@@ -4,6 +4,17 @@
 
 ## 快速开始
 
+推荐用 Docker，开发与生产跑的是同一个镜像，避免“本机好好的”：
+
+```bash
+cp .env.example .env      # 改 SHARE_HOST_PATH 指向共享盘挂载点
+docker compose up -d --build
+```
+
+打开 http://127.0.0.1:8080，点“建立 / 更新索引”，然后搜索。生产服务器部署、跨架构构建、令牌与挂载权限见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)。
+
+也可以不走 Docker，直接装 Python 依赖（**需要 Python 3.10+**，代码里 `str | None` 注解由 pydantic 在运行时求值，3.9 会启动失败）：
+
 ```bash
 cd fast_file_finder
 python -m venv .venv
@@ -32,8 +43,11 @@ uvicorn app:app --host 127.0.0.1 --port 8080
 - `fast_file_finder/static/index.html`：检索页与轻量 BI 工作区
 - `fast_file_finder/tests/`：搜索、索引、BI、权限门槛与边界情况的自动化回归测试
 - `fast_file_finder/demo_data/`：虚构样例工作簿
+- `fast_file_finder/Dockerfile`：多阶段镜像（`runtime` 生产 / `dev` 含测试）
+- `docker-compose.yml` / `docker-compose.prod.yml`：开发编排与生产覆盖层
 - `.github/workflows/tests.yml`：Python 3.10/3.11/3.12 自动化测试
 - `docs/ENGINEERING_CHECKLIST.md`：架构不变量、试点验收指标和生产上线前检查清单
+- `docs/DEPLOYMENT.md`：Docker 部署、跨架构构建、升级回滚、已知架构约束
 
 ## 状态
 
