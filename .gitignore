@@ -1,0 +1,34 @@
+# =============================================================
+# 本地产物 / 生成物：不随仓库提交
+# 说明：仓库自带忽略规则见 fast_file_finder/.gitignore，本文件只覆盖工作区根目录
+# =============================================================
+
+# ---- 模拟出来的网盘目录树（13 万+ 空文件，绝对不要 git add -A）----
+网盘模拟数据/
+
+# ---- 源数据与生成清单（体积大且可由脚本重建）----
+文件清单_含行数.csv
+网盘数据文件规模_*.xlsx
+补齐清单_*.csv
+补齐清单_*.csv.已回滚
+
+# ---- 脚本运行产物 ----
+*.log
+create_mock_files_failed.log
+
+# ---- macOS / Windows 资源管理器元数据 ----
+.DS_Store
+._*
+Thumbs.db
+desktop.ini
+
+# ---- Python 运行产物（根目录层级）----
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+# 注意：create_mock_files.py / fill_gap_files.py / verify_mock_files.py
+# 属于要提交的脚本，故不在忽略范围内。
