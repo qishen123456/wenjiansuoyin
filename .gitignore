@@ -32,3 +32,14 @@ __pycache__/
 
 # 注意：create_mock_files.py / fill_gap_files.py / verify_mock_files.py
 # 属于要提交的脚本，故不在忽略范围内。
+
+# ---- 临时构建产物与开发插件排除 ----
+.vscode/
+dist/
+skills/
+*.db
+*.db-shm
+*.db-wal
+fast_file_finder/index.db
+fast_file_finder/data/
+fast_file_finder/.venv/

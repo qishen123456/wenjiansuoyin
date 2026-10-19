@@ -28,6 +28,9 @@ services:
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
       AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-12}
+      AI_BACKUP_BASE_URL: ${AI_BACKUP_BASE_URL:-}
+      AI_BACKUP_API_KEY: ${AI_BACKUP_API_KEY:-}
+      AI_BACKUP_MODEL: ${AI_BACKUP_MODEL:-}
       MAX_ANALYSIS_FILE_MB: ${MAX_ANALYSIS_FILE_MB:-256}
       MAX_ANALYSIS_ROWS: ${MAX_ANALYSIS_ROWS:-200000}
       PREVIEW_ROWS: ${PREVIEW_ROWS:-100}
@@ -36,9 +39,9 @@ services:
     volumes:
       # 共享盘只读挂进容器：服务永远不应该有写网盘的权限
       - ${SHARE_HOST_PATH:-./网盘模拟数据}:${CONTAINER_SHARE_PATH:-/data/share}:ro
+      - ./fast_file_finder/app.py:/app/app.py:ro
+      - ./fast_file_finder/static:/app/static:ro
       # 索引库用独立具名卷，且不要和宿主机 fast_file_finder/data 共用：
-      # app.py 扫描成功清理阶段会删除 root_key 不同的全部行，两个 FILE_ROOT 口径
-      # 来回切换会导致每次启动都全量重建。
       - index_db:/app/data
     # 扫描 13 万条目时 CPU 占用会明显升高，这里做双向限制，防止拖垮开发机
     cpus: "${APP_CPUS:-2.0}"

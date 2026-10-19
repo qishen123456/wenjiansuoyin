@@ -1,0 +1,202 @@
+序号	模型服务	模型	域地址	KEY	归属人	推荐指数	KEY	归属人	推荐指数									
+1	白山云	MiniMax-M2.5	https://api.edgefn.net/v1	sk-VBa1db6zidFzfstwC275Ea5909F342F5B41a0603DdAd7553	琳	⭐⭐⭐		琪	⭐⭐⭐									
+2	白山云	GLM-5	https://api.edgefn.net/v1	sk-VBa1db6zidFzfstwC275Ea5909F342F5B41a0603DdAd7553	琳	⭐⭐⭐	sk-zcQLM6VEmMzYjwtMC61673D62d87441b9aEe28F00fDf3c54	琪	⭐⭐⭐									
+3	白山云	GLM-4.7	https://api.edgefn.net/v1	sk-VBa1db6zidFzfstwC275Ea5909F342F5B41a0603DdAd7553	琳	⭐⭐⭐		琪	⭐⭐⭐									
+4	白山云	Qwen3-Next-80B-A3B-Instruct	https://api.edgefn.net/v1	sk-VBa1db6zidFzfstwC275Ea5909F342F5B41a0603DdAd7553	琳	⭐⭐⭐		琪	⭐⭐⭐									
+5	白山云	DeepSeek-V3.2	https://api.edgefn.net/v1	sk-VBa1db6zidFzfstwC275Ea5909F342F5B41a0603DdAd7553	琳	⭐⭐⭐		琪	⭐⭐⭐									
+6	白山云	Qwen3-235B-A22B	https://api.edgefn.net/v1	sk-VBa1db6zidFzfstwC275Ea5909F342F5B41a0603DdAd7553	琳	⭐⭐⭐		琪	⭐⭐⭐									
+8	魔搭	deepseek-ai/DeepSeek-V4-Pro	https://api-inference.modelscope.cn/v1	ms-e0157e57-a690-48a0-a07b-603b2c3a43cb	琳	⭐⭐⭐⭐	ms-6e1945bb-484c-4be1-8002-a4b7e34f4f22	琪	⭐⭐⭐⭐									
+9	阿里云	qwen-max	https://dashscope.aliyuncs.com/compatible-mode/v1	sk-76585a8711f84d45a60b9dc36497213e	琳	⭐⭐⭐⭐		琪	⭐⭐⭐⭐									
+10	KIMI	"kimi-k2.5
+kimi-k2.6
+kimi-k2.7-code
+kimi-k2.7-code-highspeed"	https://api.moonshot.cn/v1		琳	⭐⭐⭐⭐		@ltq										
+11			https://api.lmuai.com/v1/messages															
+12	onewo	glm-5.2	https://gateway.onewo.com/v1		琪													
+13	硅基流动	Qwen/Qwen3.8-27B	https://api.siliconflow.cn/v1				sk-obsbpeprzoaowggkwdehvnnqoeqhwieeamcnayclnuqxbwdm	琪										
+14	硅基流动	Qwen/Qwen3-VL-32B-Thinking						琪										
+15	硅基流动	Qwen/Qwen3-VL-32B-Instruct						琪										
+	硅基流动	deepseek-ai/DeepSeek-V4.1-Flash																
+16	百炼阿里	qwen3.5-122b-a10b	https://ws-0q2src4w24p2a2bi.cn-beijing.maas.aliyuncs.com/compatible-mode/v1		https://maas.qianwenaiapi.com/compatible-mode/v1		sk-ws-H.PPPRYXI.ugaz.MEQCIFoeQREVNDCLWRdYJv-M52x64yPZ2-u_85_Y9liHiy5eAiAnulK84oqvjpWHvpc1EFQEcjEYA5QZdgSynzDXhMeb0w	琪										
+	百炼阿里	qwen3.8-27b	https://ws-0q2src4w24p2a2bi.cn-beijing.maas.aliyuncs.com/compatible-mode/v1					琪										
+	魔嗒	/Qwen3-VL-32B-Instruct	https://api-inference.modelscope.cn/v1				ms-28537548-91b5-4ccc-81b3-04734aed2bd4	琪										
+	魔嗒	Qwen/Qwen2.5-VL-72B-Instruct	https://api-inference.modelscope.cn/v1					琪										
+	魔嗒	Qwen/Qwen3.8-27B	https://api-inference.modelscope.cn/v1															
+	魔嗒	deepseek-ai/DeepSeek-V4.1-Flash-1017	https://api-inference.modelscope.cn/v1															
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
+																		
