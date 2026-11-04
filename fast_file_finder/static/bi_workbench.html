@@ -8,7 +8,7 @@
   <!-- Inter 现代企业级西文字体与中文字体栈 -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   
   <!-- Tailwind CSS 官方 CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -51,9 +51,9 @@
   <style>
     /* 浅灰色专业点阵网格画布背景 (Dot Grid) */
     .bg-dot-grid {
-      background-color: #F8FAFC;
-      background-image: radial-gradient(#cbd5e1 1.25px, transparent 1.25px);
-      background-size: 20px 20px;
+      background-color: #FAFAFA;
+      background-image: radial-gradient(#E4E4E7 1px, transparent 1px);
+      background-size: 24px 24px;
     }
 
     /* 自定义精细滚动条 */
@@ -65,11 +65,11 @@
       background: transparent;
     }
     ::-webkit-scrollbar-thumb {
-      background: #cbd5e1;
+      background: #D4D4D8;
       border-radius: 9999px;
     }
     ::-webkit-scrollbar-thumb:hover {
-      background: #94a3b8;
+      background: #A1A1AA;
     }
 
     /* 玻璃拟态半透明 */
@@ -88,7 +88,7 @@
   <header class="h-14 bg-white border-b border-slate-200 px-5 flex items-center justify-between shrink-0 z-30 shadow-subtle glass-effect">
     <!-- 左侧：系统品牌标志与工作台名称 -->
     <div class="flex items-center gap-3 w-72">
-      <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-700 via-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-sm font-bold text-base tracking-wider">
+      <div class="w-8 h-8 rounded-lg bg-[#18181B] flex items-center justify-center text-white shadow-sm font-bold text-base tracking-wider">
         <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
         </svg>
@@ -106,9 +106,9 @@
     <div class="flex items-center gap-4 flex-1 max-w-2xl px-6">
       <div class="flex items-center text-xs text-slate-500 gap-1.5 font-medium shrink-0">
         <span class="hover:text-blue-600 cursor-pointer">数据中心</span>
-        <span class="text-slate-300">/</span>
+        <svg class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
         <span class="hover:text-blue-600 cursor-pointer">经营看板</span>
-        <span class="text-slate-300">/</span>
+        <svg class="w-3 h-3 text-slate-300 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
         <span class="text-slate-900 font-semibold truncate max-w-[130px]" id="topBreadcrumbTitle">月度销售大表分析</span>
       </div>
 
@@ -132,8 +132,8 @@
       </button>
 
       <!-- AI 助手按钮 -->
-      <button onclick="toggleAIModal()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200/80 rounded-lg hover:from-indigo-100 hover:to-blue-100 hover:shadow-sm active:scale-95 transition-all">
-        <span class="text-sm">✨</span>
+      <button onclick="toggleAIModal()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#3F3F46] bg-white border border-[#E4E4E7] rounded-lg hover:bg-[#F4F4F5] hover:shadow-sm active:scale-95 transition-all">
+        <span class="text-sm">AI</span>
         <span>AI 智能找表</span>
       </button>
 
@@ -175,37 +175,37 @@
           <div id="catBasic" class="grid grid-cols-2 gap-2 mt-2">
             <!-- 柱状图 -->
             <button onclick="addWidget('bar')" class="flex flex-col items-center justify-center p-2.5 bg-white border border-slate-200/90 rounded-xl hover:border-blue-400 hover:shadow-card hover:-translate-y-0.5 active:translate-y-0 transition-all text-slate-700 hover:text-blue-600 group">
-              <span class="text-xl mb-1 group-hover:scale-110 transition-transform">📊</span>
+              <svg class="mb-1 w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 20V11"/><path d="M10 20V4"/><path d="M16 20v-6"/><path d="M22 20v-9"/></svg>
               <span class="text-xs font-semibold">柱状对比图</span>
               <span class="text-[10px] text-slate-400 font-normal mt-0.5">离散分类统计</span>
             </button>
             <!-- 堆叠柱状图 -->
             <button onclick="addWidget('stacked_bar')" class="flex flex-col items-center justify-center p-2.5 bg-white border border-slate-200/90 rounded-xl hover:border-blue-400 hover:shadow-card hover:-translate-y-0.5 active:translate-y-0 transition-all text-slate-700 hover:text-blue-600 group">
-              <span class="text-xl mb-1 group-hover:scale-110 transition-transform">📶</span>
+              <svg class="mb-1 w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16.5 9 5 9-5"/></svg>
               <span class="text-xs font-semibold">堆积柱状图</span>
               <span class="text-[10px] text-slate-400 font-normal mt-0.5">总体与内部构成</span>
             </button>
             <!-- 折线图 -->
             <button onclick="addWidget('line')" class="flex flex-col items-center justify-center p-2.5 bg-white border border-slate-200/90 rounded-xl hover:border-blue-400 hover:shadow-card hover:-translate-y-0.5 active:translate-y-0 transition-all text-slate-700 hover:text-blue-600 group">
-              <span class="text-xl mb-1 group-hover:scale-110 transition-transform">📈</span>
+              <svg class="mb-1 w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="3 17 9 11 13 15 21 6"/><polyline points="16 6 21 6 21 11"/></svg>
               <span class="text-xs font-semibold">平滑折线图</span>
               <span class="text-[10px] text-slate-400 font-normal mt-0.5">趋势演变分析</span>
             </button>
             <!-- 面积图 -->
             <button onclick="addWidget('area')" class="flex flex-col items-center justify-center p-2.5 bg-white border border-slate-200/90 rounded-xl hover:border-blue-400 hover:shadow-card hover:-translate-y-0.5 active:translate-y-0 transition-all text-slate-700 hover:text-blue-600 group">
-              <span class="text-xl mb-1 group-hover:scale-110 transition-transform">🌊</span>
+              <svg class="mb-1 w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 17l5-6 4 3 5-7 4 4v6H3z"/></svg>
               <span class="text-xs font-semibold">渐变面积图</span>
               <span class="text-[10px] text-slate-400 font-normal mt-0.5">累计规模波动</span>
             </button>
             <!-- 环形占比图 -->
             <button onclick="addWidget('pie')" class="flex flex-col items-center justify-center p-2.5 bg-white border border-slate-200/90 rounded-xl hover:border-blue-400 hover:shadow-card hover:-translate-y-0.5 active:translate-y-0 transition-all text-slate-700 hover:text-blue-600 group">
-              <span class="text-xl mb-1 group-hover:scale-110 transition-transform">🍩</span>
+              <svg class="mb-1 w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21.2 15.9A10 10 0 1 1 8 2.8"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
               <span class="text-xs font-semibold">环形占比图</span>
               <span class="text-[10px] text-slate-400 font-normal mt-0.5">份额与结构比重</span>
             </button>
             <!-- 排行榜条形图 -->
             <button onclick="addWidget('ranking')" class="flex flex-col items-center justify-center p-2.5 bg-white border border-slate-200/90 rounded-xl hover:border-blue-400 hover:shadow-card hover:-translate-y-0.5 active:translate-y-0 transition-all text-slate-700 hover:text-blue-600 group">
-              <span class="text-xl mb-1 group-hover:scale-110 transition-transform">🏆</span>
+              <svg class="mb-1 w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="14" y2="12"/><line x1="4" y1="17" x2="9" y2="17"/></svg>
               <span class="text-xs font-semibold">排行榜条形图</span>
               <span class="text-[10px] text-slate-400 font-normal mt-0.5">Top N 业绩竞速</span>
             </button>
@@ -221,13 +221,13 @@
           <div id="catCards" class="grid grid-cols-2 gap-2 mt-2">
             <!-- 单指标卡 -->
             <button onclick="addWidget('kpi')" class="flex flex-col items-center justify-center p-2.5 bg-white border border-slate-200/90 rounded-xl hover:border-blue-400 hover:shadow-card hover:-translate-y-0.5 active:translate-y-0 transition-all text-slate-700 hover:text-blue-600 group">
-              <span class="text-xl mb-1 group-hover:scale-110 transition-transform">🎯</span>
+              <svg class="mb-1 w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>
               <span class="text-xs font-semibold">核心 KPI 卡片</span>
               <span class="text-[10px] text-slate-400 font-normal mt-0.5">核心数值大字</span>
             </button>
             <!-- 仪表盘 -->
             <button onclick="addWidget('gauge')" class="flex flex-col items-center justify-center p-2.5 bg-white border border-slate-200/90 rounded-xl hover:border-blue-400 hover:shadow-card hover:-translate-y-0.5 active:translate-y-0 transition-all text-slate-700 hover:text-blue-600 group">
-              <span class="text-xl mb-1 group-hover:scale-110 transition-transform">⏱️</span>
+              <svg class="mb-1 w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 20a8 8 0 1 1 8-8"/><path d="M12 12l4.5-3"/></svg>
               <span class="text-xs font-semibold">达成率仪表盘</span>
               <span class="text-[10px] text-slate-400 font-normal mt-0.5">目标达成监控</span>
             </button>
@@ -243,7 +243,7 @@
           <div id="catTables" class="grid grid-cols-1 gap-2 mt-2">
             <!-- 交叉透视表 -->
             <button onclick="addWidget('table')" class="flex items-center gap-3 p-2.5 bg-white border border-slate-200/90 rounded-xl hover:border-blue-400 hover:shadow-card hover:-translate-y-0.5 active:translate-y-0 transition-all text-slate-700 hover:text-blue-600 group text-left">
-              <span class="text-xl group-hover:scale-110 transition-transform">▦</span>
+              <svg class="mb-1 w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="9" y1="10" x2="9" y2="20"/></svg>
               <div>
                 <div class="text-xs font-semibold">多维交叉透视表</div>
                 <div class="text-[10px] text-slate-400 font-normal">多维度行列汇总与切片透视</div>
@@ -260,7 +260,7 @@
           </button>
           <div id="catConversion" class="grid grid-cols-1 gap-2 mt-2">
             <button onclick="addWidget('funnel')" class="flex items-center gap-3 p-2.5 bg-white border border-slate-200/90 rounded-xl hover:border-blue-400 hover:shadow-card hover:-translate-y-0.5 active:translate-y-0 transition-all text-slate-700 hover:text-blue-600 group text-left">
-              <span class="text-xl group-hover:scale-110 transition-transform">🔻</span>
+              <svg class="mb-1 w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 4h18l-7 8v8l-4-2v-6z"/></svg>
               <div>
                 <div class="text-xs font-semibold">业务转化漏斗图</div>
                 <div class="text-[10px] text-slate-400 font-normal">链路阶段流失与转化率分析</div>
@@ -273,8 +273,8 @@
 
       <!-- 左下角快捷模板提示 -->
       <div class="p-3 border-t border-slate-200 bg-slate-50">
-        <button onclick="loadDemoMatrix()" class="w-full py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold text-xs rounded-xl shadow-sm transition-all flex items-center justify-center gap-1.5 active:scale-95">
-          <span>⚡</span>
+        <button onclick="loadDemoMatrix()" class="w-full py-2 bg-[#18181B] hover:bg-black text-white font-semibold text-xs rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5 active:scale-95">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           <span>一键载入典型经营矩阵</span>
         </button>
       </div>
@@ -308,8 +308,8 @@
       <!-- 初始状态：空状态引导卡片 (Empty State) -->
       <div id="canvasEmptyState" class="m-auto my-16 max-w-lg w-full bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/90 shadow-card p-10 flex flex-col items-center text-center">
         <!-- 引导图标 -->
-        <div class="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-3xl mb-4 shadow-sm">
-          📊
+        <div class="w-16 h-16 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-400 mb-4 shadow-sm">
+          <svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
         </div>
         <h3 class="text-base font-bold text-slate-900 mb-1.5 tracking-tight">添加图表，开始搭建你的仪表板</h3>
         <p class="text-xs text-slate-500 max-w-sm mb-6 leading-relaxed">
@@ -328,7 +328,7 @@
             <span>＋</span><span>KPI 卡片</span>
           </button>
           <button onclick="loadDemoMatrix()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl shadow-sm transition-all flex items-center gap-1.5 active:scale-95">
-            <span>⚡ 一键生成典型看板矩阵</span>
+            <span>一键生成典型看板矩阵</span>
           </button>
         </div>
       </div>
@@ -343,11 +343,11 @@
       <!-- 头部：标题与取消选中按钮 -->
       <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
         <div class="flex items-center gap-2">
-          <span id="panelIcon">⚙️</span>
+          <span id="panelIcon">设</span>
           <span id="panelHeaderTitle" class="text-xs font-bold text-slate-800">仪表板全局设置</span>
         </div>
         <button id="closeSelectionBtn" onclick="deselectWidget()" title="取消选中返回全局" class="text-slate-400 hover:text-slate-700 text-sm hidden p-1 rounded-md hover:bg-slate-100 transition-colors">
-          ✕
+          ×
         </button>
       </div>
 
@@ -554,7 +554,7 @@
             ⇥ 切换全宽/半宽
           </button>
           <button onclick="deleteActiveWidget()" class="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg text-xs font-semibold shadow-subtle active:scale-95 transition-all">
-            🗑️ 删除
+            删除
           </button>
         </div>
       </div>
@@ -606,12 +606,12 @@
   <!-- ========================================================= -->
   <div id="aiModal" class="fixed inset-0 bg-slate-900/30 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
     <div class="bg-white rounded-2xl shadow-float border border-slate-200 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-      <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-indigo-50 to-blue-50">
+      <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-[#FAFAFA]">
         <div class="flex items-center gap-2">
-          <span class="text-xl">🤖</span>
+          <span class="text-xl">AI</span>
           <span class="text-sm font-bold text-slate-900">AI 智能找表与语义推理</span>
         </div>
-        <button onclick="toggleAIModal()" class="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+        <button onclick="toggleAIModal()" class="text-slate-400 hover:text-slate-600 text-lg">×</button>
       </div>
       <div class="p-5 space-y-4">
         <p class="text-xs text-slate-600 leading-relaxed">
@@ -631,7 +631,7 @@
 
   <!-- 轻量 Toast 提示框 -->
   <div id="toast" class="fixed bottom-12 right-6 bg-slate-900/90 backdrop-blur text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-float transform transition-all duration-200 translate-y-8 opacity-0 pointer-events-none z-50 flex items-center gap-2">
-    <span id="toastIcon">✓</span>
+    <span id="toastIcon">OK</span>
     <span id="toastText">操作已完成</span>
   </div>
 
@@ -651,16 +651,16 @@
 
     // 组件元数据定义
     const WIDGET_META = {
-      bar: { name: '柱状对比图', icon: '📊', defaultSpan: 1 },
-      stacked_bar: { name: '堆积柱状图', icon: '📶', defaultSpan: 1 },
-      line: { name: '平滑折线图', icon: '📈', defaultSpan: 2 },
-      area: { name: '渐变面积图', icon: '🌊', defaultSpan: 2 },
-      pie: { name: '环形占比图', icon: '🍩', defaultSpan: 1 },
-      ranking: { name: '排行榜条形图', icon: '🏆', defaultSpan: 1 },
-      kpi: { name: '核心 KPI 卡片', icon: '🎯', defaultSpan: 1 },
-      gauge: { name: '达成率仪表盘', icon: '⏱️', defaultSpan: 1 },
+      bar: { name: '柱状对比图', icon: '▍▍', defaultSpan: 1 },
+      stacked_bar: { name: '堆积柱状图', icon: '▍▍▍', defaultSpan: 1 },
+      line: { name: '平滑折线图', icon: '/', defaultSpan: 2 },
+      area: { name: '渐变面积图', icon: '≈', defaultSpan: 2 },
+      pie: { name: '环形占比图', icon: '○', defaultSpan: 1 },
+      ranking: { name: '排行榜条形图', icon: '≡', defaultSpan: 1 },
+      kpi: { name: '核心 KPI 卡片', icon: '◎', defaultSpan: 1 },
+      gauge: { name: '达成率仪表盘', icon: '◔', defaultSpan: 1 },
       table: { name: '多维交叉透视表', icon: '▦', defaultSpan: 2 },
-      funnel: { name: '业务转化漏斗图', icon: '🔻', defaultSpan: 1 }
+      funnel: { name: '业务转化漏斗图', icon: '▽', defaultSpan: 1 }
     };
 
     // 模拟真实报表聚合数据流
@@ -692,7 +692,7 @@
     };
 
     // 轻量 Toast 提示
-    function showToast(msg, icon = '✓') {
+    function showToast(msg, icon = 'OK') {
       const toast = $('toast');
       $('toastText').textContent = msg;
       $('toastIcon').textContent = icon;
@@ -715,7 +715,7 @@
 
     // 添加组件到画布
     function addWidget(type) {
-      const meta = WIDGET_META[type] || { name: '未命名组件', icon: '📊', defaultSpan: 1 };
+      const meta = WIDGET_META[type] || { name: '未命名组件', icon: '▍▍', defaultSpan: 1 };
       const newId = 'widget_' + Date.now() + '_' + Math.floor(Math.random() * 100);
       
       const newWidget = {
@@ -765,7 +765,7 @@
 
       grid.innerHTML = state.widgets.map(w => {
         const isSelected = w.id === state.activeWidgetId;
-        const meta = WIDGET_META[w.type] || { name: '图表', icon: '📊' };
+        const meta = WIDGET_META[w.type] || { name: '图表', icon: '▍▍' };
         const colSpanClass = w.span === 2 ? 'col-span-2' : 'col-span-1';
 
         return `
@@ -787,10 +787,10 @@
                   ${w.span === 2 ? '⇤' : '⇥'}
                 </button>
                 <button onclick="cloneWidget('${w.id}', event)" title="复制组件" class="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-700 text-xs">
-                  📋
+                  复制
                 </button>
                 <button onclick="deleteWidget('${w.id}', event)" title="删除组件" class="p-1 hover:bg-red-50 rounded text-slate-400 hover:text-red-600 text-xs">
-                  🗑️
+                  删除
                 </button>
               </div>
             </div>
@@ -820,7 +820,7 @@
             <span class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">${escapeHtml(w.dataConfig.metric)} · 全年累计</span>
             <span class="text-4xl font-extrabold text-blue-600 font-mono tracking-tight">${val}</span>
             <div class="mt-3 flex items-center gap-2 text-xs">
-              <span class="text-emerald-600 font-bold">↑ 18.4%</span>
+              <span class="text-emerald-600 font-bold">+18.4%</span>
               <span class="text-slate-400">同比上期</span>
             </div>
           </div>
@@ -875,13 +875,13 @@
           color: colors,
           tooltip: { trigger: 'axis' },
           grid: commonGrid,
-          xAxis: { type: 'category', data: MOCK_DATA.categories, axisLabel: { fontSize: 11, color: '#64748b' } },
-          yAxis: { type: 'value', splitLine: { show: w.styleConfig.showGrid, lineStyle: { type: 'dashed', color: '#f1f5f9' } } },
+          xAxis: { type: 'category', data: MOCK_DATA.categories, axisLabel: { fontSize: 11, color: '#71717A' } },
+          yAxis: { type: 'value', splitLine: { show: w.styleConfig.showGrid, lineStyle: { type: 'dashed', color: '#F4F4F5' } } },
           series: [{
             name: w.dataConfig.metric,
             type: 'bar',
             data: metricData,
-            label: { show: w.styleConfig.showLabels, position: 'top', fontSize: 10, color: '#475569' },
+            label: { show: w.styleConfig.showLabels, position: 'top', fontSize: 10, color: '#3F3F46' },
             itemStyle: { borderRadius: [w.styleConfig.barRadius, w.styleConfig.barRadius, 0, 0] }
           }]
         };
@@ -890,8 +890,8 @@
           color: colors,
           tooltip: { trigger: 'axis' },
           grid: commonGrid,
-          xAxis: { type: 'category', data: MOCK_DATA.categories, axisLabel: { fontSize: 11, color: '#64748b' } },
-          yAxis: { type: 'value', splitLine: { show: w.styleConfig.showGrid, lineStyle: { type: 'dashed', color: '#f1f5f9' } } },
+          xAxis: { type: 'category', data: MOCK_DATA.categories, axisLabel: { fontSize: 11, color: '#71717A' } },
+          yAxis: { type: 'value', splitLine: { show: w.styleConfig.showGrid, lineStyle: { type: 'dashed', color: '#F4F4F5' } } },
           series: [{
             name: w.dataConfig.metric,
             type: 'line',
@@ -907,8 +907,8 @@
           color: colors,
           tooltip: { trigger: 'axis' },
           grid: commonGrid,
-          xAxis: { type: 'category', boundaryGap: false, data: MOCK_DATA.categories, axisLabel: { fontSize: 11, color: '#64748b' } },
-          yAxis: { type: 'value', splitLine: { show: w.styleConfig.showGrid, lineStyle: { type: 'dashed', color: '#f1f5f9' } } },
+          xAxis: { type: 'category', boundaryGap: false, data: MOCK_DATA.categories, axisLabel: { fontSize: 11, color: '#71717A' } },
+          yAxis: { type: 'value', splitLine: { show: w.styleConfig.showGrid, lineStyle: { type: 'dashed', color: '#F4F4F5' } } },
           series: [{
             name: w.dataConfig.metric,
             type: 'line',
@@ -957,11 +957,11 @@
             itemStyle: { color: colors[0] },
             progress: { show: true, width: 14 },
             pointer: { length: '60%', width: 5 },
-            axisLine: { lineStyle: { width: 14, color: [[1, '#f1f5f9']] } },
+            axisLine: { lineStyle: { width: 14, color: [[1, '#F4F4F5']] } },
             axisTick: { show: false },
             splitLine: { show: false },
-            axisLabel: { distance: 18, color: '#94a3b8', fontSize: 10 },
-            title: { show: true, offsetCenter: [0, '25%'], fontSize: 11, color: '#64748b' },
+            axisLabel: { distance: 18, color: '#A1A1AA', fontSize: 10 },
+            title: { show: true, offsetCenter: [0, '25%'], fontSize: 11, color: '#71717A' },
             detail: { valueAnimation: true, offsetCenter: [0, '-15%'], fontSize: 24, fontWeight: 'bolder', formatter: '{value}%', color: colors[0] },
             data: [{ value: 84.6, name: '季度销售目标达成率' }]
           }]
@@ -1029,7 +1029,7 @@
       if (!activeWidget) {
         // 状态 A：全局配置
         headerTitle.textContent = '仪表板全局设置';
-        panelIcon.textContent = '⚙️';
+        panelIcon.textContent = '设';
         closeBtn.classList.add('hidden');
         tabsHeader.classList.add('hidden');
         tabsHeader.classList.remove('grid');
@@ -1044,7 +1044,7 @@
 
       // 状态 B：组件专属配置
       headerTitle.textContent = activeWidget.title;
-      panelIcon.textContent = WIDGET_META[activeWidget.type]?.icon || '📊';
+      panelIcon.textContent = WIDGET_META[activeWidget.type]?.icon || '▍▍';
       closeBtn.classList.remove('hidden');
       tabsHeader.classList.remove('hidden');
       tabsHeader.classList.add('grid');
@@ -1084,10 +1084,10 @@
       listEl.innerHTML = state.widgets.map((w, idx) => `
         <div onclick="selectWidget('${w.id}')" class="flex items-center justify-between p-2 rounded-lg border border-slate-200 bg-white hover:border-blue-400 hover:bg-blue-50/50 cursor-pointer text-xs transition-colors">
           <div class="flex items-center gap-2 truncate max-w-[180px]">
-            <span>${WIDGET_META[w.type]?.icon || '📊'}</span>
+            <span>${WIDGET_META[w.type]?.icon || '▍▍'}</span>
             <span class="font-medium text-slate-800 truncate">${escapeHtml(w.title)}</span>
           </div>
-          <button onclick="event.stopPropagation(); deleteWidget('${w.id}')" class="text-slate-400 hover:text-red-600 p-0.5">✕</button>
+          <button onclick="event.stopPropagation(); deleteWidget('${w.id}')" class="text-slate-400 hover:text-red-600 p-0.5">×</button>
         </div>
       `).join('');
     }
@@ -1304,7 +1304,7 @@
     }
 
     function handleSave() {
-      showToast('✓ 仪表板所有布局与配置已成功保存！');
+      showToast('仪表板所有布局与配置已成功保存');
     }
 
     function handleRefresh() {
@@ -1313,7 +1313,7 @@
       setTimeout(() => {
         icon.classList.remove('animate-spin');
         state.widgets.forEach(w => renderChart(w));
-        showToast('✓ 全量数据已重新聚合计算完成');
+        showToast('全量数据已重新聚合计算完成');
       }, 500);
     }
 
@@ -1325,7 +1325,7 @@
       const text = $('aiPromptText').value.trim();
       if (!text) return;
       toggleAIModal();
-      showToast('🤖 AI 已定位匹配报表并自动绑定！');
+      showToast('AI 已定位匹配报表并自动绑定');
     }
 
     function escapeHtml(str) {

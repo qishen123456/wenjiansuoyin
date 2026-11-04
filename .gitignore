@@ -37,6 +37,7 @@ __pycache__/
 .vscode/
 dist/
 skills/
+.demo-restore-*/
 *.db
 *.db-shm
 *.db-wal

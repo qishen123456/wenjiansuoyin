@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>企业文件检索与轻量 BI 平台 —— 服务器保姆级迁移与部署指南</title>
+  <style>
+    :root {
+      --bg: #F8FAFC;
+      --card-bg: #FFFFFF;
+      --text-main: #0F172A;
+      --text-muted: #64748B;
+      --line: #E2E8F0;
+      --primary: #0F172A;
+      --accent: #2563EB;
+      --success: #10B981;
+      --warning: #F59E0B;
+      --danger: #EF4444;
+      --code-bg: #0F172A;
+      --code-text: #F8FAFC;
+      --radius: 12px;
+      --shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.03);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text-main);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    .layout {
+      display: flex;
+      max-width: 1380px;
+      margin: 0 auto;
+      min-height: 100vh;
+    }
+    /* 侧边导航 */
+    .sidebar {
+      width: 290px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 32px 20px;
+      border-right: 1px solid var(--line);
+      background: #FFFFFF;
+      flex-shrink: 0;
+    }
+    .brand-title {
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .brand-logo {
+      width: 28px;
+      height: 28px;
+      background: #0F172A;
+      color: #FFF;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      font-size: 14px;
+      font-weight: 900;
+    }
+    .brand-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+    }
+    .nav-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .nav-item a {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .nav-item a:hover {
+      background: #F1F5F9;
+      color: var(--text-main);
+    }
+    .nav-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      background: #E2E8F0;
+      border-radius: 4px;
+      margin-left: auto;
+    }
+
+    /* 主内容区 */
+    .main-content {
+      flex: 1;
+      padding: 40px 60px 100px;
+      max-width: 1040px;
+    }
+    .header-banner {
+      background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
+      color: #FFFFFF;
+      border-radius: 16px;
+      padding: 36px 40px;
+      margin-bottom: 40px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.15);
+      position: relative;
+      overflow: hidden;
+    }
+    .header-banner h1 {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-bottom: 10px;
+    }
+    .header-banner p {
+      font-size: 14px;
+      color: #94A3B8;
+      max-width: 680px;
+      line-height: 1.6;
+    }
+    .badge-pills {
+      display: flex;
+      gap: 8px;
+      margin-top: 18px;
+    }
+    .badge-pill {
+      font-size: 11.5px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #E2E8F0;
+      font-weight: 500;
+    }
+
+    /* 步骤卡片 */
+    .step-section {
+      background: var(--card-bg);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 32px;
+      margin-bottom: 28px;
+      box-shadow: var(--shadow);
+      position: relative;
+    }
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid #F1F5F9;
+      padding-bottom: 16px;
+    }
+    .step-number {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: #0F172A;
+      color: #FFF;
+      font-weight: 800;
+      font-size: 14px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+    .step-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .step-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* 说明与提示框 */
+    .callout {
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin: 16px 0;
+      font-size: 13px;
+      line-height: 1.6;
+      display: flex;
+      gap: 12px;
+    }
+    .callout-info { background: #EFF6FF; border: 1px solid #BFDBFE; color: #1E40AF; }
+    .callout-warn { background: #FFFBEB; border: 1px solid #FDE68A; color: #92400E; }
+    .callout-tip { background: #ECFDF5; border: 1px solid #A7F3D0; color: #065F46; }
+    .callout-danger { background: #FEF2F2; border: 1px solid #FECACA; color: #991B1B; }
+
+    /* 代码块与复制按钮 */
+    .code-frame {
+      background: var(--code-bg);
+      border-radius: 10px;
+      margin: 16px 0;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .code-top {
+      background: #1E293B;
+      padding: 8px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: #94A3B8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .copy-btn {
+      background: rgba(255, 255, 255, 0.12);
+      border: none;
+      color: #F8FAFC;
+      font-size: 11.5px;
+      padding: 3px 9px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .copy-btn:hover { background: rgba(255, 255, 255, 0.25); }
+    pre {
+      padding: 16px 20px;
+      overflow-x: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      color: #E2E8F0;
+      line-height: 1.5;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    p code {
+      background: #F1F5F9;
+      color: #0F172A;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+
+    /* 表格 */
+    .guide-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 13px;
+    }
+    .guide-table th {
+      background: #F8FAFC;
+      text-align: left;
+      padding: 10px 14px;
+      border-bottom: 2px solid var(--line);
+      color: #475569;
+      font-weight: 600;
+    }
+    .guide-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      color: #334155;
+    }
+
+    /* 检查清单 */
+    .checklist {
+      list-style: none;
+      margin: 14px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .check-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13.5px;
+      color: #334155;
+    }
+    .check-item input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: #2563EB;
+      cursor: pointer;
+    }
+
+    /* 滚动条 */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+  </style>
+</head>
+<body>
+
+<div class="layout">
+  <!-- 侧边导航目录 -->
+  <aside class="sidebar">
+    <div class="brand-title">
+      <div class="brand-logo">F</div>
+      <span>服务器迁移部署指引</span>
+    </div>
+    <div class="brand-subtitle">v2026 生产级完全落地方案</div>
+
+    <ul class="nav-list">
+      <li class="nav-item"><a href="#step0"><span>0. 架构与运行逻辑</span><span class="nav-badge">核心</span></a></li>
+      <li class="nav-item"><a href="#step1"><span>1. 服务器基础环境准备</span><span class="nav-badge">Docker</span></a></li>
+      <li class="nav-item"><a href="#step2"><span>2. 上传工程代码至服务器</span></a></li>
+      <li class="nav-item"><a href="#step3"><span>3. 挂载真实内网共享云盘</span><span class="nav-badge">关键</span></a></li>
+      <li class="nav-item"><a href="#step4"><span>4. 配置环境变量与 AI 模型</span></a></li>
+      <li class="nav-item"><a href="#step5"><span>5. 启动 Docker 并自检</span><span class="nav-badge">上线</span></a></li>
+      <li class="nav-item"><a href="#step6"><span>6. 触发首次全盘极速建索</span></a></li>
+      <li class="nav-item"><a href="#step7"><span>7. 飞书自建应用与告警打通</span></a></li>
+      <li class="nav-item"><a href="#step8"><span>8. Nginx 域名反向代理</span></a></li>
+      <li class="nav-item"><a href="#faq"><span>9. 常见问题自救排错 (FAQ)</span></a></li>
+    </ul>
+  </aside>
+
+  <!-- 正文主视区 -->
+  <main class="main-content">
+    <div class="header-banner">
+      <h1>企业文件检索平台 —— 零基础服务器迁移全流程指南</h1>
+      <p>面向企业网盘（如 Windows 共享盘 / SMB / NAS）上 13 万+ Excel 表格、PB 级海量文档的毫秒级检索、DeepSeek AI 寻访、归档时效监控与飞书权限打通的标准化生产落地手册。</p>
+      <div class="badge-pills">
+        <span class="badge-pill">纯本地 SQLite 毫秒召回</span>
+        <span class="badge-pill">网盘只读保护 (:ro)</span>
+        <span class="badge-pill">DeepSeek 多源兜底</span>
+        <span class="badge-pill">飞书组织通讯录同步</span>
+      </div>
+    </div>
+
+    <!-- 步骤 0 -->
+    <section class="step-section" id="step0">
+      <div class="step-header">
+        <div class="step-number">0</div>
+        <div>
+          <div class="step-title">架构设计：为什么绝不直接查网盘？</div>
+          <div class="step-desc">理解核心工作机制，避免将网盘拖垮</div>
+        </div>
+      </div>
+      <p style="font-size:14px;color:#475569">
+        传统搜索平台直接在共享网盘（SMB / NFS）上做递归检索，一旦多员工并发，网盘 I/O 瞬间占满甚至死机。
+        本项目采用 **“本地磁盘高性能缓存索引 + 共享盘绝对只读”** 架构：
+      </p>
+      
+      <div class="callout callout-info">
+        <div>💡</div>
+        <div>
+          <b>核心原则：</b><br>
+          1. <b>员工检索</b>：只查服务器本地的高性能 SSD 磁盘（SQLite FTS5 索引表），耗时 10~20ms，<b>完全不消耗共享网盘的任何网络与磁盘 I/O</b>；<br>
+          2. <b>共享盘只读（:ro）</b>：容器没有任何删除或修改原文件的写权限，绝对安全；<br>
+          3. <b>增量巡检</b>：后台定时器或管理员点击“增量同步”时，才在后台低优先级遍历网盘更新索引。
+        </div>
+      </div>
+    </section>
+
+    <!-- 步骤 1 -->
+    <section class="step-section" id="step1">
+      <div class="step-header">
+        <div class="step-number">1</div>
+        <div>
+          <div class="step-title">服务器基础环境准备</div>
+          <div class="step-desc">选配硬件与一键安装 Docker</div>
+        </div>
+      </div>
+
+      <h4 style="font-size:14px;margin-bottom:8px">1. 推荐服务器规格</h4>
+      <table class="guide-table">
+        <thead>
+          <tr>
+            <th>项目</th>
+            <th>最低配置 (轻度体验)</th>
+            <th>推荐生产配置 (10万+表格并发)</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>CPU</td>
+            <td>2 核</td>
+            <td>4 核 ~ 8 核</td>
+            <td>建索阶段进行文本特征提取与二元分词</td>
+          </tr>
+          <tr>
+            <td>内存</td>
+            <td>4 GB</td>
+            <td>8 GB ~ 16 GB</td>
+            <td>支持轻量 BI 内存分析引擎与 SQLite 缓存</td>
+          </tr>
+          <tr>
+            <td>系统盘</td>
+            <td>50 GB SSD</td>
+            <td>100 GB+ NVMe SSD</td>
+            <td>用于存放索引数据库（13万表格约占用 15~30MB 数据库）</td>
+          </tr>
+          <tr>
+            <td>操作系统</td>
+            <td colspan="3">Ubuntu 22.04 LTS / Debian 12 / Rocky Linux 9 / CentOS 7.9+</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4 style="font-size:14px;margin:18px 0 8px">2. 一键安装 Docker 与 Docker Compose (Ubuntu/Debian 举例)</h4>
+      <p style="font-size:13px;color:#64748B">在服务器终端（SSH）执行以下命令即可全自动安装：</p>
+      
+      <div class="code-frame">
+        <div class="code-top">
+          <span>bash (服务器终端)</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制命令</button>
+        </div>
+        <pre><code># 1. 更新软件包并安装基础工具
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg lsb-release cifs-utils
+
+# 2. 安装官方 Docker 引擎
+curl -fsSL https://get.docker.com | bash -s docker
+
+# 3. 启动 Docker 并设置开机自启
+sudo systemctl enable --now docker
+
+# 4. 验证安装版本 (需 >= 24.0)
+docker --version
+docker compose version</code></pre>
+      </div>
+    </section>
+
+    <!-- 步骤 2 -->
+    <section class="step-section" id="step2">
+      <div class="step-header">
+        <div class="step-number">2</div>
+        <div>
+          <div class="step-title">将项目代码上传至服务器</div>
+          <div class="step-desc">打包本地项目并传输到服务器对应目录</div>
+        </div>
+      </div>
+
+      <div class="callout callout-tip">
+        <div>📦</div>
+        <div>
+          在本地电脑终端（Mac / Windows PowerShell）上将整个工程打包并上传至服务器（例如目标目录 <code>/opt/file-search-platform</code>）。
+        </div>
+      </div>
+
+      <div class="code-frame">
+        <div class="code-top">
+          <span>本地电脑终端 (Mac/Linux)</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制命令</button>
+        </div>
+        <pre><code># 1. 在本地项目根目录下打包（排除临时文件和旧环境）
+tar -czvf file-search.tar.gz \
+  --exclude='.git' \
+  --exclude='__pycache__' \
+  --exclude='fast_file_finder/tests' \
+  .
+
+# 2. 使用 SCP 上传到目标服务器（替换为你的服务器 IP 和用户名）
+scp file-search.tar.gz root@192.168.1.100:/opt/</code></pre>
+      </div>
+
+      <p style="font-size:13px;color:#64748B;margin-top:10px">随后登录服务器终端，解压代码：</p>
+      <div class="code-frame">
+        <div class="code-top">
+          <span>服务器终端</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制命令</button>
+        </div>
+        <pre><code># 创建目录并解压
+sudo mkdir -p /opt/file-search-platform
+sudo tar -xzvf /opt/file-search.tar.gz -C /opt/file-search-platform/
+cd /opt/file-search-platform</code></pre>
+      </div>
+    </section>
+
+    <!-- 步骤 3 -->
+    <section class="step-section" id="step3">
+      <div class="step-header">
+        <div class="step-number">3</div>
+        <div>
+          <div class="step-title">在服务器宿主机挂载真实共享网盘</div>
+          <div class="step-desc">告别模拟数据，对接企业真实内网云盘（以 172.11.111.11 Windows 共享为例）</div>
+        </div>
+      </div>
+
+      <div class="callout callout-warn">
+        <div>⚠️</div>
+        <div>
+          <b>新手常踩的坑：</b>千万不要在 Docker 容器内部去 mount 网盘！<br>
+          正确的标准姿势是：<b>由服务器宿主机 Linux 操作系统挂载网盘为本地文件夹，容器直接映射该本地文件夹</b>。这样即使网盘短暂闪断，宿主机也会自动重连，容器不会异常退出。
+        </div>
+      </div>
+
+      <div class="code-frame">
+        <div class="code-top">
+          <span>服务器终端</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制命令</button>
+        </div>
+        <pre><code># 1. 创建服务器本地挂载点目录
+sudo mkdir -p /mnt/share/enterprise_disk
+
+# 2. 创建 CIFS/SMB 账号密码凭据文件 (防止密码明文暴露)
+sudo bash -c 'cat <<EOF > /etc/cifs-credentials
+username=your_smb_user
+password=your_smb_password
+domain=your_domain_if_any
+EOF'
+
+# 保护凭据文件权限 (仅 root 可读)
+sudo chmod 600 /etc/cifs-credentials
+
+# 3. 配置开机自动挂载到 /etc/fstab (关键参数: ro 只读, uid=10001 与容器内安全账号一致)
+sudo bash -c 'echo "//172.11.111.11/share /mnt/share/enterprise_disk cifs credentials=/etc/cifs-credentials,ro,uid=10001,gid=10001,iocharset=utf8,nofail 0 0" >> /etc/fstab'
+
+# 4. 立即执行挂载并测试查看
+sudo mount -a
+ls -la /mnt/share/enterprise_disk</code></pre>
+      </div>
+      <p style="font-size:12.5px;color:#10B981">✓ 如果 <code>ls /mnt/share/enterprise_disk</code> 能看到公司的真实文件夹（如 <code>12-推广ROI周报</code>、<code>2-阿里平台-分销</code> 等），说明网盘挂载大功告成！</p>
+    </section>
+
+    <!-- 步骤 4 -->
+    <section class="step-section" id="step4">
+      <div class="step-header">
+        <div class="step-number">4</div>
+        <div>
+          <div class="step-title">配置生产环境变量文件 (.env) 与 AI 模型</div>
+          <div class="step-desc">填入共享盘映射地址与 DeepSeek 大模型凭证</div>
+        </div>
+      </div>
+
+      <p style="font-size:13px;color:#475569">在项目根目录复制生产配置文件：</p>
+      <div class="code-frame">
+        <div class="code-top">
+          <span>服务器终端</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制命令</button>
+        </div>
+        <pre><code>cp .env.example .env
+nano .env   # 或者使用 vim .env</code></pre>
+      </div>
+
+      <p style="font-size:13px;color:#475569;margin-top:10px">将 <code>.env</code> 文件按以下内容进行填写（每行附中文解析）：</p>
+      <div class="code-frame">
+        <div class="code-top">
+          <span>.env 生产推荐配置</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制配置</button>
+        </div>
+        <pre><code># ==========================================
+# 1. 宿主机真实网盘映射 (填第 3 步挂载的目录)
+# ==========================================
+SHARE_HOST_PATH=/mnt/share/enterprise_disk
+CONTAINER_SHARE_PATH=/data/share
+
+# ==========================================
+# 2. 宿主机网络端口绑定
+# ==========================================
+# 若直接供内网访问可填 0.0.0.0；若通过 Nginx 反代推荐 127.0.0.1
+APP_BIND_ADDR=0.0.0.0
+HOST_PORT=8080
+
+# ==========================================
+# 3. AI 寻访大模型配置 (优先魔搭 ModelScope，硅基流动兜底)
+# ==========================================
+# 1) 魔搭社区 ModelScope (主用推荐)
+MODELSCOPE_API_KEY=your_modelscope_api_key_here
+MODELSCOPE_MODEL=deepseek-ai/DeepSeek-V4.1-Flash-1017
+
+# 2) 硅基流动 SiliconFlow (自动降级兜底)
+SILICONFLOW_API_KEY=your_siliconflow_api_key_here
+SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3
+
+# ==========================================
+# 4. 资源保护与安全配置
+# ==========================================
+ALLOWED_EXTENSIONS=.xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods
+MAX_ANALYSIS_FILE_MB=256
+MAX_ANALYSIS_ROWS=200000
+APP_CPUS=2.0
+APP_MEM_LIMIT=4g
+LOG_LEVEL=INFO
+TZ=Asia/Shanghai</code></pre>
+      </div>
+    </section>
+
+    <!-- 步骤 5 -->
+    <section class="step-section" id="step5">
+      <div class="step-header">
+        <div class="step-number">5</div>
+        <div>
+          <div class="step-title">一键构建并启动服务</div>
+          <div class="step-desc">Docker Compose 全自动编排启动</div>
+        </div>
+      </div>
+
+      <div class="code-frame">
+        <div class="code-top">
+          <span>服务器终端</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制命令</button>
+        </div>
+        <pre><code># 1. 确保本地索引数据目录存在且赋权给容器内部用户 10001
+sudo mkdir -p /srv/file-finder/data
+sudo chown -R 10001:10001 /srv/file-finder/data
+
+# 2. 一键构建并启动容器 (后台守护模式)
+docker compose up -d --build
+
+# 3. 查看容器运行状态
+docker compose ps</code></pre>
+      </div>
+
+      <p style="font-size:13px;color:#475569">查看日志输出确认无报错：</p>
+      <div class="code-frame">
+        <div class="code-top">
+          <span>服务器终端</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制命令</button>
+        </div>
+        <pre><code>docker compose logs -f app</code></pre>
+      </div>
+
+      <div class="callout callout-tip">
+        <div>🎉</div>
+        <div>
+          当你看到控制台打印 <code>Application startup complete.</code>，且 <code>docker compose ps</code> 状态为 <b>Up (healthy)</b>，即说明生产环境服务已完美就绪！
+        </div>
+      </div>
+    </section>
+
+    <!-- 步骤 6 -->
+    <section class="step-section" id="step6">
+      <div class="step-header">
+        <div class="step-number">6</div>
+        <div>
+          <div class="step-title">触发首次全盘极速建索</div>
+          <div class="step-desc">为企业 13 万+ 表格建立毫秒级二元倒排索引</div>
+        </div>
+      </div>
+
+      <p style="font-size:13px;color:#475569">
+        现在打开你的电脑浏览器，访问：<code>http://服务器IP:8080/</code>：
+      </p>
+      <ol style="font-size:13.5px;color:#334155;margin:12px 0 16px 20px;line-height:1.8">
+        <li>右侧边栏状态卡片会显示当前状态为“就绪”；</li>
+        <li>点击右侧面板底部的 <b>「增量同步 ↗」</b> 链接，或在服务器终端直接调用建索命令：</li>
+      </ol>
+
+      <div class="code-frame">
+        <div class="code-top">
+          <span>调用建索 API (后台异步执行)</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制命令</button>
+        </div>
+        <pre><code>curl -X POST http://127.0.0.1:8080/api/scan</code></pre>
+      </div>
+      <p style="font-size:12.5px;color:#64748B">在 13 万表格规模下，纯本地 SQLite 建索通常在 10~30 秒内全部完成，并在磁盘生成极紧凑的 FTS 二元索引文件。</p>
+    </section>
+
+    <!-- 步骤 7 -->
+    <section class="step-section" id="step7">
+      <div class="step-header">
+        <div class="step-number">7</div>
+        <div>
+          <div class="step-title">飞书自建应用与人员权限打通</div>
+          <div class="step-desc">对接公司飞书通讯录，设置三级权限与催办卡片通知</div>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div>🪶</div>
+        <div>
+          系统已原生集成飞书自建应用。请登录 <a href="https://open.feishu.cn/" target="_blank" style="color:#2563EB;font-weight:700">飞书开放平台</a> 创建一个企业自建应用：
+        </div>
+      </div>
+
+      <ul class="checklist">
+        <li class="check-item"><input type="checkbox" checked> <b>获取凭证</b>：在飞书开发者后台获取 <code>App ID (cli_a...)</code> 和 <code>App Secret</code>；</li>
+        <li class="check-item"><input type="checkbox" checked> <b>申请权限</b>：在「权限管理」开通 <code>通讯录:获取用户基本信息</code> 与 <code>消息:发送机器人消息</code>；</li>
+        <li class="check-item"><input type="checkbox" checked> <b>前端配置</b>：点击系统顶部导航 <b>【权限与飞书打通】</b>，填入 App ID、Secret 以及群机器人 Webhook；</li>
+        <li class="check-item"><input type="checkbox" checked> <b>一键同步</b>：点击 <b>「⚡ 一键同步飞书通讯录」</b>，花名册成员秒级导入；</li>
+        <li class="check-item"><input type="checkbox" checked> <b>分配角色</b>：在人员表格的下拉菜单中，将部门领导设为 <b>「🛡️ 部门管理员」</b>，IT负责人设为 <b>「👑 系统超管」</b>。</li>
+      </ul>
+    </section>
+
+    <!-- 步骤 8 -->
+    <section class="step-section" id="step8">
+      <div class="step-header">
+        <div class="step-number">8</div>
+        <div>
+          <div class="step-title">生产标配：Nginx 域名反向代理与 HTTPS</div>
+          <div class="step-desc">为内网员工提供友好的专属域名 (如 search.company.com)</div>
+        </div>
+      </div>
+
+      <p style="font-size:13px;color:#475569">在服务器上的 <code>/etc/nginx/conf.d/file_finder.conf</code> 配置反向代理：</p>
+      <div class="code-frame">
+        <div class="code-top">
+          <span>/etc/nginx/conf.d/file_finder.conf</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制配置</button>
+        </div>
+        <pre><code>server {
+    listen 80;
+    server_name search.company.com;
+
+    client_max_body_size 50M;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # 针对 AI 流式长连接 (SSE) 优化
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+    }
+}</code></pre>
+      </div>
+
+      <p style="font-size:13px;color:#475569">重新加载 Nginx 配置即可生效：</p>
+      <div class="code-frame">
+        <div class="code-top">
+          <span>服务器终端</span>
+          <button class="copy-btn" onclick="copyCode(this)">复制命令</button>
+        </div>
+        <pre><code>sudo nginx -t && sudo nginx -s reload</code></pre>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="step-section" id="faq">
+      <div class="step-header">
+        <div class="step-number">?</div>
+        <div>
+          <div class="step-title">新手常见问题自救清单 (FAQ)</div>
+          <div class="step-desc">遇到意外报错不用慌，对照检查解决</div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div>
+          <h4 style="font-size:14px;color:#0F172A;font-weight:700">Q1: 启动后在浏览器打开显示“拒绝访问”或无法连接？</h4>
+          <p style="font-size:13px;color:#64748B;margin-top:4px">
+            A: 1) 检查服务器安全组与防火墙：执行 <code>sudo ufw allow 8080/tcp</code> 放行端口；<br>
+            2) 检查 <code>.env</code> 中的 <code>APP_BIND_ADDR</code> 是否设置为了 <code>0.0.0.0</code>（如果是直接访问）或 <code>127.0.0.1</code>（如果通过本地 Nginx 反代）。
+          </p>
+        </div>
+
+        <div>
+          <h4 style="font-size:14px;color:#0F172A;font-weight:700">Q2: 挂载 Windows 共享网盘提示“Permission denied”？</h4>
+          <p style="font-size:13px;color:#64748B;margin-top:4px">
+            A: 挂载命令必须包含 <code>uid=10001,gid=10001</code>。因为 Docker 容器是以无特权安全账号 <code>appuser (uid 10001)</code> 运行的，若未指定 uid，容器将无法读取挂载目录。
+          </p>
+        </div>
+
+        <div>
+          <h4 style="font-size:14px;color:#0F172A;font-weight:700">Q3: 公司网盘突然断线或重启，系统会卡死吗？</h4>
+          <p style="font-size:13px;color:#64748B;margin-top:4px">
+            A: 绝对不会！因为所有检索均只读本地 SQLite，员工依然可以秒级搜表。我们在 <code>/etc/fstab</code> 配置了 <code>nofail</code>，宿主机会在后台自动重连网盘。
+          </p>
+        </div>
+
+        <div>
+          <h4 style="font-size:14px;color:#0F172A;font-weight:700">Q4: 怎样重启或更新服务？</h4>
+          <p style="font-size:13px;color:#64748B;margin-top:4px">
+            A: 在项目目录下执行以下极简命令：<br>
+            • 重启服务：<code>docker compose restart app</code><br>
+            • 停止服务：<code>docker compose down</code><br>
+            • 更新代码后重新构建：<code>docker compose up -d --build</code>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 底部打卡完成提示 -->
+    <div style="text-align:center;padding:40px 0;color:#94A3B8;font-size:12px">
+      企业文件检索与轻量 BI 分析平台 · 生产部署标准指南 · 2026 年最新架构版
+    </div>
+  </main>
+</div>
+
+<script>
+function copyCode(btn) {
+  const pre = btn.closest('.code-frame').querySelector('pre');
+  const code = pre ? pre.innerText : '';
+  navigator.clipboard.writeText(code).then(() => {
+    const original = btn.textContent;
+    btn.textContent = '✓ 已复制';
+    btn.style.background = '#10B981';
+    btn.style.color = '#FFFFFF';
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.style.background = '';
+      btn.style.color = '';
+    }, 2000);
+  }).catch(() => {
+    alert('复制失败，请手工选择文本复制');
+  });
+}
+</script>
+
+</body>
+</html>

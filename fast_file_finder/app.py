@@ -2,19 +2,25 @@
 """内网极速文件检索原型：元数据索引 + 本地排序 + 可选 AI 候选重排。"""
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import mimetypes
+import posixpath
 import os
 import re
 from contextlib import asynccontextmanager, contextmanager
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 import unicodedata
 import math
 import secrets
+import shutil
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from io import BytesIO
@@ -26,16 +32,40 @@ from pydantic import BaseModel, Field
 import base64
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request, File, UploadFile
+from fastapi import FastAPI, HTTPException, Query, Request, Response, File, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+
+import governance
+import directory_access
+import demo_data
+import archive_schedule
+import demo_approvals
+from starlette.concurrency import run_in_threadpool
 
 APP_DIR = Path(__file__).resolve().parent
 load_dotenv(APP_DIR / ".env")
 _raw_db_path = Path(os.getenv("INDEX_DB_PATH", str(APP_DIR / "data" / "file_index.db"))).expanduser()
 DB_PATH = _raw_db_path if _raw_db_path.is_absolute() else (APP_DIR / _raw_db_path).resolve()
 FILE_ROOT = os.getenv("FILE_ROOT", "").strip()
+# Keep local demo configuration portable regardless of the launch working directory.
+if FILE_ROOT and not FILE_ROOT.startswith("\\\\"):
+    _file_root_path = Path(FILE_ROOT).expanduser()
+    if not _file_root_path.is_absolute():
+        FILE_ROOT = str((APP_DIR / _file_root_path).resolve())
 APP_ACCESS_TOKEN = os.getenv("APP_ACCESS_TOKEN", "").strip()
+# 自动定时增量扫描间隔（分钟），0 表示关闭；增量扫描只处理有变化的文件
+AUTO_SCAN_INTERVAL_MINUTES = float(os.getenv("AUTO_SCAN_INTERVAL_MINUTES", "30"))
+# 敏感目录黑名单：目录名包含任一关键词的子树整体不入库、不可搜索、不可下载（防账号/薪酬类数据外发）
+SENSITIVE_DIRS = [s.strip() for s in re.split(r"[;,，；]", os.getenv("SENSITIVE_DIRS", "")) if s.strip()]
+# 登录与下载审批：开启后所有 /api 接口需登录，普通成员下载需审批票据
+AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "true").strip().lower() not in ("0", "false", "no")
+DIRECTORY_ACL_ENABLED = os.getenv("DIRECTORY_ACL_ENABLED", "true").strip().lower() not in ("0", "false", "no")
+DEMO_MODE = os.getenv("DEMO_MODE", "false").strip().lower() in ("1", "true", "yes")
+SESSION_TTL_HOURS = float(os.getenv("SESSION_TTL_HOURS", "12"))
+DOWNLOAD_TICKET_TTL_HOURS = float(os.getenv("DOWNLOAD_TICKET_TTL_HOURS", "2"))
+# 在线预览为应用内置（SheetJS 前端渲染）；此密钥仅保留给外部渲染器回拉字节流的可选场景
+PREVIEW_SOURCE_KEY = os.getenv("PREVIEW_SOURCE_KEY", uuid.uuid4().hex)
 SHARE_UNC_PREFIX = os.getenv("SHARE_UNC_PREFIX", r"\\172.11.111.11\share").strip()
 
 def to_unc_path(posix_path: str) -> str:
@@ -65,6 +95,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("file_finder")
+logging.getLogger("uvicorn.access").addFilter(governance.RedactQueryStringFilter())
 ALLOWED_EXTENSIONS = {
     x.strip().lower() if x.strip().startswith(".") else "." + x.strip().lower()
     for x in os.getenv("ALLOWED_EXTENSIONS", ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods").split(",")
@@ -86,6 +117,7 @@ MAX_ANALYSIS_ROWS = int(os.getenv("MAX_ANALYSIS_ROWS", "200000"))
 PREVIEW_ROWS = int(os.getenv("PREVIEW_ROWS", "100"))
 
 _archive_scheduler_stop = threading.Event()
+_auto_scan_stop = threading.Event()
 _archive_scheduler_info: dict[str, Any] = {
     "enabled": True,
     "interval_seconds": 60,
@@ -100,6 +132,7 @@ def _archive_scheduler_loop() -> None:
     while not _archive_scheduler_stop.is_set():
         try:
             with db_session() as conn:
+                governance.prune_events(conn)
                 res = run_archive_compliance_check(conn)
                 _archive_scheduler_info["last_run_at"] = time.time()
                 _archive_scheduler_info["run_count"] += 1
@@ -109,11 +142,37 @@ def _archive_scheduler_loop() -> None:
         _archive_scheduler_stop.wait(60)
 
 
+def _auto_scan_scheduler_loop() -> None:
+    """定时对网盘做增量索引扫描；只处理有变化的文件，手动扫描运行时自动跳过。"""
+    logger.info("Auto incremental index scan scheduler started (every %s minutes).", AUTO_SCAN_INTERVAL_MINUTES)
+    while not _auto_scan_stop.wait(AUTO_SCAN_INTERVAL_MINUTES * 60):
+        if not FILE_ROOT:
+            continue
+        try:
+            if _scan_state_snapshot()["running"]:
+                continue
+            _scan_worker()  # 内部非阻塞取锁，锁被占用时直接返回
+        except Exception as exc:
+            logger.warning("Auto incremental index scan error: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    if DEMO_MODE:
+        await run_in_threadpool(_ensure_demo_data)
+    if SENSITIVE_DIRS:
+        # 启动时把黑名单子树从索引（含 FTS 分词）中清除，网盘原文件不受影响
+        try:
+            with db_session() as conn:
+                for seg in SENSITIVE_DIRS:
+                    _delete_index_rows(conn, "parent LIKE ? OR name LIKE ?", (f"%{seg}%", f"%{seg}%"))
+            logger.info("Sensitive directory blacklist purged from index: %s", ",".join(SENSITIVE_DIRS))
+        except Exception as e:
+            logger.warning("Sensitive directory purge failed: %s", e)
     try:
         with db_session() as conn:
+            _migrate_legacy_archive_paths(conn)
             run_archive_compliance_check(conn)
     except Exception as e:
         logger.warning("Initial archive compliance check failed: %s", e)
@@ -121,26 +180,54 @@ async def lifespan(_app: FastAPI):
     scheduler_thread = threading.Thread(target=_archive_scheduler_loop, daemon=True, name="ArchiveScheduler")
     scheduler_thread.start()
 
+    if AUTO_SCAN_INTERVAL_MINUTES > 0:
+        auto_scan_thread = threading.Thread(target=_auto_scan_scheduler_loop, daemon=True, name="AutoIndexScan")
+        auto_scan_thread.start()
+
     if not APP_ACCESS_TOKEN:
         logger.warning("APP_ACCESS_TOKEN is empty; API routes have no shared-token gate. Use localhost or configure enterprise SSO/reverse proxy before LAN exposure.")
     try:
         yield
     finally:
         _archive_scheduler_stop.set()
+        _auto_scan_stop.set()
 
 
 app = FastAPI(title="企业文件检索与轻量 BI 分析中心", version="0.3.0", lifespan=lifespan)
+# Windows 注册表常把 .js 映射为 text/plain，会导致 Web Worker importScripts 拒绝加载，这里强制修正
+mimetypes.add_type("application/javascript", ".js")
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 
 
 @app.middleware("http")
 async def optional_shared_access_token(request: Request, call_next):
     """Optional shared token gate for internal deployments; not a replacement for user ACL/SSO."""
-    if APP_ACCESS_TOKEN and request.url.path.startswith("/api/"):
+    path = request.url.path
+    if APP_ACCESS_TOKEN and path.startswith("/api/"):
         supplied = request.headers.get("x-app-token", "")
         if not supplied or not secrets.compare_digest(supplied, APP_ACCESS_TOKEN):
             return JSONResponse(status_code=401, content={"detail": "系统启用了访问令牌，请输入管理员配置的 APP_ACCESS_TOKEN。"})
-    return await call_next(request)
+    # 登录门禁：除白名单外，所有 /api 接口需要有效会话
+    user = None
+    if (AUTH_REQUIRED or DIRECTORY_ACL_ENABLED) and path.startswith("/api/"):
+        if path not in _AUTH_OPEN_PATHS and (DIRECTORY_ACL_ENABLED or "/preview-source/" not in path):
+            user = _get_session_user(request)
+            if not user:
+                return JSONResponse(status_code=401, content={"detail": "请先登录后再使用本系统。"})
+    if DEMO_MODE and path.startswith('/api/') and path not in _AUTH_OPEN_PATHS:
+        await run_in_threadpool(_ensure_demo_data)
+    token = None
+    if DIRECTORY_ACL_ENABLED and path.startswith("/api/"):
+        if user is None:
+            user = _get_session_user(request)
+        with db_session() as conn:
+            policy = directory_access.load_policy(conn, user, root_scope_key(), _catalog_root_path())
+        token = directory_access.current.set(policy)
+    try:
+        return await call_next(request)
+    finally:
+        if token is not None:
+            directory_access.current.reset(token)
 
 _scan_lock = threading.Lock()
 _scan_state_lock = threading.RLock()
@@ -161,11 +248,12 @@ _scan_state: dict[str, Any] = {
 def db_connect() -> sqlite3.Connection:
     """Open one connection. Callers should use db_session() to guarantee closure."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=30)
+    conn = sqlite3.connect(str(DB_PATH), timeout=30, factory=directory_access.ScopedConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA temp_store=MEMORY")
     conn.execute("PRAGMA busy_timeout=30000")
+    conn.install_scope(directory_access.current.get())
     return conn
 
 
@@ -185,7 +273,9 @@ def db_session():
 
 def _scan_state_snapshot() -> dict[str, Any]:
     with _scan_state_lock:
-        return dict(_scan_state)
+        snapshot = dict(_scan_state)
+        snapshot["exclusion_reasons"] = dict(_scan_state.get("exclusion_reasons", {}))
+        return snapshot
 
 
 def _scan_state_replace(value: dict[str, Any]) -> None:
@@ -202,6 +292,13 @@ def _scan_state_update(**changes: Any) -> None:
 def _scan_state_increment(key: str, amount: int = 1) -> None:
     with _scan_state_lock:
         _scan_state[key] = int(_scan_state.get(key, 0)) + amount
+
+
+def _scan_exclude(reason: str) -> None:
+    with _scan_state_lock:
+        _scan_state["excluded"] = _scan_state.get("excluded", 0) + 1
+        reasons = _scan_state.setdefault("exclusion_reasons", {})
+        reasons[reason] = reasons.get(reason, 0) + 1
 
 
 _root_scope_cache_lock = threading.Lock()
@@ -252,6 +349,8 @@ def init_db() -> None:
     with db_session() as conn:
         # WAL is a database-level setting. Do it once at startup, not on every request.
         conn.execute("PRAGMA journal_mode=WAL")
+        governance.initialize(conn)
+        directory_access.initialize(conn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY,
@@ -261,6 +360,7 @@ def init_db() -> None:
                 ext TEXT NOT NULL,
                 size INTEGER NOT NULL,
                 mtime REAL NOT NULL,
+                ctime REAL NOT NULL DEFAULT 0,
                 indexed_at REAL NOT NULL,
                 root_key TEXT NOT NULL DEFAULT '',
                 last_seen_scan TEXT NOT NULL DEFAULT ''
@@ -272,10 +372,19 @@ def init_db() -> None:
             conn.execute("ALTER TABLE files ADD COLUMN root_key TEXT NOT NULL DEFAULT ''")
         if "last_seen_scan" not in file_columns:
             conn.execute("ALTER TABLE files ADD COLUMN last_seen_scan TEXT NOT NULL DEFAULT ''")
+        if "ctime" not in file_columns:
+            conn.execute("ALTER TABLE files ADD COLUMN ctime REAL NOT NULL DEFAULT 0")
+            # 历史数据无创建时间，暂用修改时间兜底；下次全量扫描会覆盖为真实创建时间
+            conn.execute("UPDATE files SET ctime = mtime WHERE ctime = 0")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_name ON files(name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_ctime ON files(ctime DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_ext ON files(ext)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_parent ON files(parent)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_root_scan ON files(root_key,last_seen_scan)")
+        # Cover scoped aggregates without loading every long path/name row.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_scope_metadata ON files(root_key,parent,mtime,ext,size)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_scope_recent ON files(root_key,mtime DESC)")
         # 通过文件名/路径的二元字符片段建立 FTS 候选召回。查询时不读取 Excel 内容。
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS file_fts USING fts5(
@@ -336,6 +445,10 @@ def init_db() -> None:
                 updated_at REAL NOT NULL
             )
         """)
+        rule_columns = {row['name'] for row in conn.execute('PRAGMA table_info(archive_rules)')}
+        for column, definition in [('file_keyword', "TEXT NOT NULL DEFAULT ''"), ('deadline_time', "TEXT NOT NULL DEFAULT '18:00'"), ('schedule_config', "TEXT NOT NULL DEFAULT '{}'")]:
+            if column not in rule_columns:
+                conn.execute(f'ALTER TABLE archive_rules ADD COLUMN {column} {definition}')
         conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_tasks_status ON archive_tasks(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_tasks_rule ON archive_tasks(rule_id)")
 
@@ -382,6 +495,42 @@ def init_db() -> None:
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_system_users_role ON system_users(role)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_system_users_phone ON system_users(phone)")
+
+        # 登录会话表与下载审批审计表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS login_sessions (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS download_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_name TEXT NOT NULL,
+                department TEXT DEFAULT '',
+                file_id INTEGER NOT NULL,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                ticket TEXT DEFAULT '',
+                created_at REAL NOT NULL,
+                reviewed_by TEXT DEFAULT '',
+                reviewed_at REAL DEFAULT 0,
+                expires_at REAL DEFAULT 0,
+                downloaded_at REAL DEFAULT 0
+            )
+        """)
+        download_columns = {r['name'] for r in conn.execute('PRAGMA table_info(download_requests)')}
+        for column,definition in [('demo_key',"TEXT NOT NULL DEFAULT ''"),('review_note',"TEXT NOT NULL DEFAULT ''"),('workflow_events',"TEXT NOT NULL DEFAULT '[]'")]:
+            if column not in download_columns:conn.execute(f'ALTER TABLE download_requests ADD COLUMN {column} {definition}')
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_download_demo_key ON download_requests(demo_key) WHERE demo_key<>''")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_download_requests_status ON download_requests(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_download_requests_user ON download_requests(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_download_requests_ticket ON download_requests(ticket)")
 
         # 默认预置内网企业成员（电话号码+密码登录体系）测试数据
         user_count = conn.execute("SELECT count(*) FROM system_users").fetchone()[0]
@@ -513,23 +662,30 @@ def update_index_file(
     root_key = root_key if root_key is not None else root_scope_key()
     scan_id = scan_id or uuid.uuid4().hex
     row = conn.execute(
-        "SELECT id, size, mtime, name, root_key FROM files WHERE path = ?", (path_str,)
+        "SELECT id, size, mtime, ctime, name, root_key FROM files WHERE path = ?", (path_str,)
     ).fetchone()
     name = file_path.name
-    parent = str(file_path.parent)
+    parent = str(Path(path_str).parent)
     ext = file_path.suffix.lower()
     size = int(stat.st_size)
     mtime = float(stat.st_mtime)
+    ctime = float(getattr(stat, "st_birthtime", (row["ctime"] if row and row["ctime"] else stat.st_ctime)))
     now = time.time()
-    unchanged = row and row["size"] == size and abs(row["mtime"] - mtime) < 0.0001 and row["name"] == name
+    unchanged = (
+        row
+        and row["size"] == size
+        and abs(row["mtime"] - mtime) < 0.0001
+        and abs(row["ctime"] - ctime) < 0.0001
+        and row["name"] == name
+    )
     if unchanged and row["root_key"] == root_key:
         conn.execute("UPDATE files SET last_seen_scan=? WHERE id=?", (scan_id, row["id"]))
         return "unchanged"
     if row:
         file_id = row["id"]
         conn.execute(
-            "UPDATE files SET name=?, parent=?, ext=?, size=?, mtime=?, indexed_at=?, root_key=?, last_seen_scan=? WHERE id=?",
-            (name, parent, ext, size, mtime, now, root_key, scan_id, file_id),
+            "UPDATE files SET name=?, parent=?, ext=?, size=?, mtime=?, ctime=?, indexed_at=?, root_key=?, last_seen_scan=? WHERE id=?",
+            (name, parent, ext, size, mtime, ctime, now, root_key, scan_id, file_id),
         )
         if unchanged:
             return "updated"
@@ -537,8 +693,8 @@ def update_index_file(
         action = "updated"
     else:
         cur = conn.execute(
-            "INSERT INTO files(path,name,parent,ext,size,mtime,indexed_at,root_key,last_seen_scan) VALUES(?,?,?,?,?,?,?,?,?)",
-            (path_str, name, parent, ext, size, mtime, now, root_key, scan_id),
+            "INSERT INTO files(path,name,parent,ext,size,mtime,ctime,indexed_at,root_key,last_seen_scan) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (path_str, name, parent, ext, size, mtime, ctime, now, root_key, scan_id),
         )
         file_id = cur.lastrowid
         action = "indexed"
@@ -547,16 +703,106 @@ def update_index_file(
     return action
 
 
+_demo_refresh_lock = threading.Lock()
+_demo_state: dict[str, Any] = {}
+
+
+def _seed_demo_monitors(conn, root: Path) -> None:
+    key = f'demo_monitors:{root_scope_key()}'
+    previous = conn.execute('SELECT value FROM app_meta WHERE key=?',(key,)).fetchone()
+    if previous and json.loads(previous[0]).get('version') == demo_data.VERSION:
+        return
+    managed = []
+    domains = {path.name[:2]:path for path in root.iterdir() if path.is_dir() and not path.is_symlink()}
+    for code,name,keyword,cutoff,owner in demo_data.MONITORS:
+        domain = domains.get(code)
+        if not domain or any(term in domain.name for term in SENSITIVE_DIRS):
+            continue
+        target = str(domain/demo_data.REPORT_DIRECTORY)
+        if not (domain/demo_data.REPORT_DIRECTORY).is_dir():
+            continue
+        legacy = None
+        if code == '09':
+            candidates = conn.execute("SELECT * FROM archive_rules WHERE name='9-新品简报 - 日增合规监控' AND responsible_person='新品运营组'").fetchall()
+            for candidate in candidates:
+                try:
+                    if _resolve_catalog_path(candidate['target_path']) == str(domain):
+                        legacy = candidate
+                        break
+                except HTTPException:
+                    continue
+        if legacy:
+            rule_id = legacy['id']
+            conn.execute("UPDATE archive_rules SET name=?,target_path=?,period_type='daily',period_days=1,file_keyword=?,deadline_time=? WHERE id=?",
+                         (name,target,keyword,cutoff,rule_id))
+            conn.execute("UPDATE archive_tasks SET target_path=?,rule_name=?,period_desc=? WHERE rule_id=? AND status IN ('pending','submitted','rejected')",
+                         (target,name,f'每天 {cutoff} 前',rule_id))
+        else:
+            cursor = conn.execute("""INSERT INTO archive_rules(name,target_path,period_type,period_days,responsible_person,
+                is_active,created_at,file_keyword,deadline_time) VALUES(?,?,'daily',1,?,1,?,?,?)""",
+                (name,target,owner,time.time(),keyword,cutoff))
+            rule_id = cursor.lastrowid
+        managed.append({'code':code,'id':rule_id})
+    conn.execute('INSERT OR REPLACE INTO app_meta(key,value) VALUES(?,?)',
+                 (key,json.dumps({'version':demo_data.VERSION,'rules':managed})))
+
+
+def _ensure_demo_data(today: date | None = None) -> dict[str, Any]:
+    """Refresh actual demo reports before the first API read each local day."""
+    if not DEMO_MODE:
+        return {}
+    today = today or date.today()
+    key = f'{root_scope_key()}|{today.isoformat()}|{demo_data.VERSION}'
+    if _demo_state.get('key') == key:
+        return _demo_state
+    with _demo_refresh_lock:
+        if _demo_state.get('key') == key or not _scan_lock.acquire(blocking=False):
+            return _demo_state
+        try:
+            root = get_root()
+            manifest_key = f'demo_reports:{root_scope_key()}'
+            with db_session() as conn:
+                previous = conn.execute('SELECT value FROM app_meta WHERE key=?',(manifest_key,)).fetchone()
+                previous = json.loads(previous[0]).get('paths',[]) if previous else []
+                result = demo_data.refresh(root,today,previous,excluded_terms=SENSITIVE_DIRS,
+                                           enabled=not ALLOWED_EXTENSIONS or '.csv' in ALLOWED_EXTENSIONS)
+                for relative in result['paths']:
+                    path = root / relative
+                    update_index_file(conn,path,path.stat(),root_key=root_scope_key(),scan_id='demo:'+today.isoformat())
+                for relative in result['removed']:
+                    _delete_index_rows(conn,'root_key=? AND path=?',(root_scope_key(),str(root/relative)))
+                # Explicitly unclassified fill-in placeholders are excluded in demo mode.
+                purged = _delete_index_rows(conn,
+                    "root_key=? AND instr('/' || replace(parent,char(92),'/') || '/',?)>0",
+                    (root_scope_key(),'/' + demo_data.UNCLASSIFIED_DIRECTORY + '/'))
+                conn.execute('INSERT OR REPLACE INTO app_meta(key,value) VALUES(?,?)',
+                             (manifest_key,json.dumps(result,ensure_ascii=False)))
+                _seed_demo_monitors(conn,root)
+                demo_approvals.seed(conn,root_scope_key(),time.time(),DOWNLOAD_TICKET_TTL_HOURS)
+                run_archive_compliance_check(conn)
+            _demo_state.clear()
+            _demo_state.update(key=key,day=today.isoformat(),reports=len(result['paths']),created=len(result['created']),purged=purged)
+            _tree_cache.update(time=0,data=None,key=None,revision=_tree_cache.get('revision',0)+1)
+        except Exception:
+            logger.exception('Demo daily report refresh failed')
+        finally:
+            _scan_lock.release()
+    return _demo_state
+
+
 def _scan_worker(lock_already_acquired: bool = False) -> None:
     """Build/update the index in the background; only prune entries after a clean full scan."""
     if not lock_already_acquired and not _scan_lock.acquire(blocking=False):
         return
     start = time.time()
     scan_id = uuid.uuid4().hex
+    scan_root_key = root_scope_key()
     logger.info("index scan started; scan_id=%s", scan_id)
     _scan_state_replace({
-        "running": True, "phase": "scanning", "started_at": datetime.now().isoformat(timespec="seconds"),
+        "running": True, "phase": "scanning", "root_key": scan_root_key, "started_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None, "seen": 0, "indexed": 0, "updated": 0, "deleted": 0, "errors": 0,
+        "discovered": 0, "unchanged": 0, "excluded": 0, "exclusion_reasons": {},
+        "directory_errors": 0, "excluded_directories": 0,
         "message": "正在扫描目录并增量更新索引；查询不需要等待扫描结束。",
     })
     walk_error_count = 0
@@ -565,6 +811,7 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
     def on_walk_error(exc: OSError) -> None:
         nonlocal walk_error_count
         walk_error_count += 1
+        _scan_state_increment("directory_errors")
         if len(walk_error_samples) < 5:
             walk_error_samples.append(f"{type(exc).__name__}: {exc}")
 
@@ -573,23 +820,39 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
         root_key = root_scope_key()
         with db_session() as conn:
             for current, dirs, filenames in os.walk(root, followlinks=False, onerror=on_walk_error):
-                dirs[:] = [d for d in dirs if d not in {"$RECYCLE.BIN", "System Volume Information", ".snapshot"}]
+                allowed_dirs = []
+                for directory in dirs:
+                    if directory in {"$RECYCLE.BIN", "System Volume Information", ".snapshot"} or (DEMO_MODE and directory == demo_data.UNCLASSIFIED_DIRECTORY) or any(seg in directory for seg in SENSITIVE_DIRS) or (Path(current) / directory).is_symlink():
+                        _scan_state_increment("excluded_directories")
+                    else:
+                        allowed_dirs.append(directory)
+                dirs[:] = allowed_dirs
                 for filename in filenames:
+                    _scan_state_increment("discovered")
                     if filename.startswith("~$"):
+                        _scan_exclude("temporary")
                         continue  # Excel editing lock/temp files are not real business workbooks.
+                    if any(seg in filename for seg in SENSITIVE_DIRS):
+                        _scan_exclude("sensitive_name")
+                        continue  # 敏感关键词命中文件名同样不入库
                     ext = Path(filename).suffix.lower()
                     if ALLOWED_EXTENSIONS and ext not in ALLOWED_EXTENSIONS:
+                        _scan_exclude("unsupported_format")
                         continue
                     fp = Path(current) / filename
                     try:
                         # Avoid indexing file symlinks that may point outside the approved root.
                         if fp.is_symlink():
+                            _scan_exclude("symbolic_link")
                             continue
                         stat = fp.stat()
                         if not fp.is_file():
+                            _scan_exclude("not_a_regular_file")
                             continue
-                        _scan_state_increment("seen")
                         action = update_index_file(conn, fp, stat, root_key=root_key, scan_id=scan_id)
+                        _scan_state_increment("seen")
+                        if action == "unchanged":
+                            _scan_state_increment("unchanged")
                         if action in ("indexed", "updated"):
                             _scan_state_increment(action)
                         seen = _scan_state_snapshot()["seen"]
@@ -623,6 +886,8 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
                 conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES('last_scan_at',?)",
                              (datetime.now().isoformat(timespec="seconds"),))
                 conn.commit()
+                _migrate_legacy_archive_paths(conn)
+                run_archive_compliance_check(conn)
 
         elapsed = time.time() - start
         _scan_state_update(phase="complete" if scan_complete else "partial")
@@ -641,17 +906,43 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
         _scan_state_update(phase="error", message=f"建索引失败：{type(exc).__name__}: {exc}")
     finally:
         _scan_state_update(running=False, finished_at=datetime.now().isoformat(timespec="seconds"))
+        try:
+            with db_session() as conn:
+                governance.persist_scan(conn, scan_id, scan_root_key, _scan_state_snapshot())
+        except Exception:
+            logger.exception("Could not persist scan reconciliation; scan_id=%s", scan_id)
+        _tree_cache.update(time=0, data=None, key=None, revision=_tree_cache.get("revision", 0) + 1)
         _scan_lock.release()
+
+
+def _read_static_html(filename: str) -> str:
+    return (APP_DIR / "static" / filename).read_text(encoding="utf-8")
 
 
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
-    return (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
+    return _read_static_html("index.html")
 
 
 @app.get("/workbench", response_class=HTMLResponse)
 def workbench() -> str:
-    return (APP_DIR / "static" / "bi_workbench.html").read_text(encoding="utf-8")
+    return _read_static_html("bi_workbench.html")
+
+
+@app.get("/index.html", response_class=HTMLResponse, include_in_schema=False)
+def home_html_alias() -> str:
+    return _read_static_html("index.html")
+
+
+@app.get("/bi_workbench.html", response_class=HTMLResponse, include_in_schema=False)
+def workbench_html_alias() -> str:
+    return _read_static_html("bi_workbench.html")
+
+
+@app.get("/guide", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/guide.html", response_class=HTMLResponse, include_in_schema=False)
+def guide_page() -> str:
+    return _read_static_html("guide.html")
 
 
 @app.get("/api/health")
@@ -673,14 +964,31 @@ def index_status() -> dict[str, Any]:
         else:
             count, total_size = 0, 0
         last = conn.execute("SELECT value FROM app_meta WHERE key=?", (f"last_scan_at:{active_root_key}",)).fetchone() if active_root_key else None
-    return {**_scan_state_snapshot(), "indexed_files": count, "indexed_size_bytes": total_size,
+        scans = governance.scan_history(conn, active_root_key, limit=5)
+    policy = directory_access.current.get()
+    if policy and not policy.super_admin:
+        return {"running": False, "phase": "scoped", "seen": count, "indexed_files": count,
+                "indexed_size_bytes": total_size, "scan_history": [], "last_scan_at": None,
+                "root_configured": bool(FILE_ROOT), "root_display": "已授权目录", "ai_configured": is_ai_configured(),
+                "message": "仅统计当前账号可访问的文件", "auto_scan_interval_minutes": 0}
+    state = _scan_state_snapshot()
+    if state.get("root_key") not in (None, active_root_key):
+        state = {"running": False, "phase": "idle", "seen": 0, "indexed": 0, "updated": 0, "deleted": 0, "errors": 0, "message": "当前目录尚未扫描"}
+    if not state["running"] and state["phase"] == "idle" and scans:
+        run = scans[0]
+        state = {**state, **run["counts"], "phase": run["phase"], "message": run["message"],
+                 "started_at": run["started_at"], "finished_at": run["finished_at"]}
+    return {**state, "scan_history": scans, "indexed_files": count, "indexed_size_bytes": total_size,
             "last_scan_at": last[0] if last else None, "root_configured": bool(FILE_ROOT),
             "root_display": FILE_ROOT or "尚未配置", "ai_configured": is_ai_configured(),
+            "auto_scan_interval_minutes": AUTO_SCAN_INTERVAL_MINUTES,
             "access_token_enabled": bool(APP_ACCESS_TOKEN)}
 
 
 @app.post("/api/index/start")
-def start_index() -> dict[str, Any]:
+def start_index(request: Request = None) -> dict[str, Any]:
+    if DIRECTORY_ACL_ENABLED:
+        _require_super_admin(request)
     get_root()  # Fast path validation before taking the scan lock.
     # Acquire in the request handler to prevent two near-simultaneous requests from both claiming success.
     if not _scan_lock.acquire(blocking=False):
@@ -691,6 +999,7 @@ def start_index() -> dict[str, Any]:
     except Exception:
         _scan_lock.release()
         raise
+    _record_product_event("index_start", request)
     return {"started": True, "message": "索引任务已启动，可继续搜索已建立的索引。"}
 
 
@@ -822,6 +1131,10 @@ def candidate_search(
     root_key: str | None = None,
     match_mode: str = "all",
     search_target: str = "title",
+    mtime_from: float | None = None,
+    mtime_to: float | None = None,
+    date_field: str = "mtime",
+    directory: str = "", min_size: int | None = None, max_size: int | None = None, content_state: str = "all",
 ) -> list[dict[str, Any]]:
     match = fts_query_for(q, match_mode=match_mode, search_target=search_target)
     if not match:
@@ -829,19 +1142,43 @@ def candidate_search(
     root_key = root_key if root_key is not None else root_scope_key()
     if not root_key:
         return []
+
+    # 日期字段：支持按修改日期(mtime)或创建日期(ctime)过滤，两者均已建索引
+    date_col = "ctime" if date_field == "ctime" else "mtime"
+    # 日期范围过滤：拼接到 WHERE 子句，利用对应时间列索引加速
+    date_clause = ""
+    date_params: list[Any] = []
+    if mtime_from is not None:
+        date_clause += f" AND f.{date_col} >= ?"
+        date_params.append(mtime_from)
+    if mtime_to is not None:
+        date_clause += f" AND f.{date_col} <= ?"
+        date_params.append(mtime_to)
+
+    if directory:
+        condition, parameters = _catalog_directory_condition(directory)
+        condition = re.sub(r'\bparent\b', 'f.parent', condition)
+        date_clause += ' AND ' + condition
+        date_params.extend(parameters)
+    for operator,value in [('>=',min_size),('<=',max_size)]:
+        if value is not None:
+            date_clause += f' AND f.size {operator} ?'; date_params.append(value)
+    if content_state == 'nonempty': date_clause += ' AND f.size>0'
+    elif content_state == 'empty': date_clause += ' AND f.size=0'
+
     try:
         if ext:
-            rows = conn.execute("""
-                SELECT f.id, f.path, f.name, f.parent, f.ext, f.size, f.mtime, bm25(file_fts, 5.0, 2.0, 0.8) AS rank
+            rows = conn.execute(f"""
+                SELECT f.id, f.path, f.name, f.parent, f.ext, f.size, f.mtime, f.ctime, bm25(file_fts, 5.0, 2.0, 0.8) AS rank
                 FROM file_fts JOIN files f ON f.id = file_fts.rowid
-                WHERE file_fts MATCH ? AND f.ext = ? AND f.root_key = ? ORDER BY rank LIMIT ?
-            """, (match, ext, root_key, limit)).fetchall()
+                WHERE file_fts MATCH ? AND f.ext = ? AND f.root_key = ?{date_clause} ORDER BY rank LIMIT ?
+            """, (match, ext, root_key, *date_params, limit)).fetchall()
         else:
-            rows = conn.execute("""
-                SELECT f.id, f.path, f.name, f.parent, f.ext, f.size, f.mtime, bm25(file_fts, 5.0, 2.0, 0.8) AS rank
+            rows = conn.execute(f"""
+                SELECT f.id, f.path, f.name, f.parent, f.ext, f.size, f.mtime, f.ctime, bm25(file_fts, 5.0, 2.0, 0.8) AS rank
                 FROM file_fts JOIN files f ON f.id = file_fts.rowid
-                WHERE file_fts MATCH ? AND f.root_key = ? ORDER BY rank LIMIT ?
-            """, (match, root_key, limit)).fetchall()
+                WHERE file_fts MATCH ? AND f.root_key = ?{date_clause} ORDER BY rank LIMIT ?
+            """, (match, root_key, *date_params, limit)).fetchall()
     except sqlite3.OperationalError as exc:
         logger.warning("local FTS search failed (%s); returning no candidates", type(exc).__name__)
         return []
@@ -867,7 +1204,7 @@ def candidate_search(
         results.append({
             "id": int(r["id"]), "name": r["name"], "path": r["path"], "parent": r["parent"],
             "unc_path": to_unc_path(r["path"]),
-            "ext": r["ext"], "size": int(r["size"]), "mtime": float(r["mtime"]),
+            "ext": r["ext"], "size": int(r["size"]), "mtime": float(r["mtime"]), "ctime": float(r["ctime"]),
             "score": score, "name_hits": name_hits, "rank": float(r["rank"]),
             "match_reason": "标题全词严格包含" if (match_mode == "all" and search_target == "title") else "文件名/路径索引匹配"
         })
@@ -1043,6 +1380,9 @@ def ai_guess_and_supplement(conn: sqlite3.Connection, q: str) -> dict[str, Any]:
     active_root_key = root_scope_key()
     if not active_root_key or not q.strip():
         return {"reasoning": "", "model_used": "", "suggested_terms": [], "matched_files": []}
+    if not conn.execute("SELECT 1 FROM files WHERE root_key=? LIMIT 1", (active_root_key,)).fetchone():
+        return {"reasoning": "当前账号没有可检索的已授权文件。请联系超级管理员配置目录访问权限，或同步已授权目录的索引。",
+                "model_used": "目录权限校验", "suggested_terms": [], "matched_files": []}
 
     # 1. 深度提取自然语言问句中的业务实体词
     tokens = extract_business_keywords(q)
@@ -1058,11 +1398,11 @@ def ai_guess_and_supplement(conn: sqlite3.Connection, q: str) -> dict[str, Any]:
         unc = best.get("unc_path") or to_unc_path(best["parent"] + "/" + best["name"])
         
         reasoning = (
-            f"✅ **已在网盘中为您精确找到目标报表！**\n\n"
+            f"**找到了以下关键词相关文件，请核对名称和目录。**\n\n"
             f"📄 **报表名称**：`{best['name']}`\n"
             f"📁 **存放目录**：`{dir_clean or '根目录'}`\n"
             f"🔗 **Win 共享路径**：`{unc}`\n\n"
-            f"💡 **快捷操作**：该报表现已就绪。您可直接点击下方【直接分析】启动轻量 BI 交叉汇总与趋势分析，或点击【下载原文件】在本地 Excel 中打开。"
+            f"可通过下方卡片定位目录、下载原件或复制路径。"
         )
 
         matched_output = []
@@ -1070,6 +1410,7 @@ def ai_guess_and_supplement(conn: sqlite3.Connection, q: str) -> dict[str, Any]:
             matched_output.append({
                 "id": c["id"],
                 "name": c["name"],
+                "path": c["path"],
                 "parent": c["parent"],
                 "unc_path": c.get("unc_path") or to_unc_path(c["parent"] + "/" + c["name"]),
                 "size": c.get("size", 0),
@@ -1132,6 +1473,63 @@ def ai_guess_and_supplement(conn: sqlite3.Connection, q: str) -> dict[str, Any]:
     }
 
 
+def _event_context(request: Request | None) -> tuple[dict[str, Any] | None, str]:
+    if request is None:
+        return None, "anonymous"
+    user = _get_session_user(request)
+    session_id = request.headers.get("X-Product-Session", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", session_id):
+        session_id = "anonymous"
+    return user, session_id
+
+
+def _record_product_event(event_type: str, request: Request | None, *, subject_id: int | None = None,
+                          search_event_id: int | None = None, query_length: int | None = None,
+                          result_count: int | None = None, elapsed_ms: float | None = None,
+                          result_ids: list[int] | None = None) -> int | None:
+    try:
+        user, session_id = _event_context(request)
+        with db_session() as conn:
+            actor_id = user["id"] if user else None
+            linked = governance.linked_search(conn, root_scope_key(), search_event_id, session_id, actor_id, subject_id)
+            event_id = governance.record_event(conn, root_key=root_scope_key(), event_type=event_type,
+                actor_id=actor_id, actor_role=user["role"] if user else "anonymous", session_id=session_id,
+                subject_id=subject_id, search_event_id=linked, query_length=query_length,
+                result_count=result_count, elapsed_ms=elapsed_ms)
+            if event_type == "search" and result_ids:
+                conn.executemany("INSERT OR IGNORE INTO search_event_files(search_event_id,file_id) VALUES (?,?)",
+                                 [(event_id, file_id) for file_id in result_ids])
+            return event_id
+    except Exception:
+        logger.warning("Product event persistence failed; event=%s", event_type, exc_info=True)
+        return None
+
+
+class ProductEventRequest(BaseModel):
+    event_type: Literal["result_click", "preview_open", "path_copy"]
+    file_id: int = Field(gt=0)
+    search_event_id: int | None = Field(default=None, gt=0)
+
+
+@app.post("/api/telemetry/events")
+def record_client_event(req: ProductEventRequest, request: Request) -> dict[str, Any]:
+    with db_session() as conn:
+        exists = conn.execute("SELECT 1 FROM files WHERE id=? AND root_key=?", (req.file_id, root_scope_key())).fetchone()
+    if not exists:
+        raise HTTPException(status_code=404, detail="当前索引中没有这个文件。")
+    event_id = _record_product_event(req.event_type, request, subject_id=req.file_id, search_event_id=req.search_event_id)
+    return {"ok": event_id is not None}
+
+
+@app.get("/api/governance/summary")
+def governance_summary(request: Request, days: int = Query(default=14, ge=1, le=90)) -> dict[str, Any]:
+    _require_super_admin(request)
+    with db_session() as conn:
+        return {"ok": True, "metrics": governance.METRIC_DEFINITIONS,
+                "product": governance.product_summary(conn, root_scope_key(), days),
+                "scans": governance.scan_history(conn, root_scope_key(), limit=10)}
+
+
 @app.get("/api/search")
 def search(
     q: str = Query(default="", max_length=300),
@@ -1143,6 +1541,14 @@ def search(
     match_mode: Literal["all", "any"] = Query(default="all"),
     target: Literal["title", "path", "content"] = Query(default="title"),
     enable_ai: bool = Query(default=False),
+    date_from: str = Query(default=""),
+    date_to: str = Query(default=""),
+    date_field: Literal["mtime", "ctime"] = Query(default="mtime"),
+    directory: str = Query(default="",max_length=4096),
+    min_size: int | None = Query(default=None,ge=0),
+    max_size: int | None = Query(default=None,ge=0),
+    content_state: Literal["all","nonempty","empty"] = Query(default="all"),
+    request: Request = None,
 ) -> dict[str, Any]:
     query = q.strip()
     try:
@@ -1165,25 +1571,48 @@ def search(
             "query": query, "count": 0, "total_candidates": 0, "page": 1, "page_size": effective_page_size,
             "total_pages": 0, "results": [], "ai_used": False, "message": "尚未配置 FILE_ROOT。请在 .env 中设置文件根目录。"
         }
+    if min_size is not None and max_size is not None and min_size>max_size:
+        raise HTTPException(status_code=422,detail="最小文件大小不能大于最大文件大小。")
+    directory_path = _resolve_catalog_path(directory) if directory else ''
+    scoped_filters = dict(directory=directory_path,min_size=min_size,max_size=max_size,content_state=content_state)
+    has_extra_filters = bool(directory or min_size is not None or max_size is not None or content_state!='all')
     start = time.perf_counter()
     wanted_ext = (ext.lower() if ext.startswith(".") else "." + ext.lower()) if ext else ""
     active_root_key = root_scope_key()
+
+    # 日期范围 → Unix 时间戳（含当天全天）
+    mtime_from_ts: float | None = None
+    mtime_to_ts: float | None = None
+    if date_from.strip():
+        try:
+            mtime_from_ts = datetime.strptime(date_from.strip(), "%Y-%m-%d").timestamp()
+        except ValueError:
+            mtime_from_ts = None
+    if date_to.strip():
+        try:
+            # 截止日期取当天 23:59:59.999，保证包含当天所有文件
+            mtime_to_ts = datetime.strptime(date_to.strip(), "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, microsecond=999999
+            ).timestamp()
+        except ValueError:
+            mtime_to_ts = None
+
     with db_session() as conn:
         search_scope = "title" if target in ("title", "content") else "path"
-        candidates = candidate_search(conn, query, limit=500, ext=wanted_ext, root_key=active_root_key, match_mode=match_mode, search_target=search_scope)
+        candidates = candidate_search(conn, query, limit=500, ext=wanted_ext, root_key=active_root_key, match_mode=match_mode, search_target=search_scope, mtime_from=mtime_from_ts, mtime_to=mtime_to_ts, date_field=date_field, **scoped_filters)
         ai_used = False
         ai_expanded = False
         fallback_relaxed = False
 
         # 如果严格全词模式下没有结果，自动放宽为宽松匹配，避免用户因单字错漏导致无结果
         if not candidates and match_mode == "all":
-            candidates = candidate_search(conn, query, limit=500, ext=wanted_ext, root_key=active_root_key, match_mode="any", search_target=search_scope)
+            candidates = candidate_search(conn, query, limit=500, ext=wanted_ext, root_key=active_root_key, match_mode="any", search_target=search_scope, mtime_from=mtime_from_ts, mtime_to=mtime_to_ts, date_field=date_field, **scoped_filters)
             if candidates:
                 fallback_relaxed = True
 
         # 如果文件名未能命中，自动扩展检索所属目录/路径，满足用户搜部门名直接找表格的自然诉求
         if not candidates and search_scope == "title":
-            candidates = candidate_search(conn, query, limit=500, ext=wanted_ext, root_key=active_root_key, match_mode="any", search_target="path")
+            candidates = candidate_search(conn, query, limit=500, ext=wanted_ext, root_key=active_root_key, match_mode="any", search_target="path", mtime_from=mtime_from_ts, mtime_to=mtime_to_ts, date_field=date_field, **scoped_filters)
             if candidates:
                 fallback_relaxed = True
                 for c in candidates:
@@ -1191,7 +1620,7 @@ def search(
 
         ai_guess = None
         if not candidates:
-            if enable_ai and is_ai_configured():
+            if enable_ai and is_ai_configured() and not has_extra_filters:
                 # 显式开启 AI 选项时才触发外部大模型，保障常规搜索极限毫秒级吞吐
                 ai_guess = ai_guess_and_supplement(conn, query)
                 ai_used = True
@@ -1212,6 +1641,10 @@ def search(
             candidates.sort(key=lambda x: -x["mtime"])
         elif sort in ("time_asc", "modified_asc"):
             candidates.sort(key=lambda x: x["mtime"])
+        elif sort in ("created_desc", "ctime_desc"):
+            candidates.sort(key=lambda x: (-x.get("ctime", 0), x["id"]))
+        elif sort in ("created_asc", "ctime_asc"):
+            candidates.sort(key=lambda x: (x.get("ctime", 0), x["id"]))
         elif sort == "name":
             candidates.sort(key=lambda x: x["name"].lower())
         elif sort == "name_desc":
@@ -1234,7 +1667,9 @@ def search(
     )
     if not results and ai_guess:
         msg = "未搜到直接匹配文件，已由 AI 助手结合目录结构为您推测归属路径与搜索词。"
+    event_id = _record_product_event("search", request, query_length=len(query), result_count=total_count, elapsed_ms=elapsed_ms, result_ids=[int(row["id"]) for row in results])
     return {
+        "search_event_id": event_id,
         "query": query, "count": len(results), "total_candidates": total_count,
         "page": effective_page, "page_size": effective_page_size, "total_pages": total_pages,
         "match_mode": match_mode, "target": target, "fallback_relaxed": fallback_relaxed,
@@ -1250,11 +1685,83 @@ class AIChatRequest(BaseModel):
     history: list[dict[str, str]] = Field(default_factory=list, max_length=20)
 
 
+def answer_dated_file_request(conn: sqlite3.Connection, message: str) -> dict[str, Any] | None:
+    """Resolve temporal requests against authorized metadata before any generation."""
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo('Asia/Shanghai'))
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    ranges = [('今天', day, day + timedelta(days=1)),
+              ('今日', day, day + timedelta(days=1)),
+              ('昨天', day - timedelta(days=1), day),
+              ('昨日', day - timedelta(days=1), day),
+              ('近7天', day - timedelta(days=6), day + timedelta(days=1)),
+              ('近30天', day - timedelta(days=29), day + timedelta(days=1)),
+              ('本月', day.replace(day=1), day + timedelta(days=1)),
+              ('本年', day.replace(month=1, day=1), day + timedelta(days=1))]
+    selected = next((r for r in ranges if r[0] in message), None)
+    if not selected and not any(w in message for w in ['最新', '最近更新', '最后更新']):
+        return None
+    cleaned = message
+    for word in sorted([r[0] for r in ranges] + ['帮我找一下','帮我找下','帮我查找','帮我找','找一下','找下','查找','最新的','最新','最近更新的','最近更新','最后更新的','最后更新','文件','报表','数据','请','一下','的'], key=len, reverse=True):
+        cleaned = cleaned.replace(word, ' ')
+    terms = re.findall(r'[\u4e00-\u9fffA-Za-z0-9_]+', cleaned)
+    terms = ['京东' if t.lower() == 'jd' else t for t in terms]
+    clauses, params = ['root_key=?'], [root_scope_key()]
+    for term in terms:
+        clauses.append('(instr(lower(name),lower(?))>0 OR instr(lower(parent),lower(?))>0)')
+        params.extend([term, term])
+    base_where = ' AND '.join(clauses)
+    label = selected[0] if selected else '不限日期'
+    if selected:
+        clauses += ['mtime>=?', 'mtime<?']
+        params += [selected[1].timestamp(), selected[2].timestamp()]
+    where = ' AND '.join(clauses)
+    total = conn.execute(f'SELECT count(*) FROM files WHERE {where}', params).fetchone()[0]
+    columns = 'id,path,name,parent,size,mtime'
+    rows = conn.execute(f'SELECT {columns} FROM files WHERE {where} ORDER BY mtime DESC,id DESC LIMIT 5', params).fetchall()
+    related = []
+    if selected and not rows:
+        related = conn.execute(f'SELECT {columns} FROM files WHERE {base_where} AND mtime<? ORDER BY mtime DESC,id DESC LIMIT 3', params[:-2] + [selected[1].timestamp()]).fetchall()
+    def serialize(row):
+        item = dict(row)
+        item['unc_path'] = to_unc_path(item['path'])
+        item['modified_at'] = datetime.fromtimestamp(item['mtime'], ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S')
+        return item
+    files, history = list(map(serialize, rows)), list(map(serialize, related))
+    subject = '、'.join(terms) or '全部文件'
+    scope = f'检索范围：{subject}；{label}，按修改时间从新到旧（北京时间）。'
+    if selected:
+        scope += f"\n日期：{selected[1]:%Y-%m-%d} 至 {selected[2] - timedelta(days=1):%Y-%m-%d}。"
+    if files:
+        facts = f'找到 {total} 份符合条件的文件，下面列出最新 {len(files)} 份。\n\n' + scope
+        facts += f"\n\n最新一份：{files[0]['name']}\n修改时间：{files[0]['modified_at']}。"
+        empty = sum(f['size'] == 0 for f in files)
+        if empty: facts += f'\n其中 {empty} 份为空文件，卡片已标注。'
+    else:
+        facts = f'没有找到{label}修改的{subject}文件。\n\n' + scope
+        if history:
+            facts += f"\n\n历史最近更新：{history[0]['modified_at']}。下方是历史文件，不属于本次日期范围。"
+        else: facts += '\n当前账号可访问的索引中也没有更早的匹配文件。'
+    # Keep factual conclusions deterministic; model may only explain the retrieval scope.
+    model, note = '', ''
+    if is_ai_configured():
+        note, model = call_llm([
+            {'role':'system','content':'你是企业文件助手。仅根据给定的检索事实，用一句话解释匹配依据或无结果时的下一步。不能编造文件、时间、结果数量，不能说已找到今天文件，不能承诺分析功能。不要重复列表。'},
+            {'role':'user','content':json.dumps({'request':message,'verified_facts':facts},ensure_ascii=False)}], max_tokens=600)
+    return {'ok':True, 'reply':facts + ('\n\n' + note if note else ''),
+            'model_used':model if note else '本地索引检索（模型未生成补充说明）',
+            'suggested_terms':[], 'matched_files':files, 'related_files':history,
+            'retrieval':{'date_label':label,'date_field':'mtime','sort':'mtime_desc','timezone':'Asia/Shanghai','total':total}}
+
+
 @app.post("/api/ai/chat")
 def ai_chat(req: AIChatRequest) -> dict[str, Any]:
     """AI 找表对话框专属接口：结合网盘目录与相近文件进行多轮深度解答与推荐。"""
     with db_session() as conn:
         q = req.message.strip() or req.query.strip()
+        dated = answer_dated_file_request(conn, q)
+        if dated is not None:
+            return dated
         guess = ai_guess_and_supplement(conn, q)
     return {
         "ok": True,
@@ -1279,9 +1786,15 @@ def recent(limit: int = Query(default=10, ge=1, le=100)) -> dict[str, Any]:
 
 
 @app.api_route("/api/file/{file_id}/download", methods=["GET", "HEAD"])
-def download_file(file_id: int) -> FileResponse:
-    """提供企业员工最需要的浏览器直接下载功能，使用 RFC 5987 标准保证中文文件名不乱码。"""
+def download_file(file_id: int, request: Request, ticket: str = Query(default="")) -> FileResponse:
+    """浏览器直接下载，使用 RFC 5987 标准保证中文文件名不乱码。
+    开启登录后：管理员直接下载；普通成员必须持审批通过的限时票据。"""
     file_info, path = _get_indexed_file(file_id)
+    if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:
+        user = _get_session_user(request)
+        is_admin = bool(user and user["role"] in _ADMIN_ROLES)
+        if not is_admin and not _consume_download_ticket(file_id, ticket):
+            raise HTTPException(status_code=403, detail="下载需审批通过后的有效链接，请先在页面提交下载申请。")
     filename = file_info["name"]
     quoted_filename = quote(filename)
     headers = {
@@ -1293,6 +1806,25 @@ def download_file(file_id: int) -> FileResponse:
         headers=headers,
         media_type="application/octet-stream"
     )
+
+
+@app.post("/api/file/{file_id}/open")
+def open_file_locally(file_id: int, request: Request) -> dict[str, Any]:
+    """在部署本机调用系统默认程序打开文件。服务运行在使用者电脑上时，等价于直接双击网盘原文件。
+    开启登录后仅管理员可用（公网部署时该操作发生在服务器上，需防滥用）。"""
+    if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:
+        _require_admin(request)
+    _file_info, path = _get_indexed_file(file_id)
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(str(path))  # type: ignore[attr-defined]  # Windows 专属 API
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"调用系统默认程序打开失败：{exc}")
+    return {"ok": True, "path": str(path)}
 
 
 @app.get("/api/config-check")
@@ -1321,66 +1853,197 @@ def format_file_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-_tree_cache: dict[str, Any] = {"time": 0, "data": None}
+_tree_cache: dict[str, Any] = {"time": 0, "data": None, "key": None}
+_catalog_root_cache: dict[tuple[str, str], str] = {}
+_LEGACY_DEMO_DIRECTORIES = {
+    "9-新品简报": "09-产品研发-新品上市简报库",
+    "12-推广ROI周报": "12-市场财务-全渠道ROI周报库",
+    "2-阿里平台-分销": "02-华南大区-渠道经销拓展部",
+    "11-小红书达人底层": "11-内容社区-KOL与红人矩阵部",
+    "23-销售数据汇总": "23-销售管理-全域业绩统计大表",
+}
+
+
+def _normalise_catalog_path(value: str) -> str:
+    return posixpath.normpath(str(value).replace("\\", "/"))
+
+
+def _catalog_root_path() -> str:
+    # Resolve aliases once per configuration, never walk the share on catalog queries.
+    if not FILE_ROOT:
+        return ""
+    key = (FILE_ROOT, str(DB_PATH))
+    if key not in _catalog_root_cache:
+        _catalog_root_cache.clear()
+        _catalog_root_cache[key] = _normalise_catalog_path(str(Path(FILE_ROOT).expanduser().resolve(strict=False)))
+    return _catalog_root_cache[key]
+
+
+def _relative_catalog_path(path: str, root: str) -> str | None:
+    path, root = _normalise_catalog_path(path), _normalise_catalog_path(root)
+    if path == root:
+        return ""
+    prefix = root.rstrip("/") + "/"
+    return path[len(prefix):] if path.startswith(prefix) else None
+
+
+def _resolve_catalog_path(value: str = "") -> str:
+    root = _catalog_root_path()
+    if not root:
+        raise HTTPException(status_code=400, detail="尚未配置文件根目录，请先配置 FILE_ROOT。")
+    if not value.strip():
+        return root
+    path = _normalise_catalog_path(value.strip())
+    aliases = [root, _normalise_catalog_path(str(Path(FILE_ROOT).expanduser().absolute())), "/data/share"]
+    if SHARE_UNC_PREFIX:
+        aliases.append(_normalise_catalog_path(SHARE_UNC_PREFIX))
+    for alias in aliases:
+        relative = _relative_catalog_path(path, alias)
+        if relative is None:
+            continue
+        if alias == "/data/share" and relative:
+            parts = relative.split("/")
+            parts[0] = _LEGACY_DEMO_DIRECTORIES.get(parts[0], parts[0])
+            relative = "/".join(parts)
+        return root.rstrip("/") + ("/" + relative if relative else "") or "/"
+    raise HTTPException(status_code=403, detail="该目录不在当前配置的文件根目录内。")
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+
+
+def _catalog_directory_condition(path: str) -> tuple[str, list[Any]]:
+    # Include both separator forms for older Windows indices; SQL wildcards in
+    # real directory names must remain literal, and siblings must never match.
+    variants = {path, path.replace("/", "\\")}
+    clauses, params = [], []
+    for variant in sorted(variants):
+        sep = "\\" if "\\" in variant else "/"
+        clauses.append("(parent = ? OR parent LIKE ? ESCAPE '!')")
+        params.extend([variant, _escape_like(variant.rstrip("/\\") + sep) + "%"])
+    return "(" + " OR ".join(clauses) + ")", params
+
+
+def _migrate_legacy_archive_paths(conn) -> int:
+    migrated = 0
+    for rule in conn.execute("SELECT id,target_path FROM archive_rules").fetchall():
+        original = rule["target_path"]
+        if _relative_catalog_path(original, "/data/share") is None:
+            continue
+        try:
+            target = _resolve_catalog_path(original)
+        except HTTPException:
+            continue
+        condition, params = _catalog_directory_condition(target)
+        exists = conn.execute(f"SELECT 1 FROM files WHERE root_key=? AND {condition} LIMIT 1", [root_scope_key(), *params]).fetchone()
+        if target != original and exists:
+            conn.execute("UPDATE archive_rules SET target_path=? WHERE id=?", (target, rule["id"]))
+            conn.execute("UPDATE archive_tasks SET target_path=? WHERE rule_id=? AND status IN ('pending','submitted','rejected')", (target, rule["id"]))
+            migrated += 1
+    return migrated
 
 
 @app.get("/api/catalog/overview")
 def get_catalog_overview() -> dict[str, Any]:
-    """获取网盘全盘组织架构统筹概览指标，包括总文件、总目录、存储容量以及今日新增数量。"""
     now = datetime.now()
     today_start = datetime(now.year, now.month, now.day).timestamp()
-
+    scope, root = root_scope_key(), _catalog_root_path()
     with db_session() as conn:
-        total_files = conn.execute("SELECT count(*) FROM files").fetchone()[0]
-        today_added = conn.execute("SELECT count(*) FROM files WHERE mtime >= ?", (today_start,)).fetchone()[0]
-        total_dirs = conn.execute("SELECT count(DISTINCT parent) FROM files").fetchone()[0]
-        total_size = conn.execute("SELECT coalesce(sum(size), 0) FROM files").fetchone()[0]
+        stats = conn.execute("""SELECT count(*) AS total_files,
+            coalesce(sum(CASE WHEN mtime>=? THEN 1 ELSE 0 END),0) AS today_added,
+            count(DISTINCT parent) AS total_dirs, coalesce(sum(size),0) AS total_size
+            FROM files WHERE root_key=?""", (today_start, scope)).fetchone()
+        exts = conn.execute("SELECT ext,count(*) AS count FROM files WHERE root_key=? GROUP BY ext ORDER BY count DESC", (scope,)).fetchall()
+        groups = conn.execute("""SELECT parent,count(*) AS total_files,
+            sum(CASE WHEN mtime>=? THEN 1 ELSE 0 END) AS today_added
+            FROM files WHERE root_key=? GROUP BY parent""", (today_start, scope)).fetchall()
+    departments: dict[str, dict[str, Any]] = {}
+    for row in groups:
+        relative = _relative_catalog_path(row["parent"], root) if root else None
+        if relative is None:
+            continue
+        name = relative.split("/")[0] if relative else "根目录"
+        department = departments.setdefault(name, {"name": name, "path": root.rstrip("/") + ("/" + name if relative else ""), "total_files": 0, "today_added": 0})
+        department["total_files"] += row["total_files"]
+        department["today_added"] += int(row["today_added"] or 0)
+    return {"ok": True, "root_path": root, "total_files": stats["total_files"],
+            "today_added": stats["today_added"], "total_dirs": stats["total_dirs"],
+            "total_size_mb": round(stats["total_size"] / 1024**2, 2),
+            "total_size_gb": round(stats["total_size"] / 1024**3, 2),
+            "today_date": now.strftime("%Y-%m-%d"),
+            "ext_distribution": [{"ext": row["ext"] or "未知", "count": row["count"]} for row in exts],
+            "departments": sorted(departments.values(), key=lambda item: (-item["total_files"], item["name"]))}
 
-        # 格式分布
-        ext_rows = conn.execute("""
-            SELECT ext, count(*) as cnt 
-            FROM files 
-            GROUP BY ext 
-            ORDER BY cnt DESC 
-            LIMIT 6
-        """).fetchall()
-        ext_distribution = [{"ext": r["ext"] or "未知", "count": r["cnt"]} for r in ext_rows]
 
-        # 一级业务域统计
-        dep_rows = conn.execute("""
-            SELECT 
-                CASE 
-                    WHEN parent = '/data/share' THEN '根目录'
-                    ELSE substr(parent, 13, instr(substr(parent, 13) || '/', '/') - 1)
-                END as dept_name,
-                count(*) as total_count,
-                sum(CASE WHEN mtime >= ? THEN 1 ELSE 0 END) as today_count
-            FROM files
-            GROUP BY dept_name
-            ORDER BY total_count DESC
-        """, (today_start,)).fetchall()
+@app.get("/api/dashboard/summary")
+def get_dashboard_summary() -> dict[str, Any]:
+    """首页仪表盘：全部取自索引库的真实统计，不使用任何写死的展示数字。"""
+    now = time.time()
+    day = 86400
+    root_prefix = _catalog_root_path()
+    scope = root_scope_key()
+    with db_session() as conn:
+        total_files, total_size = conn.execute("SELECT count(*), coalesce(sum(size),0) FROM files WHERE root_key=?", (scope,)).fetchone()
+        total_dirs = conn.execute("SELECT count(DISTINCT parent) FROM files WHERE root_key=?", (scope,)).fetchone()[0]
+        real_count, real_size = conn.execute("SELECT count(*), coalesce(sum(size),0) FROM files WHERE root_key=? AND size > 0", (scope,)).fetchone()
+        last_30 = conn.execute("SELECT count(*) FROM files WHERE root_key=? AND mtime >= ?", (scope, now - 30 * day,)).fetchone()[0]
+        prev_30 = conn.execute("SELECT count(*) FROM files WHERE root_key=? AND mtime >= ? AND mtime < ?", (scope, now - 60 * day, now - 30 * day)).fetchone()[0]
+        last_7 = conn.execute("SELECT count(*) FROM files WHERE root_key=? AND mtime >= ?", (scope, now - 7 * day,)).fetchone()[0]
+        # Compute local calendar boundaries once. SQLite's per-row localtime
+        # conversion is expensive on macOS and stalled the full-size dashboard.
+        today = datetime.fromtimestamp(now)
+        ordinal = today.year * 12 + today.month - 1
+        bounds = []
+        for offset in range(12):
+            year, month = divmod(ordinal - offset, 12)
+            next_year, next_month = divmod(ordinal - offset + 1, 12)
+            bounds.append((f"{year:04d}-{month+1:02d}", datetime(year, month+1, 1).timestamp(),
+                           datetime(next_year, next_month+1, 1).timestamp()))
+        columns = [f"coalesce(sum(CASE WHEN mtime>=? AND mtime<? THEN 1 ELSE 0 END),0) AS m{i}" for i in range(12)]
+        monthly_counts = conn.execute("SELECT " + ",".join(columns) + " FROM files WHERE root_key=? AND mtime>=? AND mtime<?",
+                                      [value for _, start, end in bounds for value in (start,end)] + [scope,bounds[-1][1],bounds[0][2]]).fetchone()
+        monthly = [{"m": item[0], "c": monthly_counts[f"m{i}"]} for i, item in enumerate(bounds)]
+        ext_rows = conn.execute("SELECT lower(ext) AS e, count(*) AS c FROM files WHERE root_key=? GROUP BY e ORDER BY c DESC", (scope,)).fetchall()
+        dept_groups = conn.execute("""SELECT parent,count(*) AS c,
+            sum(CASE WHEN mtime>=? THEN 1 ELSE 0 END) AS r
+            FROM files WHERE root_key=? GROUP BY parent""", (now - 30 * day, scope)).fetchall()
+        department_map: dict[str, dict[str, Any]] = {}
+        for row in dept_groups:
+            relative = _relative_catalog_path(row["parent"], root_prefix) if root_prefix else None
+            if relative is None:
+                continue
+            name = relative.split("/")[0] if relative else "根目录"
+            department = department_map.setdefault(name, {"name": name, "total_files": 0, "updated_30d": 0})
+            department["total_files"] += row["c"]
+            department["updated_30d"] += int(row["r"] or 0)
+        recent = conn.execute("SELECT id, name, parent, size, mtime, ext FROM files WHERE root_key=? ORDER BY mtime DESC LIMIT 8", (scope,)).fetchall()
+        last_scan = conn.execute("SELECT value FROM app_meta WHERE key=?", (f"last_scan_at:{scope}",)).fetchone()
 
-        departments = [
-            {
-                "name": r["dept_name"],
-                "total_files": r["total_count"],
-                "today_added": int(r["today_count"] or 0)
-            }
-            for r in dep_rows
-        ]
+    def dept_of(parent: str) -> str:
+        rel = _relative_catalog_path(parent, root_prefix) or ""
+        return rel.split("/")[0] if rel else "根目录"
 
     return {
         "ok": True,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "last_scan_at": last_scan[0] if last_scan else None,
         "total_files": total_files,
-        "today_added": today_added,
+        "total_size": total_size,
         "total_dirs": total_dirs,
-        "total_size_mb": round(total_size / (1024 * 1024), 2),
-        "total_size_gb": round(total_size / (1024 * 1024 * 1024), 2),
-        "today_date": now.strftime("%Y-%m-%d"),
-        "ext_distribution": ext_distribution,
-        "departments": departments
+        "real_count": real_count,
+        "real_size": real_size,
+        "updated_7d": last_7,
+        "updated_30d": last_30,
+        "updated_prev_30d": prev_30,
+        "monthly": [{"month": r["m"], "count": r["c"]} for r in reversed(monthly)],
+        "ext_distribution": [{"ext": r["e"] or "未知", "count": r["c"]} for r in ext_rows],
+        "departments": sorted(department_map.values(), key=lambda item: -item["total_files"]),
+        "recent": [
+            {"id": r["id"], "name": r["name"], "dept": dept_of(r["parent"]), "size": r["size"], "mtime": r["mtime"], "ext": r["ext"]}
+            for r in recent
+        ],
     }
-
 
 @app.get("/api/catalog/tree")
 def get_catalog_tree(only_today_branch: bool = Query(default=False)) -> dict[str, Any]:
@@ -1389,18 +2052,19 @@ def get_catalog_tree(only_today_branch: bool = Query(default=False)) -> dict[str
     today_start = datetime(now.year, now.month, now.day).timestamp()
     now_ts = time.time()
 
-    # 简单缓存 20 秒
-    if _tree_cache["data"] and (now_ts - _tree_cache["time"] < 20) and not only_today_branch:
+    policy = directory_access.current.get()
+    cache_key = (root_scope_key(), str(DB_PATH), _catalog_root_path(), now.strftime("%Y-%m-%d"), _tree_cache.get("revision", 0), policy.cache_key if policy else "internal")
+    if _tree_cache["data"] and _tree_cache.get("key") == cache_key and (now_ts - _tree_cache["time"] < 20) and not only_today_branch:
         return _tree_cache["data"]
 
-    root_prefix = FILE_ROOT.rstrip("/") if FILE_ROOT else "/data/share"
+    root_prefix = _catalog_root_path()
 
     with db_session() as conn:
         rows = conn.execute("""
             SELECT parent, count(*) as cnt, sum(CASE WHEN mtime >= ? THEN 1 ELSE 0 END) as today_cnt
-            FROM files
+            FROM files WHERE root_key=?
             GROUP BY parent
-        """, (today_start,)).fetchall()
+        """, (today_start, root_scope_key())).fetchall()
 
     tree: dict[str, Any] = {
         "name": "企业网盘总目录",
@@ -1416,8 +2080,10 @@ def get_catalog_tree(only_today_branch: bool = Query(default=False)) -> dict[str
         cnt = r["cnt"]
         today_cnt = int(r["today_cnt"] or 0)
 
-        rel = parent_path[len(root_prefix):].strip("/")
-        parts = rel.split("/") if rel else []
+        rel = _relative_catalog_path(parent_path, root_prefix) if root_prefix else None
+        if rel is None:
+            continue
+        parts = [p for p in re.split(r"[/\\]+", rel) if p] if rel else []
 
         cur_node = tree
         cur_path = root_prefix
@@ -1439,17 +2105,23 @@ def get_catalog_tree(only_today_branch: bool = Query(default=False)) -> dict[str
         cur_node["direct_today"] = today_cnt
 
     def to_list_tree(node: dict[str, Any], depth: int = 0) -> dict[str, Any]:
+        # 先递归构建所有子树（不做排序），以便按「汇总文件数」排序时子节点已完成向上汇总
         c_list = []
-        for _, v in sorted(node["children"].items(), key=lambda x: (x[1].get("direct_today", 0), x[1].get("direct_files", 0)), reverse=True):
+        total_f = node.get("direct_files", 0)
+        total_t = node.get("direct_today", 0)
+        for _, v in node["children"].items():
             child_tree = to_list_tree(v, depth + 1)
+            total_f += child_tree["file_count"]
+            total_t += child_tree["today_added"]
             # 如果开启了“仅看今日新增分支”，且该子树今日没有新增，则跳过
             if only_today_branch and child_tree["today_added"] == 0:
                 continue
             c_list.append(child_tree)
 
+        # 按「今日新增数 → 汇总文件数」降序，让有层级的大事业部排前、扁平小目录排后
+        c_list.sort(key=lambda x: (x["today_added"], x["file_count"]), reverse=True)
+
         # 向上汇总
-        total_f = node.get("direct_files", 0) + sum(c["file_count"] for c in c_list)
-        total_t = node.get("direct_today", 0) + sum(c["today_added"] for c in c_list)
 
         return {
             "name": node["name"],
@@ -1471,14 +2143,26 @@ def get_catalog_tree(only_today_branch: bool = Query(default=False)) -> dict[str
 
     if not only_today_branch:
         _tree_cache["time"] = now_ts
+        _tree_cache["key"] = cache_key
         _tree_cache["data"] = result
 
     return result
 
 
+@app.get("/api/catalog/resolve")
+def resolve_catalog_directory(path: str = Query(default="", max_length=4096)) -> dict[str, Any]:
+    resolved = _resolve_catalog_path(path)
+    condition, params = _catalog_directory_condition(resolved)
+    with db_session() as conn:
+        found = conn.execute(f"SELECT 1 FROM files WHERE root_key=? AND {condition} LIMIT 1", [root_scope_key(), *params]).fetchone()
+        if not found:
+            raise HTTPException(status_code=404, detail="当前索引中没有这个目录的文件，请确认目录路径并更新索引。")
+    return {"ok": True, "path": resolved, "root_path": _catalog_root_path()}
+
+
 @app.get("/api/catalog/files")
 def get_catalog_files(
-    path: str = Query(default="/data/share"),
+    path: str = Query(default=""),
     only_today: bool = Query(default=False),
     keyword: str = Query(default=""),
     page: int = Query(default=1, ge=1),
@@ -1490,21 +2174,19 @@ def get_catalog_files(
     now = datetime.now()
     today_start = datetime(now.year, now.month, now.day).timestamp()
 
-    clean_path = path.rstrip("/")
-    if not clean_path:
-        clean_path = "/data/share"
-
+    clean_path = _resolve_catalog_path(path)
+    directory_sql, path_params = _catalog_directory_condition(clean_path)
     with db_session() as conn:
-        where_clauses = ["(parent = ? OR parent LIKE ?)"]
-        params: list[Any] = [clean_path, clean_path + "/%"]
+        where_clauses = ["root_key=?", directory_sql]
+        params: list[Any] = [root_scope_key(), *path_params]
 
         if only_today:
             where_clauses.append("mtime >= ?")
             params.append(today_start)
 
         if keyword.strip():
-            where_clauses.append("name LIKE ?")
-            params.append(f"%{keyword.strip()}%")
+            where_clauses.append("name LIKE ? ESCAPE '!'")
+            params.append("%" + _escape_like(keyword.strip()) + "%")
 
         where_sql = " AND ".join(where_clauses)
 
@@ -1514,6 +2196,7 @@ def get_catalog_files(
         col_map = {
             "time": "mtime",
             "mtime": "mtime",
+            "ctime": "ctime",
             "name": "name COLLATE NOCASE",
             "size": "size",
         }
@@ -1522,10 +2205,10 @@ def get_catalog_files(
 
         offset = (page - 1) * page_size
         query_sql = f"""
-            SELECT id, path, name, parent, ext, size, mtime, indexed_at
+            SELECT id, path, name, parent, ext, size, mtime, ctime, indexed_at
             FROM files
             WHERE {where_sql}
-            ORDER BY {order_col} {order_dir}
+            ORDER BY {order_col} {order_dir}, id {order_dir}
             LIMIT ? OFFSET ?
         """
         rows = conn.execute(query_sql, params + [page_size, offset]).fetchall()
@@ -1533,8 +2216,8 @@ def get_catalog_files(
         items = []
         for r in rows:
             is_today = (r["mtime"] >= today_start)
-            m_dt = datetime.fromtimestamp(r["mtime"])
-            time_display = m_dt.strftime("今天 %H:%M") if is_today else m_dt.strftime("%Y-%m-%d %H:%M")
+            time_display = datetime.fromtimestamp(r["mtime"],demo_data.ZONE).strftime("%Y-%m-%d %H:%M:%S")
+            created_display = datetime.fromtimestamp(r["ctime"],demo_data.ZONE).strftime("%Y-%m-%d %H:%M:%S") if r["ctime"] else "—"
             items.append({
                 "id": r["id"],
                 "name": r["name"],
@@ -1544,7 +2227,8 @@ def get_catalog_files(
                 "ext": r["ext"],
                 "size": r["size"],
                 "size_display": format_file_size(r["size"]),
-                "mtime": r["mtime"],
+                "mtime": r["mtime"], "ctime":r["ctime"],
+                "mtime_display":time_display,"ctime_display":created_display,
                 "time_display": time_display,
                 "is_today": is_today
             })
@@ -1589,7 +2273,7 @@ def _get_indexed_file(file_id: int) -> tuple[dict[str, Any], Path]:
     """Only allow files already present in the metadata index and still under FILE_ROOT."""
     with db_session() as conn:
         row = conn.execute(
-            "SELECT id,path,name,parent,ext,size,mtime FROM files WHERE id=?", (file_id,)
+            "SELECT id,path,name,parent,ext,size,mtime,ctime FROM files WHERE id=?", (file_id,)
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="索引中不存在这个文件，请先更新索引后重试。")
@@ -1740,7 +2424,7 @@ def _load_analysis_frame(file_info: dict[str, Any], path: Path, sheet_name: str 
     if not sheets:
         raise HTTPException(status_code=422, detail="文件中没有可分析的工作表。")
     if sheet_name is not None and sheet_name not in sheets:
-        sheet_name = sheets[0]
+        raise HTTPException(status_code=422, detail="指定的工作表不存在，请重新选择。")
     chosen = sheet_name or sheets[0]
     df = _read_table(path, None if chosen == "数据" and path.suffix.lower() in {".csv", ".tsv"} else chosen,
                      nrows=MAX_ANALYSIS_ROWS + 1)
@@ -1965,7 +2649,7 @@ def _analysis_compute(req: AnalysisRequest) -> dict[str, Any]:
             kpis.append({"label": f"{primary}合计", "value": _json_value(pd.to_numeric(filtered[primary], errors="coerce").sum(min_count=1)), "format": "number"})
             kpis.append({"label": f"{primary}平均值", "value": _json_value(pd.to_numeric(filtered[primary], errors="coerce").mean()), "format": "number"})
     return {
-        "file": {"id": file_info["id"], "name": file_info["name"], "path": file_info["path"], "ext": file_info["ext"], "size": file_info["size"], "mtime": file_info["mtime"]},
+        "file": {"id": file_info["id"], "name": file_info["name"], "path": file_info["path"], "ext": file_info["ext"], "size": file_info["size"], "mtime": file_info["mtime"], "ctime":file_info["ctime"]},
         "sheet_names": sheets, "sheet_name": req.sheet_name if req.sheet_name in sheets else sheets[0],
         "columns": _column_metadata(df), "preview": _json_records(df, PREVIEW_ROWS),
         "preview_rows": min(len(df), PREVIEW_ROWS), "rows_read": int(len(df)), "rows_matched": int(len(filtered)),
@@ -1985,10 +2669,10 @@ def analysis_file_info(file_id: int, sheet_name: str | None = None) -> dict[str,
     if not sheets:
         raise HTTPException(status_code=422, detail="工作簿中没有可读取的工作表。")
     if sheet_name is not None and sheet_name not in sheets:
-        sheet_name = sheets[0]
+        raise HTTPException(status_code=422, detail="指定的工作表不存在，请重新选择。")
     sheet = sheet_name or sheets[0]
     df = _normalise_df(_read_table(path, None if sheet == "数据" and path.suffix.lower() in {".csv", ".tsv"} else sheet, nrows=PREVIEW_ROWS))
-    return {"file": {"id": file_info["id"], "name": file_info["name"], "path": file_info["path"], "ext": file_info["ext"], "size": file_info["size"], "mtime": file_info["mtime"]},
+    return {"file": {"id": file_info["id"], "name": file_info["name"], "path": file_info["path"], "ext": file_info["ext"], "size": file_info["size"], "mtime": file_info["mtime"], "ctime":file_info["ctime"]},
             "sheet_names": sheets, "sheet_name": sheet, "columns": _column_metadata(df),
             "preview": _json_records(df, PREVIEW_ROWS), "preview_rows": len(df),
             "max_analysis_rows": MAX_ANALYSIS_ROWS, "max_analysis_file_mb": MAX_ANALYSIS_FILE_MB}
@@ -2056,6 +2740,8 @@ def save_analysis(req: SaveAnalysisRequest) -> dict[str, Any]:
 @app.delete("/api/analysis/saved/{saved_id}")
 def delete_saved_analysis(saved_id: int) -> dict[str, Any]:
     with db_session() as conn:
+        if not conn.execute("SELECT id FROM saved_analyses WHERE id=?", (saved_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="未找到这条分析方案。")
         cur = conn.execute("DELETE FROM saved_analyses WHERE id=?", (saved_id,))
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="未找到这条分析方案。")
@@ -2068,18 +2754,26 @@ def delete_saved_analysis(saved_id: int) -> dict[str, Any]:
 
 class CreateArchiveRuleRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    target_path: str = Field(min_length=1, max_length=300)
-    period_type: str = Field(default="weekly") # daily, weekly, monthly, custom
+    target_path: str = Field(min_length=1, max_length=4096)
+    period_type: Literal["daily", "weekly", "monthly", "custom"] = "weekly"
     period_days: int = Field(default=7, ge=1, le=365)
-    responsible_person: str = Field(default="数据专员", max_length=50)
+    responsible_person: str = Field(default="", max_length=50)
+    file_keyword: str = Field(default="", max_length=200)
+    deadline_time: str = Field(default="18:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+    schedule: archive_schedule.Schedule = Field(default_factory=archive_schedule.Schedule)
 
 
 class UpdateArchiveRuleRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    target_path: str = Field(min_length=1, max_length=300)
-    period_type: str = Field(default="weekly") # daily, weekly, monthly, custom
+    target_path: str = Field(min_length=1, max_length=4096)
+    period_type: Literal["daily", "weekly", "monthly", "custom"] = "weekly"
     period_days: int = Field(default=7, ge=1, le=365)
-    responsible_person: str = Field(default="数据专员", max_length=50)
+    responsible_person: str = Field(default="", max_length=50)
+    file_keyword: str = Field(default="", max_length=200)
+    deadline_time: str = Field(default="18:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+    schedule: archive_schedule.Schedule = Field(default_factory=archive_schedule.Schedule)
 
 
 class FeishuConfigRequest(BaseModel):
@@ -2091,7 +2785,7 @@ class FeishuConfigRequest(BaseModel):
 
 
 class UpdateUserRoleRequest(BaseModel):
-    role: str = Field(default="user") # 'super_admin', 'dept_admin', 'user'
+    role: Literal["super_admin", "dept_admin", "user"] = "user"
 
 
 class CreateUserRequest(BaseModel):
@@ -2099,7 +2793,7 @@ class CreateUserRequest(BaseModel):
     phone: str = Field(min_length=6, max_length=20)
     password: str = Field(default="123456", min_length=4, max_length=50)
     department: str = Field(default="业务运营部", max_length=100)
-    role: str = Field(default="user")
+    role: Literal["super_admin", "dept_admin", "user"] = "user"
     email: str = Field(default="", max_length=100)
     feishu_id: str = Field(default="", max_length=100)
 
@@ -2120,6 +2814,154 @@ class ReviewArchiveTaskRequest(BaseModel):
     reviewed_by: str = Field(default="高级管理员", max_length=50)
 
 
+def _archive_rule_evidence(conn, target_path: str, period_days: int = 7, now: float | None = None,
+                           *, file_keyword: str = "", period_type: str = "custom", deadline_time: str = "18:00",
+                           schedule: dict | archive_schedule.Schedule | None = None) -> dict[str, Any]:
+    now = time.time() if now is None else now
+    local_now = datetime.fromtimestamp(now,demo_data.ZONE)
+    config = archive_schedule.Schedule.model_validate(schedule or {})
+    calendar_mode = config.mode == 'calendar'
+    calendar_info = archive_schedule.timeline(period_type,deadline_time,config,local_now) if calendar_mode else None
+    daily = period_type == 'daily' and not calendar_mode
+    if daily:
+        hour,minute = map(int,deadline_time.split(':'))
+        deadline = local_now.replace(hour=hour,minute=minute,second=0,microsecond=0)
+        if local_now < deadline:deadline -= timedelta(days=1)
+        window_start = deadline.replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
+    else:
+        deadline = None
+        window_start = now-period_days*86400
+    if calendar_mode:
+        due = calendar_info['latest_due']
+        deadline = datetime.fromtimestamp(due['deadline'],demo_data.ZONE) if due else None
+        window_start = due['window_start'] if due else now
+    try:
+        path = _resolve_catalog_path(target_path)
+    except HTTPException:
+        return {"state":"invalid_path","path":target_path,"matched_files":0,"nonempty_files":0,
+                "latest_time":0,"latest_name":"","reason":"监控目录不在当前文件根目录内"}
+    policy = directory_access.current.get()
+    if policy and not policy.complete(path):
+        raise HTTPException(status_code=403, detail="未获准管理该目录及其完整子目录。")
+    condition,params = _catalog_directory_condition(path)
+    keyword = file_keyword.strip()
+    if keyword:
+        condition += " AND instr(lower(name),lower(?))>0"
+        params.append(keyword)
+    args = [root_scope_key(),*params]
+    row = conn.execute(f"""SELECT count(*) AS total,
+        coalesce(sum(CASE WHEN size>0 THEN 1 ELSE 0 END),0) AS nonempty,
+        coalesce(sum(CASE WHEN size=0 AND mtime>=? AND mtime<=? THEN 1 ELSE 0 END),0) AS empty_due
+        FROM files WHERE root_key=? AND {condition}""", [window_start,now,*args]).fetchone()
+    latest = conn.execute(f"""SELECT name,mtime FROM files WHERE root_key=? AND size>0
+        AND {condition} AND mtime<=? ORDER BY mtime DESC LIMIT 1""", [*args,now]).fetchone()
+    latest_time = latest['mtime'] if latest else 0
+    if not row['total']:
+        state,reason = 'no_files','当前索引没有匹配监控对象的文件，请核对目录、文件名关键词或同步索引'
+    elif not row['nonempty']:
+        state,reason = 'no_content','匹配到的报表都是空文件，尚无可用的交付数据'
+    elif latest_time >= window_start:
+        state,reason = 'healthy','已检测到要求时间窗口内的有效报表'
+    else:
+        state,reason = 'overdue','未检测到要求时间窗口内的有效报表'
+    if not daily and not calendar_mode and latest_time:
+        deadline = datetime.fromtimestamp(latest_time+period_days*86400,demo_data.ZONE)
+    if calendar_mode:
+        if calendar_info['calendar_error']:
+            state,reason = 'calendar_unavailable',calendar_info['calendar_error']
+        elif not calendar_info['latest_due']:
+            state,reason = 'scheduled','尚未到达首个可计算的检测节点'
+        elif config.holiday_policy == 'skip':
+            try:
+                if not archive_schedule.workday(local_now.date(),config):
+                    state,reason = 'paused','今天为休息日，此规则跳过今天的检测；历史待办保留'
+            except archive_schedule.CalendarUnavailable as exc:
+                state,reason = 'calendar_unavailable',str(exc)
+    expected_day = deadline.date() if deadline else local_now.date()
+    day_label = '今天' if expected_day==local_now.date() else '昨天' if expected_day==local_now.date()-timedelta(days=1) else expected_day.strftime('%m月%d日')
+    missing_title = f'{day_label}应更新的数据尚未更新' if daily else '已超过要求的更新周期'
+    empty_failure = state in {'overdue','no_content'} and row['empty_due']>0
+    title = '报表已提交，但文件为空' if empty_failure else missing_title if state=='overdue' else {
+        'healthy':'已检测到有效更新','no_content':'监控报表暂无有效内容','no_files':'未找到匹配的监控报表'}.get(state,reason)
+    if calendar_mode:
+        missing_title = '本期报表未按检测节点更新'
+        if state=='overdue': title = '报表已提交，但文件为空' if empty_failure else missing_title
+        elif state in {'calendar_unavailable','scheduled','paused'}: title = reason
+    if state=='overdue':
+        reason = (f"{day_label}{deadline_time}前应完成更新，" if daily else f"要求每 {period_days} 天更新，") + (
+            '当前时间窗口仅检测到空文件，最近有效数据仍停留在上一次更新。' if empty_failure else '截至本次检测，尚未发现本期的非空报表。')
+    if calendar_mode and state=='overdue':
+        reason = f"本期应在 {deadline:%Y-%m-%d %H:%M} 前完成交付；截至本次检测未发现交付窗口内的非空文件。"
+    overdue_seconds = max(0,now-deadline.timestamp()) if state=='overdue' and deadline else 0
+    return {"schedule":calendar_info,"state":state,"reason":reason,"reason_title":title,
+            "reason_code":'empty_delivery' if empty_failure else 'missing_update' if state=='overdue' else state,
+            "path":path,"directory_display":_relative_catalog_path(path,_catalog_root_path()) or '根目录',
+            "matched_files":row['total'],"nonempty_files":row['nonempty'],"empty_due_files":row['empty_due'],
+            "latest_time":latest_time,"latest_name":latest['name'] if latest else '',
+            "window_start":window_start,"expected_at":deadline.timestamp() if deadline else None,
+            "expected_at_display":deadline.strftime('%Y-%m-%d %H:%M') if deadline else '',
+            "expected_label":f'{day_label} {deadline.strftime("%H:%M")}' if deadline else '',
+            "report_name":keyword or '目录内报表',"file_keyword":keyword,"deadline_time":deadline_time,
+            "frequency_label":calendar_info["summary"] if calendar_mode else f'每天 {deadline_time} 前' if daily else f'每 {period_days} 天',
+            "overdue_seconds":overdue_seconds,"assessed_at":now,
+            "assessed_at_display":local_now.strftime('%Y-%m-%d %H:%M')}
+
+
+def _assess_archive_rule(conn, rule, now=None):
+    rule = dict(rule)
+    return _archive_rule_evidence(conn,rule['target_path'],rule['period_days'],now,
+        file_keyword=rule.get('file_keyword',''),period_type=rule.get('period_type','custom'),
+        deadline_time=rule.get('deadline_time','18:00'),schedule=json.loads(rule.get('schedule_config','{}')))
+
+
+def _validate_archive_rule(conn, req) -> tuple[str, int]:
+    if not req.name.strip() or not req.responsible_person.strip():
+        raise HTTPException(status_code=422, detail="请填写规则名称和明确的责任人或责任组。")
+    if req.period_type == "custom" and req.schedule.mode == "calendar":
+        raise HTTPException(status_code=422, detail="自定义天数请使用滚动间隔检测模式")
+    days = {"daily": 1, "weekly": 7, "monthly": 30}.get(req.period_type, req.period_days)
+    evidence = _archive_rule_evidence(conn,req.target_path,days,file_keyword=req.file_keyword,period_type=req.period_type,deadline_time=req.deadline_time,schedule=req.schedule)
+    if evidence["state"] in {"invalid_path", "no_files", "calendar_unavailable"}:
+        raise HTTPException(status_code=422, detail=evidence["reason"])
+    return evidence["path"], days
+
+
+class ArchiveSchedulePreviewRequest(BaseModel):
+    period_type: Literal['daily','weekly','monthly','custom'] = 'weekly'
+    deadline_time: str = Field(default='18:00',pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
+    schedule: archive_schedule.Schedule = Field(default_factory=archive_schedule.Schedule)
+
+
+@app.post('/api/archive/rules/schedule-preview')
+def preview_archive_schedule(req: ArchiveSchedulePreviewRequest, request: Request):
+    _require_admin(request)
+    if req.schedule.mode == 'rolling': return {'ok':True,'summary':'按上次有效更新时间加周期天数检测','upcoming':[],'warnings':[]}
+    try:
+        result = archive_schedule.timeline(req.period_type,req.deadline_time,req.schedule)
+    except ValueError as exc:
+        raise HTTPException(status_code=422,detail=str(exc))
+    return {'ok':True,**result}
+
+
+@app.get("/api/archive/rules/preflight")
+def preflight_archive_rule(request: Request, path: str = Query(min_length=1, max_length=4096),
+                           period_days: int = Query(default=7, ge=1, le=365),
+                           file_keyword: str = Query(default="",max_length=200),
+                           period_type: Literal["daily","weekly","monthly","custom"] = Query(default="custom"),
+                           deadline_time: str = Query(default="18:00",pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$"),
+                           schedule_config: str = Query(default="{}",max_length=20000)) -> dict[str, Any]:
+    _require_admin(request)
+    try:
+        schedule = archive_schedule.Schedule.model_validate(json.loads(schedule_config))
+        if period_type == "custom" and schedule.mode == "calendar": raise ValueError("自定义天数请使用滚动间隔")
+    except ValueError as exc:
+        raise HTTPException(status_code=422,detail="检测日程配置无效："+str(exc))
+    with db_session() as conn:
+        days = {'daily':1,'weekly':7,'monthly':30}.get(period_type,period_days)
+        evidence = _archive_rule_evidence(conn,path,days,file_keyword=file_keyword,period_type=period_type,deadline_time=deadline_time,schedule=schedule)
+    return {"ok": True, "can_save": evidence["state"] not in {"invalid_path", "no_files", "calendar_unavailable"}, **evidence}
+
+
 def run_archive_compliance_check(conn) -> dict[str, Any]:
     """执行全盘归档时效扫描：
     1. 针对每条启用的时效监控规则，检查对应目录在要求周期内是否有合格文件产出。
@@ -2128,42 +2970,40 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
     """
     now = time.time()
     rules = conn.execute("""
-        SELECT id, name, target_path, period_type, period_days, responsible_person, is_active 
-        FROM archive_rules 
+        SELECT * FROM archive_rules 
         WHERE is_active=1
     """).fetchall()
 
     tasks_created = 0
     tasks_auto_resolved = 0
     tasks_updated = 0
+    rule_issues = []
 
     for rule in rules:
         r_id = rule["id"]
         r_name = rule["name"]
-        target_path = rule["target_path"].rstrip("/")
+        evidence = _assess_archive_rule(conn,rule,now)
+        target_path = evidence["path"]
+        if evidence["state"] not in {"healthy", "overdue"}:
+            rule_issues.append({"rule_id": r_id, "state": evidence["state"], "reason": evidence["reason"]})
+            conn.execute("UPDATE archive_rules SET last_checked_at=? WHERE id=?", (now, r_id))
+            continue
         p_type = rule["period_type"]
         p_days = int(rule["period_days"])
         resp_person = rule["responsible_person"] or "数据专员"
 
-        if p_type == "daily" or p_days == 1:
-            period_desc = "每日新增"
+        if p_type == "daily":
+            period_desc = f"每天 {rule['deadline_time']} 前"
         elif p_type == "monthly" or p_days == 30:
-            period_desc = "每月新增"
+            period_desc = "每 30 天更新"
         else:
-            period_desc = f"每 {p_days} 天新增"
+            period_desc = f"每 {p_days} 天更新"
 
-        # 查找该目录下最近的一个文件（以及其子目录）
-        latest_row = conn.execute("""
-            SELECT name, path, mtime FROM files
-            WHERE (parent = ? OR parent LIKE ?)
-            ORDER BY mtime DESC LIMIT 1
-        """, (target_path, target_path + "/%")).fetchone()
-
-        latest_time = latest_row["mtime"] if latest_row else 0
-        latest_name = latest_row["name"] if latest_row else ""
-
-        threshold_time = now - (p_days * 86400)
-        is_compliant = (latest_time >= threshold_time) if latest_time > 0 else False
+        if evidence.get("schedule"):
+            period_desc = evidence["frequency_label"]
+        latest_time = evidence["latest_time"]
+        latest_name = evidence["latest_name"]
+        is_compliant = evidence["state"] == "healthy"
 
         # 查询该规则已有的未闭环任务
         active_task = conn.execute("""
@@ -2186,7 +3026,9 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
                 """, (now, latest_name, now, active_task["id"]))
                 tasks_auto_resolved += 1
         else:
-            if latest_time > 0:
+            if p_type == 'daily' or evidence.get('schedule'):
+                overdue_days = max(1, int(evidence['overdue_seconds']//86400)+1)
+            elif latest_time > 0:
                 diff_sec = now - latest_time
                 overdue_days = max(1, int((diff_sec - (p_days * 86400)) / 86400) + 1)
             else:
@@ -2195,12 +3037,12 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
             if active_task:
                 conn.execute("""
                     UPDATE archive_tasks
-                    SET overdue_days = ?,
+                    SET rule_name=?, period_desc=?, responsible_person=?, overdue_days = ?,
                         last_file_time = ?,
                         last_file_name = ?,
                         updated_at = ?
                     WHERE id = ?
-                """, (overdue_days, latest_time, latest_name, now, active_task["id"]))
+                """, (r_name,period_desc,resp_person,overdue_days,latest_time,latest_name,now,active_task["id"]))
                 tasks_updated += 1
             else:
                 conn.execute("""
@@ -2218,7 +3060,8 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
         "tasks_created": tasks_created,
         "tasks_auto_resolved": tasks_auto_resolved,
         "tasks_updated": tasks_updated,
-        "checked_rules": len(rules)
+        "checked_rules": len(rules),
+        "rule_issues": rule_issues
     }
 
 
@@ -2230,10 +3073,12 @@ def get_archive_overview() -> dict[str, Any]:
         submitted_tasks = conn.execute("SELECT count(*) FROM archive_tasks WHERE status = 'submitted'").fetchone()[0]
         resolved_tasks = conn.execute("SELECT count(*) FROM archive_tasks WHERE status IN ('approved', 'auto_resolved')").fetchone()[0]
 
-        compliance_rate = 100.0
-        if total_rules > 0:
-            unresolved = pending_tasks + submitted_tasks
-            compliance_rate = round(max(0.0, (1 - unresolved / total_rules) * 100), 1)
+        rules = conn.execute("SELECT * FROM archive_rules WHERE is_active=1").fetchall()
+        assessments = [{"rule_id": row["id"], **_assess_archive_rule(conn,row)} for row in rules]
+        valid = [item for item in assessments if item["state"] in {"healthy", "overdue"}]
+        healthy = sum(item["state"] == "healthy" for item in valid)
+        compliance_rate = round(healthy / len(valid) * 100, 1) if valid else None
+        rule_issues = [{"rule_id": item["rule_id"], "state": item["state"], "reason": item["reason"]} for item in assessments if item["state"] not in {"healthy", "overdue"}]
 
     last_run = _archive_scheduler_info["last_run_at"]
     last_run_display = datetime.fromtimestamp(last_run).strftime("%H:%M:%S") if last_run > 0 else "初始化就绪"
@@ -2245,6 +3090,10 @@ def get_archive_overview() -> dict[str, Any]:
         "auto_resolved_total": _archive_scheduler_info["auto_resolved_total"],
         "status": _archive_scheduler_info["status"]
     }
+    policy = directory_access.current.get()
+    if policy and not policy.super_admin:
+        scheduler_data = {"enabled": True, "interval_seconds": 60, "status": "scoped",
+                          "last_run_display": last_run_display, "run_count": None, "auto_resolved_total": None}
 
     return {
         "ok": True,
@@ -2253,6 +3102,8 @@ def get_archive_overview() -> dict[str, Any]:
         "submitted_tasks": submitted_tasks,
         "resolved_tasks": resolved_tasks,
         "compliance_rate": compliance_rate,
+        "metric_name": "当前规则达标率",
+        "verifiable_rules": len(valid), "healthy_rules": healthy, "rule_issues": rule_issues,
         "scheduler": scheduler_data
     }
 
@@ -2261,8 +3112,7 @@ def get_archive_overview() -> dict[str, Any]:
 def get_archive_rules() -> dict[str, Any]:
     with db_session() as conn:
         rows = conn.execute("""
-            SELECT id, name, target_path, period_type, period_days, responsible_person, is_active, last_checked_at, created_at
-            FROM archive_rules
+            SELECT * FROM archive_rules
             ORDER BY id ASC
         """).fetchall()
         result = []
@@ -2274,62 +3124,85 @@ def get_archive_rules() -> dict[str, Any]:
                 "period_type": r["period_type"],
                 "period_days": r["period_days"],
                 "responsible_person": r["responsible_person"],
+                "file_keyword":r["file_keyword"], "deadline_time":r["deadline_time"],
+                "schedule":json.loads(r["schedule_config"]),
                 "is_active": bool(r["is_active"]),
                 "last_checked_at": r["last_checked_at"],
                 "last_checked_display": datetime.fromtimestamp(r["last_checked_at"]).strftime("%Y-%m-%d %H:%M") if r["last_checked_at"] > 0 else "尚未检测",
-                "created_at": r["created_at"]
+                "created_at": r["created_at"],
+                "assessment": _assess_archive_rule(conn,r)
             })
     return {"ok": True, "rules": result}
 
 
 @app.post("/api/archive/rules")
-def create_archive_rule(req: CreateArchiveRuleRequest) -> dict[str, Any]:
+def create_archive_rule(req: CreateArchiveRuleRequest, request: Request) -> dict[str, Any]:
+    _require_admin(request)
     now = time.time()
     with db_session() as conn:
+        path, days = _validate_archive_rule(conn, req)
         cur = conn.execute("""
-            INSERT INTO archive_rules (name, target_path, period_type, period_days, responsible_person, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, 1, ?)
-        """, (req.name.strip(), req.target_path.strip(), req.period_type, req.period_days, req.responsible_person.strip(), now))
+            INSERT INTO archive_rules (name,target_path,period_type,period_days,responsible_person,is_active,created_at,file_keyword,deadline_time,schedule_config)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        """, (req.name.strip(),path,req.period_type,days,req.responsible_person.strip(),now,req.file_keyword.strip(),req.deadline_time,req.schedule.model_dump_json()))
         rule_id = cur.lastrowid
         # 立即执行一次时效检测
         run_archive_compliance_check(conn)
-    return {"ok": True, "id": rule_id, "message": "监控规则已创建并立即开始检测"}
+    _record_product_event("rule_create", request, subject_id=rule_id)
+    return {"ok": True, "id": rule_id, "message": "规则已保存，已完成初次核验"}
 
 
 @app.put("/api/archive/rules/{rule_id}")
-def update_archive_rule(rule_id: int, req: UpdateArchiveRuleRequest) -> dict[str, Any]:
+def update_archive_rule(rule_id: int, req: UpdateArchiveRuleRequest, request: Request) -> dict[str, Any]:
+    _require_admin(request)
     with db_session() as conn:
+        if not conn.execute("SELECT id FROM archive_rules WHERE id=?", (rule_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="规则不存在")
+        path, days = _validate_archive_rule(conn, req)
         cur = conn.execute("""
             UPDATE archive_rules 
-            SET name = ?, target_path = ?, period_type = ?, period_days = ?, responsible_person = ?
-            WHERE id = ?
-        """, (req.name.strip(), req.target_path.strip(), req.period_type, req.period_days, req.responsible_person.strip(), rule_id))
+            SET name=?,target_path=?,period_type=?,period_days=?,responsible_person=?,file_keyword=?,deadline_time=?,schedule_config=?
+            WHERE id=?
+        """, (req.name.strip(),path,req.period_type,days,req.responsible_person.strip(),req.file_keyword.strip(),req.deadline_time,req.schedule.model_dump_json(),rule_id))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="规则不存在")
         # 立即执行一次时效检测
         run_archive_compliance_check(conn)
+    _record_product_event("rule_update", request, subject_id=rule_id)
     return {"ok": True, "message": "监控规则已更新并重新校准时效"}
 
 
 @app.put("/api/archive/rules/{rule_id}/toggle")
-def toggle_archive_rule(rule_id: int) -> dict[str, Any]:
+def toggle_archive_rule(rule_id: int, request: Request) -> dict[str, Any]:
+    _require_admin(request)
     with db_session() as conn:
+        rule = conn.execute("SELECT * FROM archive_rules WHERE id=?", (rule_id,)).fetchone()
+        if not rule:
+            raise HTTPException(status_code=404, detail="规则不存在")
+        if rule and not rule["is_active"]:
+            _validate_archive_rule(conn, CreateArchiveRuleRequest(**dict(rule),schedule=json.loads(rule["schedule_config"])))
         cur = conn.execute("UPDATE archive_rules SET is_active = (1 - is_active) WHERE id = ?", (rule_id,))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="规则不存在")
+    _record_product_event("rule_toggle", request, subject_id=rule_id)
     return {"ok": True, "message": "规则启停状态已更新"}
 
 
 @app.delete("/api/archive/rules/{rule_id}")
-def delete_archive_rule(rule_id: int) -> dict[str, Any]:
+def delete_archive_rule(rule_id: int, request: Request) -> dict[str, Any]:
+    _require_admin(request)
     with db_session() as conn:
+        if not conn.execute("SELECT id FROM archive_rules WHERE id=?", (rule_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="规则不存在")
         conn.execute("DELETE FROM archive_rules WHERE id = ?", (rule_id,))
         conn.execute("DELETE FROM archive_tasks WHERE rule_id = ?", (rule_id,))
+    _record_product_event("rule_delete", request, subject_id=rule_id)
     return {"ok": True, "message": "规则及其历史待办已删除"}
 
 
 @app.post("/api/archive/check")
-def trigger_archive_check() -> dict[str, Any]:
+def trigger_archive_check(request: Request) -> dict[str, Any]:
+    _require_admin(request)
     with db_session() as conn:
         res = run_archive_compliance_check(conn)
     return {
@@ -2343,7 +3216,8 @@ def trigger_archive_check() -> dict[str, Any]:
 def get_archive_tasks(
     status: str = Query(default="all"),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=25, ge=1, le=100)
+    page_size: int = Query(default=25, ge=1, le=100),
+    task_id: int | None = Query(default=None,ge=1)
 ) -> dict[str, Any]:
     with db_session() as conn:
         where_clauses = []
@@ -2355,6 +3229,8 @@ def get_archive_tasks(
         elif status == "resolved":
             where_clauses.append("status IN ('approved', 'auto_resolved')")
 
+        if task_id is not None:
+            where_clauses.append("id=?"); params.append(task_id)
         where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
         total = conn.execute(f"SELECT count(*) FROM archive_tasks {where_sql}", params).fetchone()[0]
 
@@ -2381,13 +3257,18 @@ def get_archive_tasks(
         """, params + [page_size, offset]).fetchall()
 
         items = []
+        evidence_by_rule = {}
         for r in rows:
+            if r["rule_id"] not in evidence_by_rule:
+                rule = conn.execute("SELECT * FROM archive_rules WHERE id=?", (r["rule_id"],)).fetchone()
+                evidence_by_rule[r["rule_id"]] = _assess_archive_rule(conn,rule) if rule else {"state": "invalid_path", "reason": "规则已不存在"}
             items.append({
+                "assessment": evidence_by_rule[r["rule_id"]],
                 "id": r["id"],
                 "rule_id": r["rule_id"],
                 "rule_name": r["rule_name"],
                 "target_path": r["target_path"],
-                "period_desc": r["period_desc"],
+                "period_desc": r["period_desc"].replace("新增", "更新"),
                 "responsible_person": r["responsible_person"],
                 "last_file_time": r["last_file_time"],
                 "last_file_time_display": datetime.fromtimestamp(r["last_file_time"]).strftime("%Y-%m-%d %H:%M") if r["last_file_time"] > 0 else "无历史文件",
@@ -2407,7 +3288,7 @@ def get_archive_tasks(
                 "resolved_at_display": datetime.fromtimestamp(r["resolved_at"]).strftime("%Y-%m-%d %H:%M") if r["resolved_at"] > 0 else "",
                 "resolved_file": r["resolved_file"] or "",
                 "created_at": r["created_at"],
-                "created_at_display": datetime.fromtimestamp(r["created_at"]).strftime("%Y-%m-%d %H:%M")
+                "created_at_display": datetime.fromtimestamp(r["created_at"],demo_data.ZONE).strftime("%Y-%m-%d %H:%M:%S")
             })
 
     return {
@@ -2419,14 +3300,27 @@ def get_archive_tasks(
     }
 
 
+@app.get("/api/archive/tasks/{task_id}")
+def get_archive_task_detail(task_id: int) -> dict[str, Any]:
+    result = get_archive_tasks(status='all',page=1,page_size=1,task_id=task_id)
+    if not result['items']:
+        raise HTTPException(status_code=404,detail='监控任务不存在或当前账号无权访问。')
+    return {'ok':True,'task':result['items'][0]}
+
+
 @app.post("/api/archive/tasks/{task_id}/submit")
-def submit_archive_task(task_id: int, req: SubmitArchiveTaskRequest) -> dict[str, Any]:
+def submit_archive_task(task_id: int, req: SubmitArchiveTaskRequest, request: Request) -> dict[str, Any]:
+    user = _require_user(request)
     now = time.time()
     with db_session() as conn:
         task = conn.execute("SELECT id, status FROM archive_tasks WHERE id = ?", (task_id,)).fetchone()
         if not task:
             raise HTTPException(status_code=404, detail="待办任务不存在")
 
+        if task["status"] not in {"pending", "rejected"}:
+            raise HTTPException(status_code=409, detail="仅待处理或已驳回的任务可以提交。")
+        if not req.note.strip() or not req.proof_image.strip():
+            raise HTTPException(status_code=422, detail="请填写说明并附上交付凭证。")
         conn.execute("""
             UPDATE archive_tasks
             SET status = 'submitted',
@@ -2436,13 +3330,15 @@ def submit_archive_task(task_id: int, req: SubmitArchiveTaskRequest) -> dict[str
                 submitted_at = ?,
                 updated_at = ?
             WHERE id = ?
-        """, (req.note.strip(), req.proof_image.strip(), req.submitted_by.strip() or "经办人", now, now, task_id))
+        """, (req.note.strip(), req.proof_image.strip(), user["name"], now, now, task_id))
 
+    _record_product_event("archive_submit", request, subject_id=task_id)
     return {"ok": True, "message": "任务已提交证明，已流转至高级管理员待审核"}
 
 
 @app.post("/api/archive/tasks/{task_id}/review")
-def review_archive_task(task_id: int, req: ReviewArchiveTaskRequest) -> dict[str, Any]:
+def review_archive_task(task_id: int, req: ReviewArchiveTaskRequest, request: Request) -> dict[str, Any]:
+    admin = _require_admin(request)
     now = time.time()
     action = req.action.lower()
     if action not in ("approve", "reject"):
@@ -2453,6 +3349,8 @@ def review_archive_task(task_id: int, req: ReviewArchiveTaskRequest) -> dict[str
         if not task:
             raise HTTPException(status_code=404, detail="待办任务不存在")
 
+        if task["status"] != "submitted":
+            raise HTTPException(status_code=409, detail="仅待审核的任务可以审核。")
         if action == "approve":
             new_status = "approved"
             msg = "审核通过，该待办任务已成功闭环消结。"
@@ -2465,7 +3363,7 @@ def review_archive_task(task_id: int, req: ReviewArchiveTaskRequest) -> dict[str
                     resolved_at = ?,
                     updated_at = ?
                 WHERE id = ?
-            """, (new_status, req.reviewed_by.strip() or "高级管理员", now, req.comment.strip(), now, now, task_id))
+            """, (new_status, admin["name"], now, req.comment.strip(), now, now, task_id))
         else:
             new_status = "rejected"
             msg = "已驳回整改，任务已重新退回待办池。"
@@ -2477,14 +3375,16 @@ def review_archive_task(task_id: int, req: ReviewArchiveTaskRequest) -> dict[str
                     review_comment = ?,
                     updated_at = ?
                 WHERE id = ?
-            """, (new_status, req.reviewed_by.strip() or "高级管理员", now, req.comment.strip(), now, task_id))
+            """, (new_status, admin["name"], now, req.comment.strip(), now, task_id))
 
+    _record_product_event("archive_review", request, subject_id=task_id)
     return {"ok": True, "message": msg, "new_status": new_status}
 
 
 @app.post("/api/archive/upload-proof")
 async def upload_proof_image(request: Request) -> dict[str, Any]:
     """支持接收图片文件或 JSON base64 格式上传截图证明"""
+    _require_user(request)
     content_type = request.headers.get("content-type", "")
     if "multipart/form-data" in content_type:
         form = await request.form()
@@ -2508,11 +3408,314 @@ async def upload_proof_image(request: Request) -> dict[str, Any]:
 
 
 # ============================================================
+# 登录认证、下载审批与在线预览 (Auth, Download Approval & Preview)
+# ============================================================
+
+_AUTH_OPEN_PATHS = {"/api/auth/login", "/api/health"}
+_ADMIN_ROLES = ("super_admin", "dept_admin")
+
+
+def _get_session_user(request: Request) -> dict[str, Any] | None:
+    """从 ff_session Cookie 解析当前登录用户；会话过期或账号停用一律视为未登录。"""
+    token = request.cookies.get("ff_session", "")
+    if not token:
+        return None
+    with db_session() as conn:
+        row = conn.execute(
+            """
+            SELECT s.expires_at, u.id, u.name, u.phone, u.role, u.status, u.department
+            FROM login_sessions s JOIN system_users u ON u.id = s.user_id
+            WHERE s.token = ?
+            """,
+            (token,),
+        ).fetchone()
+    if not row or row["expires_at"] < time.time() or row["status"] != "active":
+        return None
+    return dict(row)
+
+
+def _require_user(request: Request) -> dict[str, Any]:
+    user = _get_session_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="请先登录后再使用本系统。")
+    return user
+
+
+def _require_admin(request: Request) -> dict[str, Any]:
+    user = _require_user(request)
+    if user["role"] not in _ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="该操作需要管理员权限。")
+    return user
+
+
+def _require_super_admin(request: Request) -> dict[str, Any]:
+    user = _require_user(request)
+    if user["role"] != "super_admin":
+        raise HTTPException(status_code=403, detail="该操作需要超级管理员权限。")
+    return user
+
+
+def _public_user(u: dict[str, Any]) -> dict[str, Any]:
+    return {"id": u["id"], "name": u["name"], "phone": u.get("phone") or "",
+            "role": u["role"], "department": u.get("department") or "", "directory_acl_enabled": DIRECTORY_ACL_ENABLED,
+            "demo_mode": DEMO_MODE}
+
+
+class LoginRequest(BaseModel):
+    phone: str = Field(min_length=1, max_length=20)
+    password: str = Field(min_length=1, max_length=64)
+
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest, response: Response) -> dict[str, Any]:
+    with db_session() as conn:
+        row = conn.execute("SELECT * FROM system_users WHERE phone = ?", (req.phone.strip(),)).fetchone()
+    if not row or (row["password"] or "123456") != req.password.strip():
+        raise HTTPException(status_code=401, detail="手机号或密码错误。")
+    if row["status"] != "active":
+        raise HTTPException(status_code=403, detail="账号已被停用，请联系管理员。")
+    now = time.time()
+    token = uuid.uuid4().hex + uuid.uuid4().hex
+    with db_session() as conn:
+        conn.execute("DELETE FROM login_sessions WHERE expires_at < ?", (now,))
+        conn.execute(
+            "INSERT INTO login_sessions(token, user_id, created_at, expires_at) VALUES(?,?,?,?)",
+            (token, row["id"], now, now + SESSION_TTL_HOURS * 3600),
+        )
+    response.set_cookie("ff_session", token, max_age=int(SESSION_TTL_HOURS * 3600), httponly=True, samesite="lax")
+    return {"ok": True, "user": _public_user(dict(row))}
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response) -> dict[str, Any]:
+    token = request.cookies.get("ff_session", "")
+    if token:
+        with db_session() as conn:
+            conn.execute("DELETE FROM login_sessions WHERE token = ?", (token,))
+    response.delete_cookie("ff_session")
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request) -> dict[str, Any]:
+    user = _get_session_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+    return {"ok": True, "user": _public_user(user), "auth_required": AUTH_REQUIRED or DIRECTORY_ACL_ENABLED,
+            "preview_enabled": True}
+
+
+# ---------- 下载审批 ----------
+
+class DownloadRequestCreate(BaseModel):
+    file_id: int
+    reason: str = Field(default="", max_length=200)
+    search_event_id: int | None = Field(default=None, gt=0)
+
+
+class DownloadReviewAction(BaseModel):
+    action: Literal["approve", "reject"]
+
+
+def _consume_download_ticket(file_id: int, ticket: str) -> bool:
+    """校验审批票据：需与本文件匹配、已批准且未过期；首次成功下载记录审计时间。"""
+    if not ticket:
+        return False
+    now = time.time()
+    with db_session() as conn:
+        row = conn.execute(
+            "SELECT id, file_id, expires_at FROM download_requests WHERE ticket = ? AND status = 'approved' AND demo_key=''",
+            (ticket,),
+        ).fetchone()
+        if not row or row["file_id"] != file_id or row["expires_at"] < now:
+            return False
+        conn.execute("UPDATE download_requests SET downloaded_at = ? WHERE id = ? AND downloaded_at = 0", (now, row["id"]))
+    return True
+
+
+def _format_download_request(r: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": r["id"],
+        "created_at":r["created_at"],"reviewed_at":r["reviewed_at"],"expires_at":r["expires_at"],"downloaded_at":r["downloaded_at"],
+        "user_name": r["user_name"],
+        "department": r["department"] or "--",
+        "file_id": r["file_id"],
+        "file_name": r["file_name"],
+        "file_path": r["file_path"],
+        "directory_display":_relative_catalog_path(str(Path(r["file_path"]).parent),_catalog_root_path()) or "根目录",
+        "reason": r["reason"],
+        "is_demo":bool(r["demo_key"]),"review_note":r["review_note"],
+        "workflow_events":json.loads(r["workflow_events"]),
+        "reviewed_at_display":datetime.fromtimestamp(r["reviewed_at"],demo_data.ZONE).strftime("%Y-%m-%d %H:%M:%S") if r["reviewed_at"] else "—",
+        "status": r["status"],
+        "ticket": r["ticket"],
+        "created_at_display": datetime.fromtimestamp(r["created_at"],demo_data.ZONE).strftime("%Y-%m-%d %H:%M:%S"),
+        "reviewed_by": r["reviewed_by"] or "--",
+        "expires_at_display": datetime.fromtimestamp(r["expires_at"],demo_data.ZONE).strftime("%Y-%m-%d %H:%M:%S") if r["expires_at"] else "--",
+        "expired": bool(r["expires_at"] and r["expires_at"] < time.time()),
+        "downloaded_at_display": datetime.fromtimestamp(r["downloaded_at"],demo_data.ZONE).strftime("%Y-%m-%d %H:%M:%S") if r["downloaded_at"] else "--",
+    }
+
+
+@app.post("/api/downloads/requests")
+def create_download_request(req: DownloadRequestCreate, request: Request) -> dict[str, Any]:
+    """普通成员提交下载申请（用途必填）；管理员自助直下。已有待审批/有效授权时复用不重复创建。"""
+    user = _require_user(request)
+    file_info, _path = _get_indexed_file(req.file_id)
+    now = time.time()
+    with db_session() as conn:
+        existing = conn.execute(
+            """
+            SELECT id, status, ticket FROM download_requests
+            WHERE user_id = ? AND file_id = ? AND demo_key=''
+              AND (status = 'pending' OR (status = 'approved' AND expires_at > ?))
+            ORDER BY id DESC LIMIT 1
+            """,
+            (user["id"], req.file_id, now),
+        ).fetchone()
+        if existing:
+            return {"ok": True, "id": existing["id"], "status": existing["status"], "ticket": existing["ticket"],
+                    "message": "已有待审批的申请" if existing["status"] == "pending" else "已有有效下载授权"}
+        reason = req.reason.strip()
+        if not reason:
+            raise HTTPException(status_code=400, detail="请填写下载用途后再提交申请。")
+        is_admin = user["role"] in _ADMIN_ROLES
+        status = "approved" if is_admin else "pending"
+        ticket = (uuid.uuid4().hex + uuid.uuid4().hex) if is_admin else ""
+        expires = now + DOWNLOAD_TICKET_TTL_HOURS * 3600 if is_admin else 0
+        cur = conn.execute(
+            """
+            INSERT INTO download_requests(user_id, user_name, department, file_id, file_name, file_path, reason,
+                                          status, ticket, created_at, reviewed_by, reviewed_at, expires_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (user["id"], user["name"], user.get("department") or "", req.file_id, file_info["name"], file_info["path"],
+             reason, status, ticket, now, "管理员自助" if is_admin else "", now if is_admin else 0, expires),
+        )
+    _record_product_event("download_request", request, subject_id=req.file_id, search_event_id=req.search_event_id)
+    return {"ok": True, "id": cur.lastrowid, "status": status, "ticket": ticket}
+
+
+@app.get("/api/downloads/requests")
+def list_download_requests(request: Request, scope: str = Query(default="mine")) -> dict[str, Any]:
+    user = _require_user(request)
+    with db_session() as conn:
+        if scope == "all":
+            if user["role"] not in _ADMIN_ROLES:
+                raise HTTPException(status_code=403, detail="需要管理员权限。")
+            rows = conn.execute("SELECT * FROM download_requests ORDER BY created_at DESC,id DESC LIMIT 300").fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM download_requests WHERE user_id = ? ORDER BY created_at DESC,id DESC LIMIT 100",
+                                (user["id"],)).fetchall()
+        pending_count = conn.execute("SELECT count(*) FROM download_requests WHERE status = 'pending'").fetchone()[0]
+    return {"ok": True, "requests": [_format_download_request(r) for r in rows], "pending_count": pending_count}
+
+
+@app.post("/api/downloads/requests/{req_id}/review")
+def review_download_request(req_id: int, req: DownloadReviewAction, request: Request) -> dict[str, Any]:
+    admin = _require_admin(request)
+    now = time.time()
+    with db_session() as conn:
+        row = conn.execute("SELECT id, status, demo_key, workflow_events FROM download_requests WHERE id = ?", (req_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="申请不存在。")
+        if row["status"] != "pending":
+            raise HTTPException(status_code=400, detail="该申请已被处理过。")
+        if req.action == "approve":
+            ticket = "" if row["demo_key"] else uuid.uuid4().hex + uuid.uuid4().hex
+            conn.execute(
+                "UPDATE download_requests SET status='approved', ticket=?, reviewed_by=?, reviewed_at=?, expires_at=? WHERE id=?",
+                (ticket, admin["name"], now, now + DOWNLOAD_TICKET_TTL_HOURS * 3600, req_id),
+            )
+            message = f"已批准，下载链接 {DOWNLOAD_TICKET_TTL_HOURS:g} 小时内有效。"
+        else:
+            conn.execute(
+                "UPDATE download_requests SET status='rejected', reviewed_by=?, reviewed_at=? WHERE id=?",
+                (admin["name"], now, req_id),
+            )
+            message = "已驳回该下载申请。"
+        events=json.loads(row['workflow_events'])
+        events.append({'kind':'approved' if req.action=='approve' else 'rejected','at':now,'actor':admin['name'],
+                       'note':'同意按申请用途使用' if req.action=='approve' else '请补充用途与范围后重新申请'})
+        conn.execute('UPDATE download_requests SET workflow_events=?,review_note=? WHERE id=?',
+                     (json.dumps(events,ensure_ascii=False),events[-1]['note'],req_id))
+    _record_product_event("download_review", request, subject_id=req_id)
+    return {"ok": True, "message": message}
+
+
+# ---------- 在线预览（应用内置渲染，数据不落地） ----------
+
+@app.get("/api/file/{file_id}/preview")
+def preview_file(file_id: int, request: Request) -> dict[str, Any]:
+    """返回应用内置预览页地址（前端 SheetJS 渲染，支持合并单元格/样式/分页）。"""
+    if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:
+        _require_user(request)
+    _get_indexed_file(file_id)
+    return {"ok": True, "url": f"/static/preview.html?id={file_id}"}
+
+
+@app.get("/api/file/{file_id}/preview-source/{filename}")
+def preview_source(file_id: int, filename: str, request: Request, key: str = Query(default="")) -> FileResponse:
+    """预览文件字节流：kkFileView 容器用密钥拉取，登录用户用会话直接拉取。
+
+    带本地磁盘缓存：网盘文件只读一次，后续预览直接发本地副本；
+    网盘文件变更（mtime/size 变化）自动换新缓存键。
+    """
+    if DIRECTORY_ACL_ENABLED or not (key and secrets.compare_digest(key, PREVIEW_SOURCE_KEY)):
+        if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:
+            _require_user(request)
+    file_info, path = _get_indexed_file(file_id)
+    cached = _preview_cache_get(file_id, path)
+    return FileResponse(path=cached, filename=file_info["name"], media_type="application/octet-stream")
+
+
+PREVIEW_CACHE_DIR = DB_PATH.parent / "preview_cache"
+PREVIEW_CACHE_MAX_BYTES = int(os.getenv("PREVIEW_CACHE_MAX_MB", "2048")) * 1024 * 1024
+_preview_cache_lock = threading.Lock()
+
+
+def _preview_cache_get(file_id: int, src: Path) -> Path:
+    """返回可用于 FileResponse 的本地缓存文件路径（未命中则从网盘复制一份）。"""
+    try:
+        st = src.stat()
+    except OSError:
+        return src  # 网盘读取失败时原样抛出给 FileResponse 处理
+    PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    source_key = uuid.uuid5(uuid.NAMESPACE_URL, f"{DB_PATH}|{root_scope_key()}|{src}").hex
+    cache_prefix = f"{file_id}_{source_key}_"
+    cache_key = f"{cache_prefix}{st.st_mtime_ns}_{st.st_size}"
+    hit = PREVIEW_CACHE_DIR / cache_key
+    if hit.exists():
+        return hit
+    with _preview_cache_lock:
+        if hit.exists():
+            return hit
+        tmp = PREVIEW_CACHE_DIR / (cache_key + ".tmp")
+        shutil.copyfile(src, tmp)
+        tmp.replace(hit)
+        # 清理：本文件的历史版本 + 总量超限的最旧文件
+        for old in PREVIEW_CACHE_DIR.glob(f"{cache_prefix}*"):
+            if old.name != cache_key:
+                old.unlink(missing_ok=True)
+        entries = sorted(PREVIEW_CACHE_DIR.iterdir(), key=lambda p: p.stat().st_mtime)
+        total = sum(p.stat().st_size for p in entries)
+        for p in entries:
+            if total <= PREVIEW_CACHE_MAX_BYTES:
+                break
+            if p.name == cache_key:
+                continue
+            total -= p.stat().st_size
+            p.unlink(missing_ok=True)
+        return hit
+
+
+# ============================================================
 # 人员权限与飞书集成管理中心 (User Roles & Feishu Integration)
 # ============================================================
 
 @app.get("/api/system/permissions")
-def get_system_permissions() -> dict[str, Any]:
+def get_system_permissions(request: Request) -> dict[str, Any]:
+    _require_super_admin(request)
     with db_session() as conn:
         feishu_raw = conn.execute("SELECT value FROM app_meta WHERE key = 'feishu_config'").fetchone()
         feishu_config = json.loads(feishu_raw[0]) if feishu_raw else {
@@ -2527,7 +3730,7 @@ def get_system_permissions() -> dict[str, Any]:
         }
         
         users_rows = conn.execute("""
-            SELECT id, name, phone, password, feishu_id, email, department, role, status, avatar, created_at, updated_at
+            SELECT id, name, phone, feishu_id, email, department, role, status, avatar, created_at, updated_at
             FROM system_users
             ORDER BY 
               CASE role 
@@ -2543,7 +3746,6 @@ def get_system_permissions() -> dict[str, Any]:
                 "id": u["id"],
                 "name": u["name"],
                 "phone": u["phone"] or "--",
-                "password": u["password"] or "123456",
                 "feishu_id": u["feishu_id"],
                 "email": u["email"],
                 "department": u["department"],
@@ -2574,7 +3776,8 @@ def get_system_permissions() -> dict[str, Any]:
 
 
 @app.post("/api/system/permissions/users")
-def create_system_user(req: CreateUserRequest) -> dict[str, Any]:
+def create_system_user(req: CreateUserRequest, request: Request) -> dict[str, Any]:
+    _require_super_admin(request)
     now_ts = time.time()
     phone = req.phone.strip()
     with db_session() as conn:
@@ -2590,7 +3793,8 @@ def create_system_user(req: CreateUserRequest) -> dict[str, Any]:
 
 
 @app.put("/api/system/permissions/users/{user_id}/password")
-def reset_user_password(user_id: int, req: ResetUserPasswordRequest) -> dict[str, Any]:
+def reset_user_password(user_id: int, req: ResetUserPasswordRequest, request: Request) -> dict[str, Any]:
+    _require_super_admin(request)
     new_pwd = req.password.strip()
     if not new_pwd:
         raise HTTPException(status_code=400, detail="密码不能为空")
@@ -2602,7 +3806,8 @@ def reset_user_password(user_id: int, req: ResetUserPasswordRequest) -> dict[str
 
 
 @app.put("/api/system/permissions/users/{user_id}/role")
-def update_user_role(user_id: int, req: UpdateUserRoleRequest) -> dict[str, Any]:
+def update_user_role(user_id: int, req: UpdateUserRoleRequest, request: Request) -> dict[str, Any]:
+    _require_super_admin(request)
     if req.role not in ("super_admin", "dept_admin", "user"):
         raise HTTPException(status_code=400, detail="无效角色")
     with db_session() as conn:
@@ -2613,7 +3818,8 @@ def update_user_role(user_id: int, req: UpdateUserRoleRequest) -> dict[str, Any]
 
 
 @app.put("/api/system/permissions/users/{user_id}/status")
-def toggle_user_status(user_id: int) -> dict[str, Any]:
+def toggle_user_status(user_id: int, request: Request) -> dict[str, Any]:
+    _require_super_admin(request)
     with db_session() as conn:
         cur = conn.execute("""
             UPDATE system_users 
@@ -2626,13 +3832,76 @@ def toggle_user_status(user_id: int) -> dict[str, Any]:
 
 
 @app.delete("/api/system/permissions/users/{user_id}")
-def delete_system_user(user_id: int) -> dict[str, Any]:
+def delete_system_user(user_id: int, request: Request) -> dict[str, Any]:
+    _require_super_admin(request)
     with db_session() as conn:
         cur = conn.execute("DELETE FROM system_users WHERE id = ?", (user_id,))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="成员不存在")
     return {"ok": True, "message": "成员授权已移除"}
 
+
+
+class DirectoryGrantRequest(BaseModel):
+    subject_type: Literal["user", "department"]
+    subject_key: str = Field(min_length=1, max_length=200)
+    target_path: str = Field(min_length=1, max_length=4096)
+    effect: Literal["allow", "deny"] = "allow"
+
+
+@app.get("/api/auth/scopes")
+def get_my_directory_scopes(request: Request) -> dict[str, Any]:
+    _require_user(request)
+    policy = directory_access.current.get()
+    return {"enabled": DIRECTORY_ACL_ENABLED, "unrestricted": not policy or policy.super_admin,
+            "grants": [{"path": path, "effect": effect} for path, effect in (policy.grants if policy else ())]}
+
+
+@app.get("/api/system/directory-grants")
+def list_directory_grants(request: Request) -> dict[str, Any]:
+    _require_super_admin(request)
+    with db_session() as conn:
+        rows = conn.execute("SELECT * FROM directory_grants WHERE root_key=? ORDER BY id DESC", (root_scope_key(),)).fetchall()
+        audit = conn.execute("SELECT * FROM directory_grant_audit ORDER BY id DESC LIMIT 30").fetchall()
+    return {"enabled": DIRECTORY_ACL_ENABLED, "grants": [dict(row) for row in rows],
+            "audit": [dict(row) for row in audit]}
+
+
+@app.post("/api/system/directory-grants")
+def save_directory_grant(req: DirectoryGrantRequest, request: Request) -> dict[str, Any]:
+    admin = _require_super_admin(request)
+    target = _resolve_catalog_path(req.target_path)
+    subject = req.subject_key.strip()
+    condition, parameters = _catalog_directory_condition(target)
+    with db_session() as conn:
+        if req.subject_type == "user":
+            exists = conn.execute("SELECT id FROM system_users WHERE CAST(id AS TEXT)=?", (subject,)).fetchone()
+        else:
+            exists = conn.execute("SELECT id FROM system_users WHERE department=? AND department<>''", (subject,)).fetchone()
+        if not exists:
+            raise HTTPException(status_code=422, detail="请选择系统已有的成员或部门。")
+        if not conn.execute(f"SELECT 1 FROM files WHERE root_key=? AND {condition} LIMIT 1", [root_scope_key(), *parameters]).fetchone():
+            raise HTTPException(status_code=422, detail="该目录没有已索引文件，请先同步索引再授权。")
+        conn.execute("""INSERT INTO directory_grants(root_key,subject_type,subject_key,target_path,effect,created_by,created_at)
+            VALUES(?,?,?,?,?,?,?) ON CONFLICT(root_key,subject_type,subject_key,target_path)
+            DO UPDATE SET effect=excluded.effect,created_by=excluded.created_by,created_at=excluded.created_at""",
+            (root_scope_key(), req.subject_type, subject, target, req.effect, admin["id"], time.time()))
+        conn.execute("INSERT INTO directory_grant_audit(actor_id,action,grant_json,created_at) VALUES(?,?,?,?)",
+                     (admin["id"], "save", json.dumps({**req.model_dump(), "target_path": target}, ensure_ascii=False), time.time()))
+    return {"ok": True, "message": "授权已生效；子目录自动继承，拒绝规则优先。"}
+
+
+@app.delete("/api/system/directory-grants/{grant_id}")
+def delete_directory_grant(grant_id: int, request: Request) -> dict[str, Any]:
+    admin = _require_super_admin(request)
+    with db_session() as conn:
+        row = conn.execute("SELECT * FROM directory_grants WHERE id=? AND root_key=?", (grant_id, root_scope_key())).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="授权记录不存在。")
+        conn.execute("DELETE FROM directory_grants WHERE id=?", (grant_id,))
+        conn.execute("INSERT INTO directory_grant_audit(actor_id,action,grant_json,created_at) VALUES(?,?,?,?)",
+                     (admin["id"], "delete", json.dumps(dict(row), ensure_ascii=False), time.time()))
+    return {"ok": True, "message": "授权已撤销，后续请求立即按新权限校验。"}
 
 
 async def not_found_handler(request: Request, exc: Exception):

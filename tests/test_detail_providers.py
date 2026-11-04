@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
 """深度测试魔搭 ModelScope (去 ms- 前缀与不去) 和白山云的调用。"""
 
+import os
 import time
 import json
 import urllib.request
 import urllib.error
 
 def test_modelscope_tokens():
-    keys = [
-        "ms-e0157e57-a690-48a0-a07b-603b2c3a43cb",
-        "e0157e57-a690-48a0-a07b-603b2c3a43cb",
-        "ms-6e1945bb-484c-4be1-8002-a4b7e34f4f22",
-        "6e1945bb-484c-4be1-8002-a4b7e34f4f22",
-        "ms-28537548-91b5-4ccc-81b3-04734aed2bd4",
-        "28537548-91b5-4ccc-81b3-04734aed2bd4",
+    base_keys = [
+        os.environ.get("MODELSCOPE_KEY_LIN", ""),
+        os.environ.get("MODELSCOPE_KEY_QI", ""),
+        os.environ.get("MODELSCOPE_KEY_QI_BACKUP", ""),
     ]
+    keys = []
+    for k in base_keys:
+        if k:
+            keys.append(k)
+            keys.append(k.removeprefix("ms-"))
     models = [
         "deepseek-ai/DeepSeek-V4.1-Flash-1017",
         "deepseek-ai/DeepSeek-V4.1-Flash",
@@ -52,8 +55,10 @@ def test_modelscope_tokens():
 def test_baishan_headers():
     url = "https://api.edgefn.net/v1/chat/completions"
     keys = [
-        "sk-VBa1db6zidFzfstwC275Ea5909F342F5B41a0603DdAd7553",
-        "sk-zcQLM6VEmMzYjwtMC61673D62d87441b9aEe28F00fDf3c54"
+        k for k in (
+            os.environ.get("BAISHAN_KEY_LIN", ""),
+            os.environ.get("BAISHAN_KEY_QI", ""),
+        ) if k
     ]
     models = ["DeepSeek-V3.2", "deepseek-ai/DeepSeek-V4.1-Flash", "MiniMax-M2.5", "GLM-5"]
     print("\n--- 开始测试白山云 ---")

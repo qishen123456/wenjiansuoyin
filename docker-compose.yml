@@ -36,10 +36,22 @@ services:
       PREVIEW_ROWS: ${PREVIEW_ROWS:-100}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TZ: ${TZ:-Asia/Shanghai}
+      # 安全与审批体系
+      SENSITIVE_DIRS: ${SENSITIVE_DIRS:-}
+      AUTH_REQUIRED: ${AUTH_REQUIRED:-true}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
+      DOWNLOAD_TICKET_TTL_HOURS: ${DOWNLOAD_TICKET_TTL_HOURS:-2}
+      AUTO_SCAN_INTERVAL_MINUTES: ${AUTO_SCAN_INTERVAL_MINUTES:-30}
+      # 在线预览为应用内置（SheetJS 前端渲染），无需额外组件；此密钥仅保留给外部渲染器回拉场景
+      PREVIEW_SOURCE_KEY: ${PREVIEW_SOURCE_KEY:-}
     volumes:
       # 共享盘只读挂进容器：服务永远不应该有写网盘的权限
       - ${SHARE_HOST_PATH:-./网盘模拟数据}:${CONTAINER_SHARE_PATH:-/data/share}:ro
       - ./fast_file_finder/app.py:/app/app.py:ro
+      - ./fast_file_finder/governance.py:/app/governance.py:ro
+      - ./fast_file_finder/directory_access.py:/app/directory_access.py:ro
+      - ./fast_file_finder/demo_data.py:/app/demo_data.py:ro
       - ./fast_file_finder/static:/app/static:ro
       # 索引库用独立具名卷，且不要和宿主机 fast_file_finder/data 共用：
       - index_db:/app/data

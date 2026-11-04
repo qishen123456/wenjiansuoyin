@@ -25,7 +25,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-编辑 `.env`：先用样例数据体验可设置 `FILE_ROOT=./demo_data`；连接真实共享盘时替换成服务运行机器可访问的 UNC 路径或已挂载目录。详细参数见 [`fast_file_finder/README.md`](fast_file_finder/README.md)。
+完整模拟网盘随仓库以压缩包保存。先在项目根目录运行 `python scripts/restore_demo_data.py`，再将 `fast_file_finder/.env` 设置为 `FILE_ROOT=../网盘模拟数据`、`DEMO_MODE=true`。已有模拟目录不会被还原脚本覆盖，详情见 [`demo_assets/README.md`](demo_assets/README.md)。连接真实共享盘时替换成服务器可访问的 UNC 路径或已挂载目录。详细参数见 [`fast_file_finder/README.md`](fast_file_finder/README.md)。
 
 本机体验默认只监听 localhost：
 
@@ -52,3 +52,6 @@ uvicorn app:app --host 127.0.0.1 --port 8080
 ## 状态
 
 当前是可运行的内测 MVP，真实共享盘性能和大工作簿行为仍需要在授权测试目录验证。它尚未完成公司级 SSO、逐用户文件 ACL、生产审计和所有终端上的一键启动 Excel 验收，不应直接无保护地对全员开放。
+### 本机每日 Demo
+
+每日滚动报表、组织目录样式、占位文件清理与恢复方式见 [每日演示数据说明](docs/DEMO_DAILY_DATA.md)。演示模式默认关闭，生产编排固定关闭；仅本机模拟数据环境已开启。

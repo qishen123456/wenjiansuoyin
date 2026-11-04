@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文件预览</title>
+<style>
+  :root {
+    --bg: #FAFAFA; --paper: #ffffff; --ink: #18181b; --ink-secondary: #3f3f46;
+    --muted: #71717a; --line: #E4E4E7; --primary: #2563eb; --primary-subtle: #eff6ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--ink); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  .topbar { display: flex; align-items: center; gap: 14px; padding: 10px 18px; background: var(--paper); border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  .back-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink-secondary); font-size: 13px; cursor: pointer; text-decoration: none; white-space: nowrap; }
+  .back-btn:hover { background: var(--primary-subtle); color: var(--primary); border-color: var(--primary); }
+  .file-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .row-info { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .pager { display: flex; align-items: center; gap: 6px; }
+  .pager button { padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink-secondary); font-size: 12px; cursor: pointer; }
+  .pager button:hover:not(:disabled) { background: var(--primary-subtle); color: var(--primary); border-color: var(--primary); }
+  .pager button:disabled { opacity: .4; cursor: default; }
+  .pager .page-num { font-size: 12px; color: var(--ink-secondary); min-width: 86px; text-align: center; }
+
+  .sheet-tabs { display: flex; gap: 2px; padding: 0 18px; background: var(--paper); border-bottom: 1px solid var(--line); overflow-x: auto; flex-shrink: 0; }
+  .sheet-tab { padding: 8px 16px; font-size: 13px; color: var(--muted); cursor: pointer; border: none; background: none; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .sheet-tab:hover { color: var(--ink); }
+  .sheet-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+  .sheet-tab .tab-rows { font-size: 11px; color: #71717a; margin-left: 4px; }
+
+  .grid-wrap { flex: 1; overflow: auto; background: var(--paper); position: relative; }
+  .grid-wrap.loading { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px; }
+  .loading-text { color: var(--muted); font-size: 14px; }
+  .spinner { width: 28px; height: 28px; border: 3px solid var(--line); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .cap-notice { padding: 6px 14px; background: #fffbeb; color: #92400e; font-size: 12px; border-bottom: 1px solid #fde68a; flex-shrink: 0; display: none; }
+
+  table.sheet { border-collapse: collapse; table-layout: fixed; }
+  table.sheet td { border: 1px solid #e8ecf1; padding: 3px 8px; font-size: 12.5px; overflow: hidden; white-space: nowrap; height: 24px; max-width: 420px; background-clip: padding-box; }
+  table.sheet td.row-head { background: #FAFAFA; color: #71717a; font-size: 11px; text-align: center; min-width: 44px; width: 44px; position: sticky; left: 0; z-index: 2; border-color: var(--line); user-select: none; }
+  table.sheet td.empty { background: #fff; }
+  table.sheet tr:first-child td { position: sticky; top: 0; z-index: 3; background: #FAFAFA; color: var(--muted); font-size: 11px; text-align: center; font-weight: 500; border-color: var(--line); user-select: none; }
+  table.sheet tr:first-child td.row-head { z-index: 4; }
+
+  #watermark { position: fixed; inset: 0; pointer-events: none; z-index: 99; overflow: hidden; }
+  .wm-item { position: absolute; color: rgba(15, 23, 42, .07); font-size: 14px; white-space: nowrap; transform: rotate(-22deg); user-select: none; }
+
+  .error-box { padding: 60px 20px; text-align: center; color: var(--muted); font-size: 14px; line-height: 2; }
+
+  /* Match the workspace component finish while retaining workbook cell formatting. */
+  body{font-family:Inter,-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#f7f9fc;color:#33415c}
+  .topbar{border-bottom-color:#e8edf5;box-shadow:0 2px 8px #24355004;flex-wrap:wrap;gap:10px;padding:12px 18px}
+  .back-btn{border-radius:8px;border-color:#e1e7f1;background:#fafcfe;color:#70819b;font-size:12px;transition:.16s}
+  .back-btn:hover{background:#f0f4ff;border-color:#c4d3f4;color:#4d6cc7}
+  .file-title{font-size:14px;font-weight:550;white-space:normal;overflow:visible;overflow-wrap:anywhere;line-height:1.6;min-width:150px}
+  .pager button{border-color:#e2e8f1;border-radius:7px;transition:.16s;color:#7888a1}
+  .pager button:focus-visible,.back-btn:focus-visible,.sheet-tab:focus-visible{outline:3px solid #94aff480;outline-offset:3px}
+  .sheet-tabs{background:#fcfdff;border-bottom-color:#e8edf5;padding-top:3px;gap:5px}
+  .sheet-tab{font-size:12px;color:#8290a6;transition:.16s;border-radius:6px 6px 0 0}
+  .sheet-tab.active{background:#f0f4ff;color:#5272cd;border-bottom-color:#6f90e9}
+  @media(max-width:600px){.topbar{padding:10px 12px}.file-title{min-width:150px;font-size:12px}.row-info{font-size:10px}.pager{margin-left:auto}.sheet-tabs{padding-left:10px}.sheet-tab{padding:8px 11px}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <a class="back-btn" href="javascript:window.close()">关闭</a>
+  <div class="file-title" id="fileTitle">加载中…</div>
+  <div class="row-info" id="rowInfo"></div>
+  <div class="pager" id="pager" style="display:none">
+    <button id="prevPage">‹ 上一页</button>
+    <span class="page-num" id="pageNum"></span>
+    <button id="nextPage">下一页 ›</button>
+  </div>
+</div>
+<div class="sheet-tabs" id="sheetTabs"></div>
+<div class="cap-notice" id="capNotice">该表列数过多，仅预览前 200 列</div>
+<div class="grid-wrap loading" id="gridWrap"><div class="spinner"></div><div class="loading-text" id="loadingText">正在下载文件…</div></div>
+<div id="watermark"></div>
+
+<script>
+const PAGE_SIZE = 1000; // 每页行数（大文件分页预览）
+const fileId = new URLSearchParams(location.search).get("id");
+const worker = new Worker("/static/preview-worker.js?v=11");
+let sheetNames = [], curSheet = 0, curPage = 0, curData = null, pending = false;
+
+function colName(i) { let s = ""; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = (i - 1 - m) / 26; } return s; }
+function esc(t) { return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function setLoading(text) {
+  const wrap = document.getElementById("gridWrap");
+  wrap.className = "grid-wrap loading";
+  wrap.innerHTML = '<div class="spinner"></div><div class="loading-text">' + esc(text) + "</div>";
+}
+function setError(html) {
+  const wrap = document.getElementById("gridWrap");
+  wrap.className = "grid-wrap";
+  wrap.innerHTML = '<div class="error-box">' + html + "</div>";
+}
+
+worker.onerror = function (e) {
+  pending = false;
+  setError("预览引擎出错：" + esc(e.message || "未知错误") + "<br>请刷新重试，或改用下载查看。");
+};
+
+worker.onmessage = function (e) {
+  const d = e.data;
+  if (d.cmd === "ready") { console.log("worker ready"); return; }
+  pending = false;
+  if (d.cmd === "error") { setError(esc(d.message)); return; }
+  if (d.cmd === "loaded") {
+    console.log("loaded, sheets=" + d.sheets.length + ", bookSheetsMs=" + d.ms);
+    sheetNames = d.sheets;
+    renderTabs();
+    requestPage();
+    return;
+  }
+  if (d.cmd === "pageData") { console.log("pageData rows=" + (d.rows ? d.rows.length : 0) + ", parseMs=" + d.ms); renderGrid(d); }
+};
+
+function requestPage() {
+  if (pending) return;
+  pending = true;
+  setLoading("正在渲染第 " + (curPage + 1) + " 页…");
+  worker.postMessage({ cmd: "page", sheet: curSheet, page: curPage, pageSize: PAGE_SIZE });
+}
+
+function renderGrid(d) {
+  const wrap = document.getElementById("gridWrap");
+  if (d.empty) {
+    setError("该工作表为空");
+    document.getElementById("pager").style.display = "none";
+    document.getElementById("rowInfo").textContent = "";
+    document.getElementById("capNotice").style.display = "none";
+    return;
+  }
+  // 已确定总行数的 Sheet，在标签上补充行数
+  if (d.totalRows !== null && d.totalRows !== undefined && !sheetNames[d.sheet].rows) {
+    sheetNames[d.sheet].rows = d.totalRows;
+    renderTabs();
+  }
+  // 合并单元格映射
+  const covered = new Set();
+  const mergeSpan = {};
+  for (const m of d.merges) {
+    mergeSpan[m.sr + "," + m.sc] = { rs: m.er - m.sr + 1, cs: m.ec - m.sc + 1 };
+    for (let r = m.sr; r <= m.er; r++)
+      for (let c = m.sc; c <= m.ec; c++)
+        if (r !== m.sr || c !== m.sc) covered.add(r + "," + c);
+  }
+  const nCols = d.colWidths.length;
+  const parts = ['<table class="sheet"><tr><td class="row-head"></td>'];
+  for (let i = 0; i < nCols; i++) {
+    const w = d.colWidths[i];
+    parts.push("<td" + (w ? ' style="width:' + w + 'px"' : "") + ">" + colName(d.startCol + i) + "</td>");
+  }
+  parts.push("</tr>");
+  for (let ri = 0; ri < d.rows.length; ri++) {
+    const r = d.r0 + ri;
+    parts.push('<tr><td class="row-head">' + (r + 1) + "</td>");
+    const row = d.rows[ri];
+    for (let ci = 0; ci < nCols; ci++) {
+      const c = d.startCol + ci;
+      if (covered.has(r + "," + c)) continue;
+      const cell = row[ci];
+      const span = mergeSpan[r + "," + c];
+      let attrs = "";
+      if (span) {
+        if (span.cs > 1) attrs += ' colspan="' + span.cs + '"';
+        if (span.rs > 1) attrs += ' rowspan="' + span.rs + '"';
+      }
+      if (cell[1]) attrs += ' style="' + cell[1] + '"';
+      const txt = cell[0];
+      parts.push("<td" + attrs + (txt ? ' title="' + esc(txt) + '"' : ' class="empty"') + ">" + esc(txt) + "</td>");
+    }
+    parts.push("</tr>");
+  }
+  parts.push("</table>");
+  wrap.className = "grid-wrap";
+  wrap.innerHTML = parts.join("");
+  wrap.scrollTop = 0; wrap.scrollLeft = 0;
+
+  document.getElementById("capNotice").style.display = d.capped ? "block" : "none";
+  document.getElementById("rowInfo").textContent = d.hasMore
+    ? "已加载至第 " + (d.r1 + 1).toLocaleString() + " 行（后面还有）"
+    : "共 " + d.totalRows.toLocaleString() + " 行 · 当前 " + (d.r0 + 1) + "-" + (d.r1 + 1) + " 行";
+  // 总行数未解析完时页数未知，只显示当前页；是否还有下一页由 hasMore 决定
+  const totalPages = d.hasMore ? null : Math.max(1, Math.ceil(d.totalRows / PAGE_SIZE));
+  const showPager = d.hasMore || totalPages > 1;
+  const pager = document.getElementById("pager");
+  pager.style.display = showPager ? "flex" : "none";
+  document.getElementById("pageNum").textContent = totalPages
+    ? "第 " + (d.page + 1) + " / " + totalPages + " 页"
+    : "第 " + (d.page + 1) + " 页";
+  document.getElementById("prevPage").disabled = d.page === 0;
+  document.getElementById("nextPage").disabled = !d.hasMore && (totalPages === null || d.page >= totalPages - 1);
+}
+
+function renderTabs() {
+  const tabs = document.getElementById("sheetTabs");
+  tabs.innerHTML = "";
+  sheetNames.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.className = "sheet-tab" + (i === curSheet ? " active" : "");
+    b.textContent = s.name;
+    if (s.rows) {
+      const span = document.createElement("span");
+      span.className = "tab-rows";
+      span.textContent = s.rows.toLocaleString() + "行";
+      b.appendChild(span);
+    }
+    b.onclick = () => { if (curSheet !== i) { curSheet = i; curPage = 0; renderTabs(); requestPage(); } };
+    tabs.appendChild(b);
+  });
+}
+
+function buildWatermark(text) {
+  const wm = document.getElementById("watermark");
+  const stepX = 300, stepY = 180;
+  const cols = Math.ceil(window.innerWidth / stepX) + 2;
+  const rows = Math.ceil(window.innerHeight / stepY) + 2;
+  let html = "";
+  for (let i = 0; i < cols; i++)
+    for (let j = 0; j < rows; j++)
+      html += '<span class="wm-item" style="left:' + (i * stepX - 60 + (j % 2) * 140) + "px;top:" + (j * stepY) + 'px">' + esc(text) + "</span>";
+  wm.innerHTML = html;
+}
+
+async function init() {
+  if (!fileId) { setError("缺少文件参数"); return; }
+  // 水印（登录用户信息）
+  fetch("/api/auth/me").then(r => r.ok ? r.json() : null).then(d => {
+    if (d && d.user) buildWatermark(d.user.name + " " + d.user.phone + " · 仅供预览");
+  }).catch(() => {});
+
+  const res = await fetch("/api/file/" + encodeURIComponent(fileId) + "/preview-source/f");
+  if (res.status === 401) { setError("登录已过期，请回到系统重新登录后再预览"); return; }
+  if (!res.ok) { setError("文件加载失败（" + res.status + "）"); return; }
+
+  const cd = res.headers.get("Content-Disposition") || "";
+  const m = cd.match(/filename\*=(?:UTF-8|utf-8)''([^;]+)/i);
+  const name = m ? decodeURIComponent(m[1]) : "文件预览";
+  document.getElementById("fileTitle").textContent = name;
+  document.title = name + " - 预览";
+
+  // 流式读取 + 实时下载进度，大文件不再像"卡死"
+  const total = Number(res.headers.get("Content-Length") || 0);
+  const reader = res.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.length;
+    setLoading(total
+      ? "正在下载文件… " + (loaded / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB"
+      : "正在下载文件… " + (loaded / 1048576).toFixed(1) + " MB");
+  }
+  const buf = new Uint8Array(loaded);
+  let off = 0;
+  for (const c of chunks) { buf.set(c, off); off += c.length; }
+
+  setLoading("正在解析文件（大文件约需 5-15 秒，仅打开时一次，之后翻页切表秒开）…");
+  worker.postMessage({ cmd: "load", buffer: buf.buffer }, [buf.buffer]); // 转移所有权，零拷贝
+}
+
+document.getElementById("prevPage").onclick = () => { if (curPage > 0) { curPage--; requestPage(); } };
+document.getElementById("nextPage").onclick = () => { curPage++; requestPage(); };
+window.addEventListener("resize", () => { const t = document.querySelector(".wm-item"); if (t) buildWatermark(t.textContent); });
+init();
+</script>
+</body>
+</html>

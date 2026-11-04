@@ -25,6 +25,8 @@ services:
       # 生产必须显式给出共享盘在容器内的挂载点，避免悄悄用了镜像默认值
       FILE_ROOT: ${CONTAINER_SHARE_PATH:?必须指定容器内网盘挂载点，如 /data/share}
       APP_ACCESS_TOKEN: ${APP_ACCESS_TOKEN:?生产必须配置非空访问令牌}
+      # 演示模式会生成示例报表；生产共享盘只读，固定关闭。
+      DEMO_MODE: "false"
     volumes: !override
       - ${SHARE_HOST_PATH:?必须指定宿主机上的共享盘绝对路径}:${CONTAINER_SHARE_PATH:-/data/share}:ro
       # 索引库落到宿主机目录，方便纳入现有备份任务；容器删除后重建即恢复

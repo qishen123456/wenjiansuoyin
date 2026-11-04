@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "root_directory": "网盘模拟数据",
+  "file_count": 119668,
+  "total_bytes": 46779405,
+  "archive_bytes": 44378780,
+  "archive_sha256": "3dfc04f0c5a26313c9c60675efe3040f9a30557a1de057684b2bea33e2a7ec1a",
+  "dataset_sha256": "74fd37f2ab7595d7b43f2b28fd9e2978395e4de124319b70deb258eaf89ed978",
+  "excluded_metadata": [
+    ".DS_Store",
+    "._*",
+    "Thumbs.db",
+    "desktop.ini"
+  ]
+}

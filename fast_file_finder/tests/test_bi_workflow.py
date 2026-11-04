@@ -19,6 +19,11 @@ import app as application  # noqa: E402
 
 @pytest.fixture()
 def client_and_sample(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # This fixture tests BI independently of the login gate; role boundaries have dedicated tests.
+    monkeypatch.setattr(application, "AUTH_REQUIRED", False)
+    monkeypatch.setattr(application, "DEMO_MODE", False)
+    monkeypatch.setattr(application, "DIRECTORY_ACL_ENABLED", False)
+    monkeypatch.setattr(application, "APP_ACCESS_TOKEN", "")
     root = tmp_path / "share"
     root.mkdir()
     monkeypatch.setattr(application, "FILE_ROOT", str(root))
