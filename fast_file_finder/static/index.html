@@ -1363,8 +1363,6 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 .btn-table-action:hover { background: var(--surface-subtle); border-color: var(--line-strong); }
 .btn-table-action.primary { background: var(--brand); border-color: var(--brand); color: #FFF; font-weight: 600; }
 .btn-table-action.danger { color: var(--danger); }
-/* 公网/他人电脑访问时，「打开」无法调起对方电脑的 Excel，隐藏该本机专属操作；同位置已有「预览」按钮可用 */
-body.remote-mode .btn-open-local { display: none !important; }
 .breadcrumb-part { color: var(--muted); }
 .breadcrumb-sep { color: var(--faint); margin: 0 2px; }
 
@@ -3441,22 +3439,20 @@ function isLocalHost() {
   return ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
 }
 
-// 「打开」按钮文案随访问方式切换，避免在别人电脑上误导用户去装 Excel。
-function openBtnLabel(localLabel) {
-  return isLocalHost() ? localLabel : '预览';
-}
+// 「打开」按钮的悬停提示，随访问方式切换，提前告知用户点击后会走哪条路径。
 function openBtnTitle() {
   return isLocalHost()
     ? '用本机默认程序（Excel/WPS）直接打开'
-    : '在浏览器中在线预览（任何人的电脑都能打开，无需安装 Office）';
+    : '公网访问无法调起本机 Excel，点击将改为浏览器内在线预览（无需安装 Office）';
 }
 
 async function openFileLocally(fileId) {
   // 两条路径：
   //   1. 服务器本机访问（localhost）→ 调本地默认程序 Excel/WPS 打开；
-  //   2. 公网/他人电脑访问 → 跨机器无法调起对方 Excel，改为浏览器内 SheetJS 在线预览。
+  //   2. 公网/他人电脑访问 → 跨机器无法调起对方 Excel，提示后改为浏览器内 SheetJS 在线预览。
   if (!isLocalHost()) {
     previewFile(fileId);
+    toast('公网访问无法调起本机 Excel，已为你打开浏览器内在线预览');
     return;
   }
   try {
@@ -3518,7 +3514,7 @@ function applyUserUI() {
   // 非管理员隐藏"人员与账号权限"入口（该页接口本身也已被后端限制为管理员）
   const permTab = $('navPermTab');
   if (permTab) permTab.style.display = currentUser?.role === 'super_admin' ? '' : 'none';
-  // 公网/他人电脑访问：本机专属操作（调本地 Excel）不可用，隐藏并改用在线预览
+  // 标记当前访问方式（本机 / 公网），供按钮提示与后续样式扩展使用；按钮本身不隐藏
   document.body.classList.toggle('remote-mode', !isLocalHost());
 }
 
@@ -4318,7 +4314,7 @@ function renderCatalogTable(items, total, page, pageSize) {
         <td class="catalog-time-cell" data-time-field="mtime">${renderFileTime(f.mtime)}</td>
         <td style="text-align:right">
           <div class="table-action-btns" style="justify-content:flex-end">
-            <button class="btn-table-action primary btn-open-local" onclick="openFileLocally(${f.id})" title="用本机默认程序（Excel/WPS）直接打开">打开</button>
+            <button class="btn-table-action primary btn-open-local" onclick="openFileLocally(${f.id})" title="${openBtnTitle()}">打开</button>
             <button class="btn-table-action" onclick="previewFile(${f.id})" title="在浏览器中查看表格内容">预览</button>
             <button class="btn-table-action" onclick="handleCatalogDownload(${idx})" title="管理员直接下载；成员需申请审批">下载</button>
             <button class="btn-table-action" onclick="copyCatalogPath(${idx})" title="复制共享路径">复制</button>
@@ -5827,7 +5823,7 @@ function renderInspectorDetail(r) {
         <span class="inspector-file-times">修改 ${renderFileTime(r.mtime)}<br>创建 ${renderFileTime(r.ctime)}</span>
       </div>
       <div class="inspector-quick-actions">
-        <button class="btn-action-primary" style="padding:4px 10px;font-size:11.5px" onclick="openFileLocally(${r.id})" title="${openBtnTitle()}">${openBtnLabel('本机打开')}</button>
+        <button class="btn-action-primary" style="padding:4px 10px;font-size:11.5px" onclick="openFileLocally(${r.id})" title="${openBtnTitle()}">本机打开</button>
         <button class="btn-action-secondary" style="padding:4px 10px;font-size:11.5px" onclick="handleSearchDownload(${selectedResultIndex})">下载</button>
         <button class="btn-action-secondary" style="padding:4px 10px;font-size:11.5px" onclick="copyUncPath(${selectedResultIndex})">⧉ 复制路径</button>
       </div>
