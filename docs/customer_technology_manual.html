@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>企业文件资产智能检索中心 · 产品手册</title>
+<style>
+:root {
+  --paper:#fafaf7; --white:#fff; --ink:#182d3e; --navy:#123759; --blue:#214f7b;
+  --pale:#eaf0f4; --soft:#536675; --line:#d1d8db;
+}
+* { box-sizing:border-box }
+html,body { width:100%; height:100%; margin:0; overflow:hidden }
+body { font:26px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; color:var(--ink); background:#e1e5e7 }
+button { font:inherit; color:inherit; cursor:pointer }
+button:focus-visible { outline:3px solid #487dad; outline-offset:4px }
+#deck { width:1920px; height:1080px; position:absolute; transform-origin:top left; background:var(--paper) }
+.slide { display:none; width:1920px; height:1080px; position:relative; overflow:hidden; padding:64px 112px 118px; background:var(--paper) }
+.slide.on { display:block; animation:reveal 150ms ease-out }
+@keyframes reveal { from {opacity:.3} to {opacity:1} }
+@media(prefers-reduced-motion:reduce) { .slide.on {animation:none} }
+h1,h2,h3,p,figure {margin:0}
+h1,h2,h3 {color:var(--navy)}
+.mast {display:flex; justify-content:space-between; align-items:center; height:39px; font-size:21px; font-weight:550; color:var(--soft); letter-spacing:.04em}
+.mast span:first-child {display:flex; align-items:center; gap:18px}
+.mast span:first-child:before {content:""; display:block; width:30px; height:22px; border:4px solid var(--navy); border-top-width:8px; border-radius:2px}
+.pagehead {margin:47px 0 35px}
+h2 {font-size:54px; line-height:1.25; letter-spacing:-.045em; font-weight:700}
+.pagehead p {color:var(--soft); font-size:27px; margin-top:15px}
+.fine {position:absolute; left:112px; right:112px; bottom:115px; color:var(--soft); font-size:21px}
+svg text {font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+.cover-layout {display:grid; grid-template-columns:.95fr 1.05fr; align-items:center; gap:42px; margin-top:45px; height:715px}
+.cover h1 {font-size:56px; line-height:1.23; letter-spacing:-.035em}
+.cover h1 span {display:block}
+.cover-copy {margin-top:34px; font-size:28px; line-height:1.75; color:var(--soft)}
+.cover figure {width:100%; height:100%; display:grid; place-items:center; background:var(--pale); border-radius:4px}
+.cover figure svg {width:100%; height:auto}
+.cover-index {margin-top:85px; width:575px; display:flex; justify-content:space-between; padding:19px 0; border-top:2px solid var(--navy); border-bottom:1px solid var(--line); font-size:24px; color:var(--navy)}
+.data-spread {display:grid; grid-template-columns:1.3fr 1fr; gap:90px; margin-top:56px}
+.stat-main {padding:30px 0 40px;border-top:2px solid var(--navy);border-bottom:1px solid var(--line)}
+.stat-main strong {font:600 132px/1.2 "Helvetica Neue",Arial,sans-serif; letter-spacing:-.07em; color:var(--navy)}
+.stat-main em {font-size:31px;margin-left:23px;font-style:normal}
+.stat-list {display:flex;gap:100px;margin-top:23px}
+.stat-list b {display:block;color:var(--navy);font:550 55px/1.3 "Helvetica Neue",Arial,sans-serif;letter-spacing:-.04em}
+.stat-list span,.caption {font-size:24px;color:var(--soft)}
+.formats {padding:40px 47px;background:#eaf0f3;align-self:stretch}
+.formats figcaption {font-weight:650;color:var(--navy);font-size:29px}
+.format {display:grid;grid-template-columns:90px 1fr 80px;align-items:center;gap:18px;margin-top:44px;color:var(--navy)}
+.format b {font-size:24px}.format em {font-size:27px;font-weight:600;font-style:normal;text-align:right}
+.track {height:12px;background:#d5e0e6}.track i {display:block;height:100%;background:var(--blue)}
+.scenario {display:grid;grid-template-columns:520px 1fr;gap:65px;margin-top:44px}
+.quote {color:var(--navy);font-size:36px;line-height:1.55;font-weight:600;letter-spacing:-.02em}
+.quote::before {content:"“";display:block;height:66px;font:106px/.95 Georgia,serif;color:var(--blue)}
+.side-copy {font-size:26px;color:var(--soft);margin-top:30px;max-width:450px}
+.surface {background:white;border:1px solid #c7d0d7;border-radius:8px;overflow:hidden}
+.surface-head {display:flex;align-items:center;justify-content:space-between;padding:20px 30px;border-bottom:1px solid var(--line);font-size:23px;color:var(--soft)}
+.surface-head strong {color:var(--navy);font-weight:650}.surface-body {padding:30px}
+.search-field {display:flex;align-items:center;gap:15px;color:var(--navy);border-bottom:2px solid var(--blue);padding:10px 0 16px;font-weight:600}
+.search-icon {height:23px;width:23px;border-radius:50%;border:3px solid currentColor;position:relative;margin-right:4px}
+.search-icon::after {position:absolute;content:"";width:12px;height:3px;background:currentColor;right:-8px;bottom:-5px;transform:rotate(45deg)}
+.inlinefilters {display:flex;gap:14px;align-items:center;margin:17px 0 26px;color:var(--soft);font-size:23px}
+.inlinefilters span + span:before {content:"·";margin-right:14px}
+.file-row {display:grid;grid-template-columns:60px 1fr auto;align-items:center;gap:18px;padding:21px 17px;border-top:1px solid var(--line)}
+.file-row.chosen {background:var(--pale);border-left:4px solid var(--blue);padding-left:13px}
+.file-icon {border:1.5px solid #8ba3b7;border-radius:4px;background:#fff;font:650 16px/48px Arial,sans-serif;text-align:center;color:var(--blue)}
+.file-name {font-size:25px;font-weight:630;color:var(--ink)}
+.file-path,.date small {display:block;color:var(--soft);font-size:21px;font-weight:400}
+.date {text-align:right;font-size:22px;font-variant-numeric:tabular-nums}
+.dialogue {display:grid;grid-template-columns:1.05fr .95fr;gap:94px;align-items:center;margin-top:48px}
+.exchange {background:var(--pale);padding:40px 42px;min-height:430px}
+.request {background:var(--navy);color:white;padding:20px 28px;max-width:86%;margin-left:auto;border-radius:10px 10px 0 10px;font-size:27px}
+.reply-label {margin:38px 0 12px;color:var(--blue);font-size:22px;font-weight:650}
+.reply {padding:22px 24px;background:white;width:max-content;max-width:100%;font-size:25px;border-radius:0 7px 7px 7px}
+.reply small {display:block;margin-top:12px;color:var(--soft);font-size:22px}
+.term {display:grid;grid-template-columns:150px 1fr;gap:35px;padding:22px 0;border-bottom:1px solid var(--line);font-size:25px}
+.term:first-child {border-top:2px solid var(--navy)}.term b{color:var(--navy)}
+.org-map {display:grid;grid-template-columns:1.15fr .85fr;gap:2px;margin-top:42px;background:var(--line);border:1px solid var(--line)}
+.org-tree,.org-detail {padding:32px 40px;background:white}
+.org-detail {background:var(--pale);display:flex;flex-direction:column;justify-content:center}
+.org-detail h3 {margin:12px 0 18px;font-size:38px}.org-detail p{font-size:26px;line-height:1.7}
+.org-title {font-size:22px;color:var(--soft);margin-bottom:15px}
+.treegroup {border-left:1px solid #c3ced6;margin-left:25px;padding-left:30px}
+.node {display:flex;align-items:center;gap:18px;min-height:70px;padding:9px 15px;color:var(--soft);font-size:26px}
+.node.selected {background:var(--navy);color:white;border-radius:4px}
+.folder {position:relative;width:36px;height:25px;border-radius:2px;flex:none;background:#7290a8}
+.folder::before {content:"";position:absolute;top:-5px;left:0;width:15px;height:8px;border-radius:2px;background:inherit}.selected .folder {background:white}
+#chrome {position:absolute;bottom:0;left:112px;right:112px;height:86px;display:flex;justify-content:space-between;align-items:center;border-top:1px solid #bdc8cd;background:var(--paper);z-index:3}
+#chrome>div {display:flex;align-items:center;gap:22px}
+#counter {font-size:22px;font-variant-numeric:tabular-nums;color:var(--navy);white-space:nowrap}
+#steps {display:flex;gap:4px}#steps i {width:29px;height:3px;background:var(--line)}#steps .read {background:var(--blue)}
+#chrome button,#notes button {border:0;background:transparent;padding:8px 6px;font-size:21px;color:var(--soft)}
+#chrome button:hover,#notes button:hover {color:var(--navy);text-decoration:underline}
+#chrome .arrow {width:46px;height:40px;border:1px solid var(--line);border-radius:5px;padding:0;font-size:25px;color:var(--navy)}
+button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:none}
+#notes {position:absolute;z-index:4;bottom:95px;left:112px;right:112px;background:var(--navy);color:white;padding:23px 35px;border-radius:6px}
+#notes[hidden] {display:none}#notes button {color:white;float:right}#notes p {white-space:pre-line;font-size:26px}#notes b {font-size:21px;color:#d1e0ed}#notes button:hover{color:white}
+@page {size:1920px 1080px;margin:0}
+@media print {
+  html,body {height:auto;width:1920px;background:white;overflow:visible}
+  #deck {position:static;transform:none!important;width:1920px;height:auto}
+  .slide,.slide.on {display:block;position:relative;break-after:page;page-break-after:always;break-inside:avoid;animation:none}
+  .slide:last-of-type {break-after:auto;page-break-after:auto}
+  #chrome,#notes {display:none!important}
+  * {-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+.casebook,.accessboard{display:grid;gap:70px;margin-top:43px;align-items:start}
+.casebook{grid-template-columns:1.05fr 1fr}
+.casebook h3,.accessboard h3,.casebook h4,.casebook p,.accessboard p,.casefacts,.casefacts dd{margin:0}
+.caseproof{border:1.5px solid var(--line);border-top:5px solid var(--navy);background:#fff}
+.casecap,.casefoot{padding:19px 36px;color:var(--navy);font-size:23px}
+.casecap{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);font-weight:650}
+.casealert{font-size:22px;color:#964125;background:#f8ede6;padding:3px 15px;border-radius:3px}
+.casebody{padding:24px 36px 20px}
+.casefield,.accesscaption{color:var(--blue);font-size:22px;line-height:1.5;font-weight:600}
+.casebody h3{color:var(--navy);font-size:42px;line-height:1.45;margin:3px 0 20px}
+.caseissue{border-left:3px solid #ab674b;padding-left:21px}
+.caseissue p{font-size:28px;line-height:1.55;margin-top:5px}
+.casefacts{display:flex;gap:62px;border-top:1px solid var(--line);margin-top:22px;padding-top:16px}
+.casefacts dt{font-size:21px;color:#51616c}.casefacts dd{font-size:25px;color:var(--navy);margin-top:4px}
+.casefoot{font-size:21px;border-top:1px solid var(--line);background:#f3f5f3}
+.caseresolve{padding:10px 0 0 12px}.caseresolve h3{font-size:40px;line-height:1.4;margin:5px 0 31px}
+.casestep{position:relative;padding:0 0 33px 41px}.casestep:not(.last):before{content:'';position:absolute;top:24px;bottom:-7px;left:8px;width:2px;background:#a8b7c5}
+.casestep i{position:absolute;left:0;top:11px;width:18px;height:18px;border:3px solid var(--blue);border-radius:50%;background:white}
+.casestep h4{font-size:29px;line-height:1.45}.casestep p,.caseauto span{font-size:25px;color:#51616c;line-height:1.55;margin-top:5px}
+.caseauto{border-top:1px solid var(--line);padding-top:23px}.caseauto strong{color:var(--blue);font-size:26px;margin-right:20px}
+.accessboard{grid-template-columns:.73fr 1.5fr;gap:0;border:1px solid var(--line);border-top:5px solid var(--navy);background:#fff}
+.accessfile{background:var(--navy);color:#fff;padding:32px 40px;min-height:475px;align-self:stretch;display:flex;flex-direction:column;align-items:flex-start}
+.accesscaption{color:#e4ecf1}.accessdoc{width:144px;height:160px;margin:38px 0 22px;color:#d5e0e9}.accessfile h3{font-size:39px;color:#fff}.accessfile p{font-size:23px;color:#e4ecf1;margin-top:6px}
+.accessledger{padding:29px 45px 15px}
+.ledgerhead,.ledgerrow{display:grid;grid-template-columns:28% 1fr;gap:15px}
+.ledgerhead{color:#536675;font-size:21px;border-bottom:1.5px solid var(--navy);padding-bottom:12px}
+.ledgerrow{align-items:baseline;padding:19px 0;border-bottom:1px solid var(--line)}
+.ledgerrow:last-child{border:0}.ledgerrow b{color:var(--blue);font-size:26px}.ledgerrow strong{font-size:29px}.ledgerrow p{font-size:25px;color:#51616c;margin-top:4px}
+
+#trail{font-size:21px;color:var(--soft)}
+
+/* Technical companion pages: shared typography and space with the original deck */
+.tech-lead{font-size:27px;color:var(--soft);margin-top:14px;line-height:1.55}
+.tech-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;margin-top:39px}
+.tech-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.tech-grid.four{grid-template-columns:repeat(4,minmax(0,1fr));gap:17px}
+.tech-panel{border:1px solid #cdd8e0;border-top:5px solid var(--navy);background:#fff;padding:30px 31px;min-height:235px}
+.tech-panel.soft{background:#edf3f6}.tech-panel .step-num{font:600 20px Arial,sans-serif;letter-spacing:.13em;color:#66829b;margin-bottom:17px}
+.tech-panel h3{font-size:31px;line-height:1.3;margin:0 0 13px;font-weight:650}
+.tech-panel p,.tech-panel li{color:#485e70;font-size:24px;line-height:1.52}
+.tech-panel ul{margin:8px 0;padding-left:27px}
+.tech-panel .sub{font-size:21px;color:#6d8290;margin-top:13px}
+.tech-strip{display:flex;align-items:stretch;gap:0;margin-top:48px}
+.tech-node{flex:1;background:#fff;border:1.5px solid #ced8e0;padding:24px 16px;text-align:center;min-width:0}
+.tech-node strong{display:block;color:var(--navy);font-size:27px;margin-bottom:7px}.tech-node span{display:block;font-size:21px;color:#526b78;line-height:1.4}
+.tech-arrow{display:grid;place-items:center;flex:0 0 42px;color:#4b7697;font-size:35px}
+.tech-kicker{font-size:20px;letter-spacing:.12em;text-transform:uppercase;color:#477194;font-weight:700;margin-bottom:12px}
+.tech-rule{height:1px;background:#c7d3dc;margin:24px 0}
+.tech-split{display:grid;grid-template-columns:1.12fr .88fr;gap:55px;margin-top:36px}
+.tech-feature{border-left:5px solid var(--navy);padding:4px 0 4px 26px;margin-bottom:27px}
+.tech-feature h3{font-size:29px;margin:0 0 8px}.tech-feature p{font-size:24px;color:#516675;line-height:1.53}
+.tech-note{margin-top:22px;font-size:22px;line-height:1.5;color:#556d7e;background:#eaf1f5;border-left:4px solid #6389a5;padding:17px 25px}
+.tech-metric{border:1px solid #cfdce4;background:#fff;padding:30px 32px;margin-top:19px}
+.tech-metric .metric-value{font:650 84px/1.1 Arial,sans-serif;color:var(--navy);letter-spacing:-.055em}
+.tech-metric .metric-caption{font-size:23px;color:#596e80}
+.tech-compare{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:38px}
+.tech-compare .tech-metric{margin:0}
+.tech-barrow{margin-top:23px;display:grid;grid-template-columns:160px 1fr 100px;gap:18px;align-items:center;font-size:24px}
+.tech-track{height:26px;background:#d7e2e8}.tech-track i{display:block;height:100%;background:var(--navy)}
+.tech-track .after{background:#7394ac}
+.tech-label{display:inline-flex;gap:10px;align-items:center;font-size:22px;color:#365c7b;border:1px solid #a8c1d2;background:#f4f8fa;padding:8px 14px;margin-right:9px;margin-bottom:9px}
+.tech-bullets{margin-top:16px;padding-left:28px}.tech-bullets li{font-size:25px;line-height:1.6;margin:10px 0}
+.tech-call{padding:25px 32px;background:#163b5a;color:#fff;margin-top:32px;font-size:26px;line-height:1.45}
+.tech-call strong{color:white}
+.tech-code{font:600 21px/1.5 ui-monospace,monospace;background:#e9f0f4;padding:18px 22px;border:1px solid #c5d4df;color:#1f5276;overflow-wrap:anywhere}
+.tech-status{display:inline-block;font-size:19px;padding:5px 13px;background:#e5f1eb;color:#23644a;font-weight:650}
+.tech-status.warn{background:#f8ece5;color:#8a553c}
+@media print {.tech-panel,.tech-metric,.tech-node{break-inside:avoid}}
+
+.tech-slide[data-name="限行预览"] .tech-grid{margin-top:22px}
+.tech-slide[data-name="限行预览"] .tech-split{margin-top:24px}
+</style></head><body><main id="deck">
+<section class="slide cover on" data-name="产品手册" data-notes="这本手册从一份新品简报讲起。|员工要判断该用哪一份，管理员要知道简报按时交了没有。">
+<header class="mast"><span>文件资产管理</span><span>产品手册</span></header>
+<div class="cover-layout">
+  <div>
+    <h1><span>企业文件资产</span><span>智能检索中心</span></h1>
+    <p class="cover-copy">从十万级共享盘资产中快速找到对的文件。<br>把扫描、检索、AI、预览与权限控制<br>变成一套可解释、可验收的技术链路。</p>
+    <div class="cover-index"><span>业务场景</span><span>技术引擎</span><span>权限交付</span></div>
+  </div>
+  <figure>
+    <svg viewBox="0 0 840 690" role="img" aria-label="企业目录中的新品简报档案夹。抽出的简报上标有文件名、格式和所属目录。">
+      <g transform="matrix(.91,-.12,.16,.96,37,113)" stroke-linejoin="round">
+        <path d="M62 151V80q0-10 10-10h148l30 31h402q12 0 12 12v354H62Z" fill="#cedde7" stroke="#123759" stroke-width="2.5"/>
+        <path d="M103 181V60q0-10 10-10h156l30 31h304q12 0 12 12v327H103Z" fill="#dde7ed" stroke="#123759" stroke-width="2"/>
+        <path d="M143 348V15h418l58 57v290Z" fill="#fff" stroke="#123759" stroke-width="2.5"/>
+        <path d="M561 15v57h58" fill="#e9eff2" stroke="#123759" stroke-width="2.5"/>
+        <text x="174" y="75" fill="#526b7e" font-size="21">产品研发　/　新品上市简报库</text>
+        <text x="171" y="145" fill="#123759" font-size="46" font-weight="650">新品上市简报</text>
+        <path d="M175 177h385M175 210h260" stroke="#a5b9c7" stroke-width="2"/>
+        <path d="M64 466 24 222q-2-13 12-13h177l35 34h426q14 0 12 13l-29 232q-2 13-16 13H85q-15 0-21-35Z" fill="#123759" stroke="#123759" stroke-width="3"/>
+        <path d="M44 227h157l36 35h429" fill="none" stroke="#87a5be" stroke-width="2"/>
+        <rect x="94" y="311" width="278" height="89" rx="3" fill="#fafaf7"/>
+        <text x="115" y="345" fill="#536675" font-size="18">所属目录</text>
+        <text x="113" y="381" fill="#123759" font-size="28" font-weight="600">新品上市简报库</text>
+        <rect x="544" y="430" width="88" height="38" rx="2" fill="none" stroke="#9ab2c6"/>
+        <text x="588" y="457" text-anchor="middle" font-family="Arial" font-size="22" fill="white">XLSX</text>
+      </g>
+    </svg>
+  </figure>
+</div>
+</section>
+<section class="slide" data-name="报表资产" data-notes="先看这个演示环境里的文件规模，索引就是系统为检索记下的文件信息。|这些数来自同一份界面演示资料，可以用来理解目录和报表的量级。">
+<header class="mast"><span>企业文件资产中心</span><span>报表资产</span></header>
+<div class="pagehead"><h2>先看有哪些报表可查</h2><p>系统把文件名、目录与时间等元数据建立索引；普通检索不扫描网盘，也不建立正文全文索引。</p></div>
+<div class="data-spread">
+  <div><div class="stat-main"><div class="caption">模拟环境已索引报表（并非客户生产文件）</div><strong>130,452</strong><em>份</em></div>
+    <div class="stat-list"><div><b>25</b><span>个事业部</span></div><div><b>4,829</b><span>个业务目录</span></div></div>
+  </div>
+  <figure class="formats"><figcaption>已索引报表的格式分布</figcaption>
+    <div class="format"><b>XLSX</b><div class="track"><i style="width:47%"></i></div><em>47%</em></div>
+    <div class="format"><b>XLS</b><div class="track"><i style="width:33%"></i></div><em>33%</em></div>
+    <div class="format"><b>CSV</b><div class="track"><i style="width:20%"></i></div><em>20%</em></div>
+  </figure>
+</div>
+<p class="fine">数据来自现有界面演示快照，统计日期未标注；其中含大量零字节占位文件，只能证明目录检索能力，不能证明真实报表预览质量。</p>
+</section>
+<section class="slide" data-name="文件检索" data-notes="晨会要用产品研发的简报，这里特意摆了两份同名文件。|先看所属目录，再核对修改时间和报表里的业务期次。">
+<header class="mast"><span>企业文件资产中心</span><span>文件检索</span></header>
+<div class="pagehead"><h2>同名简报，先看所属目录</h2><p>知道报表名时，用关键词搜索，再按日期和格式缩小范围。</p></div>
+<div class="scenario"><div><p class="quote">我要找产品研发的<br>新品上市简报。</p><p class="side-copy">名称相同，来源部门不同。选中研发目录里的文件，再核对业务期次。</p></div>
+<div class="surface"><div class="surface-head"><strong>检索结果</strong><span>流程示意</span></div><div class="surface-body">
+<div class="search-field"><i class="search-icon" aria-hidden="true"></i>新品上市简报</div>
+<div class="inlinefilters"><span>按修改日期</span><span>XLSX</span><span>严格匹配</span></div>
+<div class="file-row chosen"><span class="file-icon">XLSX</span><div><div class="file-name">新品上市简报.xlsx</div><span class="file-path">产品研发 / 新品上市简报库</span></div><span class="date">2026-11-04<small>修改日期</small></span></div>
+<div class="file-row"><span class="file-icon">XLSX</span><div><div class="file-name">新品上市简报.xlsx</div><span class="file-path">华东大区 / 线上自营</span></div><span class="date">2026-11-03<small>修改日期</small></span></div>
+</div></div></div>
+<p class="fine">文件、路径及日期组合为选表示例。修改时间反映文件改动，业务期次以报表内容为准。</p>
+</section>
+<section class="slide" data-name="AI 找表" data-notes="有时同事只记得某份表是做什么的，说不出完整文件名。|这时可以用业务语言提问，让 AI 找表根据目录和命名规律提示一个查找方向。">
+<header class="mast"><span>企业文件资产中心</span><span>AI 找表</span></header>
+<div class="pagehead"><h2>记不住表名，也能描述需求</h2><p>说出业务主题和用途，让 AI 找表提示可能的文件位置。</p></div>
+<div class="dialogue"><div class="exchange"><div class="request">晨会要看新品上市情况，简报去哪找？</div>
+<div class="reply-label">AI 找表 · 对话示意</div><div class="reply">可以先看「新品上市简报库」。<small>产品研发　/　新品上市简报库</small></div></div>
+<div><div class="term"><b>怎么问</b><span>说清业务主题，例如“新品上市”。</span></div><div class="term"><b>依据什么</b><span>目录结构和文件命名规律。</span></div><div class="term"><b>怎么确认</b><span>打开候选目录，核对简报内容。</span></div></div></div>
+<p class="fine">对话仅演示提问方式与位置提示，具体文件由使用者核对。</p>
+</section>
+<section class="slide" data-name="目录与监控" data-notes="如果熟悉业务归属，也可以顺着组织目录找到新品简报。|选中简报库即可把这个目录设为监控对象，之后通过规则检测更新情况。">
+<header class="mast"><span>企业文件资产中心</span><span>目录与监控</span></header>
+<div class="pagehead"><h2>沿着组织目录找到交付位置</h2><p>目录节点显示文件总数与今日新增，选中目录即可设置监控。</p></div>
+<div class="org-map"><div class="org-tree"><div class="org-title">组织目录 · 路径示意</div>
+<div class="node">⌄ <i class="folder"></i>企业网盘总目录</div><div class="treegroup"><div class="node">⌄ <i class="folder"></i>产品研发</div><div class="treegroup"><div class="node selected"><i class="folder"></i>新品上市简报库</div></div><div class="node">› <i class="folder"></i>华东大区</div><div class="node">› <i class="folder"></i>华南大区</div></div></div>
+<div class="org-detail"><span class="caption">所选目录</span><h3>新品上市简报库</h3><p>由新品运营组跟进，每日更新。<br>将这个目录设为监控对象，<br>定时或手动检查是否按时归档。</p></div></div>
+<p class="fine">维护人员可查看索引状态、手动刷新或设置定时任务，并同步组织架构。</p>
+</section>
+<section class="slide" data-name="归档跟进" data-notes="每天应更新的新品简报到了检测节点还没出现，就会生成带编号的逾期待办。|责任人可提交完成凭证，管理员审核，扫描到符合条件的新文件也可自动关闭。">
+<header class="mast"><span>企业文件资产中心</span><span>归档跟进</span></header>
+<div class="pagehead"><h2>该交的简报，今天还没更新</h2><p>待办指向具体的交付任务，责任人可以直接跟进。</p></div>
+<div class="casebook">
+ <article class="caseproof"><div class="casecap"><span>归档待办</span><span class="casealert">已逾期</span></div>
+ <div class="casebody"><div class="casefield">监控任务</div><h3>新品简报</h3>
+ <div class="caseissue"><span class="casefield">异常原因</span><p>已到检测节点，目录里仍没有<br>今天应更新的简报。</p></div>
+ <dl class="casefacts"><div><dt>责任组</dt><dd>新品运营组</dd></div><div><dt>更新要求</dt><dd>每日更新</dd></div></dl></div>
+ <div class="casefoot">系统为每项逾期待办分配工单编号。</div></article>
+ <aside class="caseresolve"><div class="casefield">处理路径</div><h3>怎样关闭这项待办？</h3>
+ <div class="casestep"><i></i><h4>责任人提交凭证</h4><p>补交简报，提交完成凭证。</p></div>
+ <div class="casestep last"><i></i><h4>管理员审核</h4><p>核对凭证，处理这项待办。</p></div>
+ <div class="caseauto"><strong>自动关闭</strong><span>扫描到符合条件的新文件时也可关闭。</span></div></aside>
+</div>
+</section>
+<section class="slide" data-name="下载审批" data-notes="以新品简报为例，员工选定文件后提交下载申请。|管理员处理这份申请，通过后由申请人下载文件。">
+<header class="mast"><span>企业文件资产中心</span><span>下载审批</span></header>
+<div class="pagehead"><h2>选定原件，再交管理员审批</h2><p>员工需要带走新品简报时，从选中的文件发起申请。</p></div>
+<div class="accessboard">
+ <div class="accessfile"><div class="accesscaption">申请对象</div><svg class="accessdoc" viewBox="0 0 224 248" aria-hidden="true"><path d="M15 6h137l56 59v176H15z" fill="none" stroke="currentColor" stroke-width="3"/><path d="M152 6v59h56M42 105h91M42 133h136M42 161h136M42 189h89" fill="none" stroke="currentColor" stroke-width="3"/></svg><h3>新品简报</h3><p>下载申请示意</p></div>
+ <div class="accessledger"><div class="ledgerhead"><span>经手人</span><span>处理动作</span></div>
+ <div class="ledgerrow"><b>申请人</b><div><strong>选定报表</strong><p>对需要的文件发起下载申请。</p></div></div>
+ <div class="ledgerrow"><b>管理员</b><div><strong>处理申请</strong><p>在下载审批中查看并审批。</p></div></div>
+ <div class="ledgerrow"><b>申请人</b><div><strong>获取原件</strong><p>申请通过后，下载所选文件。</p></div></div></div>
+</div>
+</section>
+<section class="slide tech-slide" data-name="技术架构" data-notes="先说最重要的架构决策：不是给文件逐一喂 AI。先建独立索引，访问时先确认权限，再根据用户需要读取有限数据。">
+<header class="mast"><span>企业文件资产中心 · 技术说明</span><span>技术架构</span></header>
+<div class="pagehead"><h2>这不是“搜索框 + AI”，而是一条受控检索链路</h2><p>原件留在共享盘；索引、权限、按需解析和审批分别承担不同职责。</p></div>
+
+<div class="tech-strip" style="margin-top:66px">
+<div class="tech-node"><strong>NAS / SMB</strong><span>共享盘原件<br>只读挂载建议</span></div><div class="tech-arrow">→</div>
+<div class="tech-node"><strong>动态扫描</strong><span>目录任务队列<br>获取文件元数据</span></div><div class="tech-arrow">→</div>
+<div class="tech-node"><strong>SQLite + FTS5</strong><span>本地元数据索引<br>中文片段召回</span></div><div class="tech-arrow">→</div>
+<div class="tech-node"><strong>FastAPI + ACL</strong><span>先鉴权、再检索<br>限权候选集</span></div><div class="tech-arrow">→</div>
+<div class="tech-node"><strong>用户工作台</strong><span>关键词 / AI 找表<br>限行预览 / 申请</span></div></div>
+<div class="tech-grid three"><div class="tech-panel"><div class="step-num">DATA</div><h3>检索走索引</h3><p>正常搜索只访问服务端索引库，不逐个打开 Excel，也不实时遍历共享盘。</p></div>
+<div class="tech-panel"><div class="step-num">SECURITY</div><h3>访问走权限</h3><p>搜索、目录、AI 候选、预览、分析与审批都通过请求级目录授权边界。</p></div>
+<div class="tech-panel"><div class="step-num">ORIGINAL</div><h3>原件单独放行</h3><p>预览返回有限行列；下载原始工作簿另走审批与有效票据。</p></div></div>
+
+<p class="fine">实现位置：scan_pipeline.py / app.py / directory_access.py / limited_preview.py。整体架构来自仓库代码，不代表已完成企业 SSO 或 NAS 原生 ACL。</p>
+</section>
+<section class="slide tech-slide" data-name="扫描引擎" data-notes="动态目录队列解决目录大小不均衡的问题。已存在文件信息内存对比，只有新增修改才写数据库。失败时先保索引不误删。">
+<header class="mast"><span>企业文件资产中心 · 技术说明</span><span>扫描引擎</span></header>
+<div class="pagehead"><h2>扫描提速：多线程读目录，单线程批量写索引</h2><p>避免网络遍历与数据库逐条写入互相等待，未变化文件不做重复更新。</p></div>
+
+<div class="tech-strip"><div class="tech-node"><strong>共享目录队列</strong><span>递归目录动态分配<br>避免固定切块倾斜</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>2–8 个线程</strong><span>默认 CPU 自适应<br>配置上限 16</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>有界结果队列</strong><span>默认 1,024 条<br>限制内存堆积</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>内存比对</strong><span>路径/体积/时间<br>未变跳过写入</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>SQLite 批量提交</strong><span>默认每 300 条<br>或每 1 秒</span></div></div>
+<div class="tech-grid two"><div class="tech-panel soft"><div class="step-num">WHY FASTER</div><h3>把慢 I/O 与写库解耦</h3><p>目录生产线程负责网络元数据获取；单消费者批量维护本地索引，降低 SQL 往返和事务频率。</p></div><div class="tech-panel"><div class="step-num">FAIL-SAFE</div><h3>扫描不完整，也不会误删历史</h3><p>遇到拒绝访问、目录错误或文件异常，结果标记为 partial；仅完整遍历成功才清理确实消失的索引记录。</p></div></div>
+<div class="tech-note"><strong>关键边界：</strong>这是“全目录元数据遍历 + 增量写库”，不是 NAS 事件监听，也不是只扫描有改动目录的秒级增量。</div>
+
+<p class="fine">源码：fast_file_finder/scan_pipeline.py、app.py::_scan_worker；参数 SCAN_WORKERS / SCAN_QUEUE_SIZE / SCAN_BATCH_SIZE / SCAN_COMMIT_SECONDS。</p>
+</section>
+<section class="slide tech-slide" data-name="提速验证" data-notes="客户可以看到有真实对比而不是凭空写提升十倍。数据是真实本地基准，NAS 环境要重新测量。">
+<header class="mast"><span>企业文件资产中心 · 技术说明</span><span>提速验证</span></header>
+<div class="pagehead"><h2>扫描速度已验证，展示实测而非夸大承诺</h2><p>119,668 份本地模拟文件、无变化扫描，同一目录改造前后各一次。</p></div>
+
+<div class="tech-compare"><div class="tech-metric"><div class="metric-caption">改造前 · 单次本地扫描</div><div class="metric-value">11.685<span style="font-size:31px"> 秒</span></div><div class="tech-barrow"><span>耗时</span><div class="tech-track"><i style="width:100%"></i></div><b>100%</b></div></div>
+<div class="tech-metric"><div class="metric-caption">改造后 · 4 个扫描线程</div><div class="metric-value">6.239<span style="font-size:31px"> 秒</span></div><div class="tech-barrow"><span>耗时</span><div class="tech-track"><i class="after" style="width:53.4%"></i></div><b>53.4%</b></div></div></div>
+<div class="tech-grid two" style="margin-top:23px"><div class="tech-panel soft" style="min-height:160px"><div class="step-num">OBSERVED</div><h3>用时减少约 47%</h3><p>扫描结果均 complete；119,668 seen / unchanged；0 errors。</p></div>
+<div class="tech-panel soft" style="min-height:160px"><div class="step-num">TRADE-OFF</div><h3>用内存换扫描效率</h3><p>峰值 RSS 约从 114 MiB 提升到 240 MiB。适合按内存配额和并发调整。</p></div></div>
+<div class="tech-note">这是 2026-11-05 的本地模拟盘、单轮先旧后新对比，受操作系统缓存和测试顺序影响；不可对客户承诺真实 NAS 一定提升 47%。</div>
+
+<p class="fine">依据：docs/SCAN_AND_LIMITED_PREVIEW.md；配套回归：tests/test_scan_and_preview_upgrade.py。</p>
+</section>
+<section class="slide tech-slide" data-name="检索机制" data-notes="检索和内容分析是两件事，检索过程不读大 Excel，排名依据文件的元数据与业务短词。">
+<header class="mast"><span>企业文件资产中心 · 技术说明</span><span>检索机制</span></header>
+<div class="pagehead"><h2>真正快的原因：用户搜索不再重新扫描网盘</h2><p>SQLite FTS5 先召回候选，再由本地规则排序，兼容中文、英文缩写与目录线索。</p></div>
+
+<div class="tech-split"><div>
+<div class="tech-feature"><h3>01 · 建索引而不是反复找文件</h3><p>预先保留文件 ID、名称、路径、格式、大小、mtime 等字段；普通搜索只读本地索引。</p></div>
+<div class="tech-feature"><h3>02 · 关键词与中文片段召回</h3><p>中文字符片段 + FTS5，支持名称/路径命中、严格匹配无结果后的宽松降级。</p></div>
+<div class="tech-feature"><h3>03 · 业务相关度综合排序</h3><p>文件名精确命中、短词/英文缩写、文件类型与目录命中分别评分；修改时间可单独排序。</p></div></div>
+<div><div class="tech-panel soft" style="min-height:400px"><div class="step-num">SEARCH EXAMPLE</div><h3>“投放 ROI 月报”</h3><div class="tech-rule"></div>
+<div class="tech-label">词片段：投放 / ROI / 月报</div><div class="tech-label">仅授权业务目录</div><div class="tech-label">FTS5 候选</div><div class="tech-label">名称优先排序</div>
+<p style="margin-top:26px">返回文件名、目录、更新时间及相关度；用户选定后才按需读取预览数据。</p></div></div></div>
+<div class="tech-note">未建立 Excel 单元格正文全文索引：当用户说“搜表内内容”，不能向客户承诺跨 13 万文件的单元格全文检索。</div>
+
+<p class="fine">源码：app.py::candidate_search / extract_query_features / score_candidate / /api/search；调用前由目录 ACL 限制候选集。</p>
+</section>
+<section class="slide tech-slide" data-name="AI 找表" data-notes="AI 不等于遍历十几万个文件，它先检索授权内索引。模型不能编文件；如果未命中只能建议下一步找哪个目录。">
+<header class="mast"><span>企业文件资产中心 · 技术说明</span><span>AI 找表</span></header>
+<div class="pagehead"><h2>AI 是“增强检索”，不是替代索引的全盘扫表</h2><p>不记得文件名时，先本地候选，再由模型辅助给出可能目录与替代关键词。</p></div>
+
+<div class="tech-strip"><div class="tech-node"><strong>自然语言描述</strong><span>“晨会要看<br>新品上市情况”</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>业务词拆解</strong><span>去口语停用词<br>抽取核心实体</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>权限内 FTS</strong><span>先查索引候选<br>高分直接返回</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>模型兜底</strong><span>低匹配时利用<br>部分授权目录</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>可核对结果</strong><span>候选文件卡片<br>目录与关键词</span></div></div>
+<div class="tech-grid two"><div class="tech-panel"><div class="step-num">LOCAL FIRST</div><h3>有线索，直接给证据</h3><p>本地高分命中时给出真实文件名、所属目录和路径，不必调用外部大模型；“今天/昨天/最新”可先按授权索引 mtime 做确定性检索。</p></div>
+<div class="tech-panel"><div class="step-num">MODEL OPTIONAL</div><h3>没找到，辅助推测方向</h3><p>支持配置主模型和备用模型；发送的是提问及受限候选目录/元数据，不是读取全网盘 Excel 正文。模型异常可回落到本地建议。</p></div></div>
+<div class="tech-note">模型给出的“可能目录”是推测，不代表原件存在。启用外部模型前，要确认目录名和文件名等元数据是否允许出网。</div>
+
+<p class="fine">源码：app.py::ai_guess_and_supplement / answer_dated_file_request / call_llm / /api/ai/chat；服务端按当前账号 ACL 获取数据。</p>
+</section>
+<section class="slide tech-slide" data-name="限行预览" data-notes="服务端限行是核心区别：不是完整 Excel 发到浏览器后只隐藏多余行，而是服务器返回有限 JSON。">
+<header class="mast"><span>企业文件资产中心 · 技术说明</span><span>限行预览</span></header>
+<div class="pagehead"><h2>安全边界前移：服务端裁剪数据，再交给浏览器</h2><p>过去“先下载原件、前端只显示几行”的方式已替换为服务端 JSON 分页。</p></div>
+
+<div class="tech-grid four"><div class="tech-panel"><div class="step-num">PAGING</div><h3>100 行</h3><p>默认每页；最多 200 行 / 页</p></div><div class="tech-panel"><div class="step-num">ROWS</div><h3>10,000</h3><p>最多预览前一万行</p></div><div class="tech-panel"><div class="step-num">COLUMNS</div><h3>100 列</h3><p>每格最多 2,000 字符</p></div><div class="tech-panel"><div class="step-num">SHEETS</div><h3>50 个</h3><p>最多列出前 50 个工作表</p></div></div>
+<div class="tech-split"><div><div class="tech-feature"><h3>服务端解析与资源封顶</h3><p>xlsx/xlsm 使用 openpyxl 只读模式；CSV 按行读取；源文件通常限制 32 MB，部分旧格式 16 MB；解压总体积 128 MB。</p></div><div class="tech-feature"><h3>一次仅解析一份，短缓存复用</h3><p>同一进程单个未缓存解析任务；60 秒内缓存最多 32 页或 16 MB；原件变化后失效。</p></div></div>
+<div><div class="tech-panel soft" style="min-height:355px"><div class="step-num">SECURITY GATE</div><h3>授权校验 → 限行解析 → JSON 返回</h3><div class="tech-rule"></div><p>每次先按账号定位授权文件；缓存命中仍重新做权限判断；响应使用 no-store，原件字节不通过预览接口下发。</p><p class="sub">旧原件直传预览接口、浏览器 Worker 和磁盘原件缓存已移除。</p></div></div></div>
+
+<p class="fine">源码：limited_preview.py、app.py::preview_data；前端 preview.html；超过范围请按审批获取原件。</p>
+</section>
+<section class="slide tech-slide" data-name="权限模型" data-notes="客户可以问即使搜到了 ID 能否直接下载：不行，所有接口再走授权。这里的部门匹配是精确部门，不是字符串相似猜测。">
+<header class="mast"><span>企业文件资产中心 · 技术说明</span><span>权限模型</span></header>
+<div class="pagehead"><h2>先确认谁能看见，再决定哪些文件参与搜索</h2><p>应用层目录 ACL 不仅保护详情页，也在召回、统计和分页前过滤。</p></div>
+
+<div class="tech-split"><div><div class="tech-panel soft" style="min-height:445px"><div class="step-num">POLICY ENGINE</div><h3>成员 / 部门 + 精确目录</h3><p>超级管理员向已有成员或部门授权目录；允许规则对子目录生效，拒绝规则优先，默认未授权不展示。</p>
+<div class="tech-rule"></div><p>授权“财务 / 利润”时，界面可显示通向该目录的祖先节点，但不会自动暴露兄弟目录的文件。</p></div></div>
+<div><div class="tech-feature"><h3>01 · 请求建立权限上下文</h3><p>从登录会话加载用户和部门授权策略，包含当前根目录作用域。</p></div><div class="tech-feature"><h3>02 · SQLite 可见视图过滤</h3><p>连接局部 visible_files 等视图，把目录授权前置到 SQL 召回、统计和分页。</p></div><div class="tech-feature"><h3>03 · 每次请求重新校验</h3><p>AI 候选、预览、下载等走同一可见范围；撤权后新请求按新授权重验，授权动作留审计。</p></div></div></div>
+<div class="tech-note">已做的是应用目录权限；它不自动继承 NAS/SMB 文件系统 ACL。实际访问仍由服务账号的共享盘权限决定，正式推广前需做身份与原生 ACL 对接验收。</div>
+
+<p class="fine">源码：directory_access.py / app.py::optional_shared_access_token / /api/system/directory-grants；回归见 test_directory_access.py。</p>
+</section>
+<section class="slide tech-slide" data-name="审批闭环" data-notes="这一页回答客户最关心的安全问题：在线看不等于下载全量，原件有独立出口且有管理员审批。">
+<header class="mast"><span>企业文件资产中心 · 技术说明</span><span>审批闭环</span></header>
+<div class="pagehead"><h2>预览和下载是两种独立权限，不混为一谈</h2><p>看见允许范围内的预览数据，不代表可以绕过审批取走整个 Excel。</p></div>
+
+<div class="tech-strip"><div class="tech-node"><strong>登录与目录 ACL</strong><span>身份合法<br>且有目录访问权</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>限定内容预览</strong><span>服务端只回<br>可预览行列</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>申请原件</strong><span>填写下载用途<br>进入审批单</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>管理员审核</strong><span>同意 / 拒绝<br>记录审核动作</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>限时票据下载</strong><span>再次核验 ACL<br>返回真实文件</span></div></div>
+<div class="tech-grid two"><div class="tech-panel"><div class="step-num">TECHNICAL CONTROL</div><h3>单独的原件出口</h3><p>下载接口基于 file_id 定位并校验原件路径；普通成员持审批后的有效票据才能下载，管理员遵循现有角色直下规则。</p></div><div class="tech-panel"><div class="step-num">USER EXPERIENCE</div><h3>不强制安装客户端</h3><p>浏览器内可以预览数据；复制共享路径供已接入网盘的电脑使用。远程网页不能直接启动访问者本机的 Excel。</p></div></div>
+<div class="tech-note">限行是降低原件直接暴露面，不是字段级脱敏、DRM、防截图或防复制。需要敏感字段脱敏时必须另行制定并实现策略。</div>
+
+<p class="fine">源码：app.py::download_file / /api/file/{id}/preview-data / 下载审批路由。远程打开文件的限制来自浏览器与终端权限边界。</p>
+</section>
+<section class="slide tech-slide" data-name="上线边界" data-notes="客户看到的不只是产品功能，还能理解技术投入、已经做到的程度、风险边界和推广路径。">
+<header class="mast"><span>企业文件资产中心 · 技术说明</span><span>上线边界</span></header>
+<div class="pagehead"><h2>目前具备试点基础，生产开放还要做针对性验收</h2><p>代码实现、模拟目录验证、客户真实环境验收，是三种不同的完成状态。</p></div>
+
+<div class="tech-grid two"><div class="tech-panel"><span class="tech-status">仓库已实现</span><h3 style="margin-top:17px">可以现场演示的能力</h3><ul><li>动态扫描与失败保留旧索引</li><li>FTS5 索引检索和业务词排序</li><li>权限内 AI 找表与模型备援</li><li>服务端限行 JSON 预览</li><li>应用目录 ACL 和下载审批</li></ul></div>
+<div class="tech-panel"><span class="tech-status warn">真实环境待验收</span><h3 style="margin-top:17px">需要客户共同确认</h3><ul><li>NAS/SMB 原生 ACL 与企业 SSO</li><li>现有明文密码存储的哈希化迁移</li><li>HTTPS 反向代理、审计与密钥治理</li><li>真实共享盘扫描与多人并发压测</li><li>敏感字段脱敏、审批策略与恢复演练</li></ul></div></div>
+<div class="tech-call">推荐试点路径：<strong>先选授权业务目录 → 建索引 → 验证命中率与 P95 → 预览/权限越权测试 → 审批闭环 → 再扩大范围。</strong></div>
+<div class="tech-note">部署约束：当前扫描状态与锁在进程内，推荐单应用进程；一套服务维护一个 FILE_ROOT。不要把演示环境性能或零字节样本当作生产交付指标。</div>
+
+<p class="fine">代码与文档基准：main@411ecd8（2026-11-05 检查）；涉及用户身份认证、文件原生 ACL 和敏感信息安全的事项需上线前单独验收。</p>
+</section>
+<nav id="chrome" aria-label="阅读控制">
+  <div><span id="counter" aria-live="polite"></span><span id="steps" aria-hidden="true"></span><span id="trail"></span></div>
+  <div><button id="toggle-notes" aria-controls="notes" aria-pressed="false">讲解备注 N</button><button id="fullscreen">全屏 F</button>
+    <button class="arrow" id="prev" aria-label="上一页">←</button><button class="arrow" id="next" aria-label="下一页">→</button></div>
+</nav>
+<aside id="notes" hidden><button id="close-notes">关闭</button><b>讲解备注</b><p id="speech"></p></aside>
+</main>
+<script>
+(() => {
+  const byId = id => document.getElementById(id);
+  const slides = [...document.querySelectorAll('.slide')];
+  const deck = byId('deck');
+  const steps = slides.map(() => byId('steps').appendChild(document.createElement('i')));
+  let current = 0;
+  let pointerStart;
+  let notesOpen = false;
+
+  function fit() {
+    const scale = Math.min(innerWidth / 1920, innerHeight / 1080);
+    deck.style.transform = 'scale(' + scale + ')';
+    deck.style.left = (innerWidth - 1920 * scale) / 2 + 'px';
+    deck.style.top = (innerHeight - 1080 * scale) / 2 + 'px';
+  }
+  function render() {
+    slides.forEach((slide, index) => {
+      slide.classList.toggle('on', index === current);
+      steps[index].classList.toggle('read', index <= current);
+    });
+    const slide = slides[current];
+    byId('counter').textContent = (current + 1) + ' / ' + slides.length;
+    byId('trail').textContent = slide.dataset.name;
+    byId('prev').disabled = current === 0;
+    byId('next').disabled = current === slides.length - 1;
+    byId('notes').hidden = !notesOpen;
+    byId('toggle-notes').setAttribute('aria-pressed', String(notesOpen));
+    byId('speech').textContent = slide.dataset.notes.split('|').join('\n');
+  }
+  function move(delta) {
+    current = Math.max(0, Math.min(slides.length - 1, current + delta));
+    render();
+  }
+  function toggleNotes() {
+    notesOpen = !notesOpen;
+    render();
+  }
+  async function fullscreen() {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch {
+      byId('fullscreen').textContent = '请使用浏览器全屏';
+    }
+  }
+  byId('prev').onclick = () => move(-1);
+  byId('next').onclick = () => move(1);
+  byId('toggle-notes').onclick = toggleNotes;
+  byId('close-notes').onclick = () => {
+    toggleNotes();
+    byId('toggle-notes').focus();
+  };
+  byId('fullscreen').onclick = fullscreen;
+  byId('fullscreen').hidden = !document.fullscreenEnabled;
+  document.addEventListener('fullscreenchange', () => {
+    byId('fullscreen').textContent = document.fullscreenElement ? '退出全屏 F' : '全屏 F';
+    fit();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.isComposing || event.defaultPrevented || event.repeat ||
+        event.altKey || event.ctrlKey || event.metaKey || event.target.isContentEditable ||
+        event.target.closest('input,textarea,select,[role=textbox]')) return;
+    switch (event.key.toLowerCase()) {
+      case 'arrowleft': move(-1); break;
+      case 'arrowright': move(1); break;
+      case ' ':
+        if (event.target.closest('button,a')) return;
+        move(1);
+        break;
+      case 'n': toggleNotes(); break;
+      case 'f': if (document.fullscreenEnabled) fullscreen(); break;
+      case 'escape': if (notesOpen) toggleNotes(); break;
+      default: return;
+    }
+    event.preventDefault();
+  });
+  deck.addEventListener('pointerdown', event => {
+    pointerStart = [event.clientX,event.clientY];
+  });
+  deck.addEventListener('click', event => {
+    if (!event.target.closest('.slide.on') || event.target.closest('button,a,input,textarea,select,[contenteditable]')) return;
+    if (getSelection()?.toString()) return;
+    if (pointerStart && Math.hypot(event.clientX - pointerStart[0], event.clientY - pointerStart[1]) > 8) return;
+    move(1);
+  });
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+
+</html>
