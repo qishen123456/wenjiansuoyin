@@ -86,19 +86,17 @@ svg text {font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
 #chrome>div {display:flex;align-items:center;gap:22px}
 #counter {font-size:22px;font-variant-numeric:tabular-nums;color:var(--navy);white-space:nowrap}
 #steps {display:flex;gap:4px}#steps i {width:29px;height:3px;background:var(--line)}#steps .read {background:var(--blue)}
-#chrome button,#notes button {border:0;background:transparent;padding:8px 6px;font-size:21px;color:var(--soft)}
-#chrome button:hover,#notes button:hover {color:var(--navy);text-decoration:underline}
+#chrome button {border:0;background:transparent;padding:8px 6px;font-size:21px;color:var(--soft)}
+#chrome button:hover {color:var(--navy);text-decoration:underline}
 #chrome .arrow {width:46px;height:40px;border:1px solid var(--line);border-radius:5px;padding:0;font-size:25px;color:var(--navy)}
 button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:none}
-#notes {position:absolute;z-index:4;bottom:95px;left:112px;right:112px;background:var(--navy);color:white;padding:23px 35px;border-radius:6px}
-#notes[hidden] {display:none}#notes button {color:white;float:right}#notes p {white-space:pre-line;font-size:26px}#notes b {font-size:21px;color:#d1e0ed}#notes button:hover{color:white}
 @page {size:1920px 1080px;margin:0}
 @media print {
   html,body {height:auto;width:1920px;background:white;overflow:visible}
   #deck {position:static;transform:none!important;width:1920px;height:auto}
   .slide,.slide.on {display:block;position:relative;break-after:page;page-break-after:always;break-inside:avoid;animation:none}
   .slide:last-of-type {break-after:auto;page-break-after:auto}
-  #chrome,#notes {display:none!important}
+  #chrome {display:none!important}
   * {-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
 .casebook,.accessboard{display:grid;gap:70px;margin-top:43px;align-items:start}
@@ -172,7 +170,7 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
 .tech-slide[data-name="限行预览"] .tech-grid{margin-top:22px}
 .tech-slide[data-name="限行预览"] .tech-split{margin-top:24px}
 </style></head><body><main id="deck">
-<section class="slide cover on" data-name="产品手册" data-notes="这本手册从一份新品简报讲起。|员工要判断该用哪一份，管理员要知道简报按时交了没有。">
+<section class="slide cover on" data-name="产品手册">
 <header class="mast"><span>文件资产管理</span><span>产品手册</span></header>
 <div class="cover-layout">
   <div>
@@ -202,7 +200,7 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
   </figure>
 </div>
 </section>
-<section class="slide" data-name="报表资产" data-notes="先看这个演示环境里的文件规模，索引就是系统为检索记下的文件信息。|这些数来自同一份界面演示资料，可以用来理解目录和报表的量级。">
+<section class="slide" data-name="报表资产">
 <header class="mast"><span>企业文件资产中心</span><span>报表资产</span></header>
 <div class="pagehead"><h2>先看有哪些报表可查</h2><p>系统把文件名、目录与时间等元数据建立索引；普通检索不扫描网盘，也不建立正文全文索引。</p></div>
 <div class="data-spread">
@@ -217,7 +215,7 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
 </div>
 <p class="fine">数据来自现有界面演示快照，统计日期未标注；其中含大量零字节占位文件，只能证明目录检索能力，不能证明真实报表预览质量。</p>
 </section>
-<section class="slide" data-name="文件检索" data-notes="晨会要用产品研发的简报，这里特意摆了两份同名文件。|先看所属目录，再核对修改时间和报表里的业务期次。">
+<section class="slide" data-name="文件检索">
 <header class="mast"><span>企业文件资产中心</span><span>文件检索</span></header>
 <div class="pagehead"><h2>同名简报，先看所属目录</h2><p>知道报表名时，用关键词搜索，再按日期和格式缩小范围。</p></div>
 <div class="scenario"><div><p class="quote">我要找产品研发的<br>新品上市简报。</p><p class="side-copy">名称相同，来源部门不同。选中研发目录里的文件，再核对业务期次。</p></div>
@@ -229,7 +227,7 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
 </div></div></div>
 <p class="fine">文件、路径及日期组合为选表示例。修改时间反映文件改动，业务期次以报表内容为准。</p>
 </section>
-<section class="slide" data-name="AI 找表" data-notes="有时同事只记得某份表是做什么的，说不出完整文件名。|这时可以用业务语言提问，让 AI 找表根据目录和命名规律提示一个查找方向。">
+<section class="slide" data-name="AI 找表">
 <header class="mast"><span>企业文件资产中心</span><span>AI 找表</span></header>
 <div class="pagehead"><h2>记不住表名，也能描述需求</h2><p>说出业务主题和用途，让 AI 找表提示可能的文件位置。</p></div>
 <div class="dialogue"><div class="exchange"><div class="request">晨会要看新品上市情况，简报去哪找？</div>
@@ -237,7 +235,7 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
 <div><div class="term"><b>怎么问</b><span>说清业务主题，例如“新品上市”。</span></div><div class="term"><b>依据什么</b><span>目录结构和文件命名规律。</span></div><div class="term"><b>怎么确认</b><span>打开候选目录，核对简报内容。</span></div></div></div>
 <p class="fine">对话仅演示提问方式与位置提示，具体文件由使用者核对。</p>
 </section>
-<section class="slide" data-name="目录与监控" data-notes="如果熟悉业务归属，也可以顺着组织目录找到新品简报。|选中简报库即可把这个目录设为监控对象，之后通过规则检测更新情况。">
+<section class="slide" data-name="目录与监控">
 <header class="mast"><span>企业文件资产中心</span><span>目录与监控</span></header>
 <div class="pagehead"><h2>沿着组织目录找到交付位置</h2><p>目录节点显示文件总数与今日新增，选中目录即可设置监控。</p></div>
 <div class="org-map"><div class="org-tree"><div class="org-title">组织目录 · 路径示意</div>
@@ -245,7 +243,7 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
 <div class="org-detail"><span class="caption">所选目录</span><h3>新品上市简报库</h3><p>由新品运营组跟进，每日更新。<br>将这个目录设为监控对象，<br>定时或手动检查是否按时归档。</p></div></div>
 <p class="fine">维护人员可查看索引状态、手动刷新或设置定时任务，并同步组织架构。</p>
 </section>
-<section class="slide" data-name="归档跟进" data-notes="每天应更新的新品简报到了检测节点还没出现，就会生成带编号的逾期待办。|责任人可提交完成凭证，管理员审核，扫描到符合条件的新文件也可自动关闭。">
+<section class="slide" data-name="归档跟进">
 <header class="mast"><span>企业文件资产中心</span><span>归档跟进</span></header>
 <div class="pagehead"><h2>该交的简报，今天还没更新</h2><p>待办指向具体的交付任务，责任人可以直接跟进。</p></div>
 <div class="casebook">
@@ -260,7 +258,7 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
  <div class="caseauto"><strong>自动关闭</strong><span>扫描到符合条件的新文件时也可关闭。</span></div></aside>
 </div>
 </section>
-<section class="slide" data-name="下载审批" data-notes="以新品简报为例，员工选定文件后提交下载申请。|管理员处理这份申请，通过后由申请人下载文件。">
+<section class="slide" data-name="下载审批">
 <header class="mast"><span>企业文件资产中心</span><span>下载审批</span></header>
 <div class="pagehead"><h2>选定原件，再交管理员审批</h2><p>员工需要带走新品简报时，从选中的文件发起申请。</p></div>
 <div class="accessboard">
@@ -271,7 +269,7 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
  <div class="ledgerrow"><b>申请人</b><div><strong>获取原件</strong><p>申请通过后，下载所选文件。</p></div></div></div>
 </div>
 </section>
-<section class="slide tech-slide" data-name="技术架构" data-notes="先说最重要的架构决策：不是给文件逐一喂 AI。先建独立索引，访问时先确认权限，再根据用户需要读取有限数据。">
+<section class="slide tech-slide" data-name="技术架构">
 <header class="mast"><span>企业文件资产中心 · 技术说明</span><span>技术架构</span></header>
 <div class="pagehead"><h2>这不是“搜索框 + AI”，而是一条受控检索链路</h2><p>原件留在共享盘；索引、权限、按需解析和审批分别承担不同职责。</p></div>
 
@@ -285,36 +283,36 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
 <div class="tech-panel"><div class="step-num">SECURITY</div><h3>访问走权限</h3><p>搜索、目录、AI 候选、预览、分析与审批都通过请求级目录授权边界。</p></div>
 <div class="tech-panel"><div class="step-num">ORIGINAL</div><h3>原件单独放行</h3><p>预览返回有限行列；下载原始工作簿另走审批与有效票据。</p></div></div>
 
-<p class="fine">实现位置：scan_pipeline.py / app.py / directory_access.py / limited_preview.py。整体架构来自仓库代码，不代表已完成企业 SSO 或 NAS 原生 ACL。</p>
+<p class="fine">技术架构说明：文件原件与索引分离，检索、预览和下载分别执行权限校验。</p>
 </section>
-<section class="slide tech-slide" data-name="扫描引擎" data-notes="动态目录队列解决目录大小不均衡的问题。已存在文件信息内存对比，只有新增修改才写数据库。失败时先保索引不误删。">
+<section class="slide tech-slide" data-name="扫描引擎">
 <header class="mast"><span>企业文件资产中心 · 技术说明</span><span>扫描引擎</span></header>
 <div class="pagehead"><h2>扫描提速：多线程读目录，单线程批量写索引</h2><p>避免网络遍历与数据库逐条写入互相等待，未变化文件不做重复更新。</p></div>
 
 <div class="tech-strip"><div class="tech-node"><strong>共享目录队列</strong><span>递归目录动态分配<br>避免固定切块倾斜</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>2–8 个线程</strong><span>默认 CPU 自适应<br>配置上限 16</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>有界结果队列</strong><span>默认 1,024 条<br>限制内存堆积</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>内存比对</strong><span>路径/体积/时间<br>未变跳过写入</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>SQLite 批量提交</strong><span>默认每 300 条<br>或每 1 秒</span></div></div>
-<div class="tech-grid two"><div class="tech-panel soft"><div class="step-num">WHY FASTER</div><h3>把慢 I/O 与写库解耦</h3><p>目录生产线程负责网络元数据获取；单消费者批量维护本地索引，降低 SQL 往返和事务频率。</p></div><div class="tech-panel"><div class="step-num">FAIL-SAFE</div><h3>扫描不完整，也不会误删历史</h3><p>遇到拒绝访问、目录错误或文件异常，结果标记为 partial；仅完整遍历成功才清理确实消失的索引记录。</p></div></div>
+<div class="tech-grid two"><div class="tech-panel soft"><div class="step-num">WHY FASTER</div><h3>把慢 I/O 与写库解耦</h3><p>目录生产线程负责网络元数据获取；单消费者批量维护本地索引，降低 SQL 往返和事务频率。</p></div><div class="tech-panel"><div class="step-num">FAIL-SAFE</div><h3>扫描不完整，也不会误删历史</h3><p>遇到拒绝访问、目录错误或文件异常，结果标记为“部分完成”；仅完整遍历成功才清理确实消失的索引记录。</p></div></div>
 <div class="tech-note"><strong>关键边界：</strong>这是“全目录元数据遍历 + 增量写库”，不是 NAS 事件监听，也不是只扫描有改动目录的秒级增量。</div>
 
-<p class="fine">源码：fast_file_finder/scan_pipeline.py、app.py::_scan_worker；参数 SCAN_WORKERS / SCAN_QUEUE_SIZE / SCAN_BATCH_SIZE / SCAN_COMMIT_SECONDS。</p>
+<p class="fine">扫描过程仅读取文件元数据，不修改原始文档；更新过程保留异常保护机制。</p>
 </section>
-<section class="slide tech-slide" data-name="提速验证" data-notes="客户可以看到有真实对比而不是凭空写提升十倍。数据是真实本地基准，NAS 环境要重新测量。">
+<section class="slide tech-slide" data-name="提速验证">
 <header class="mast"><span>企业文件资产中心 · 技术说明</span><span>提速验证</span></header>
-<div class="pagehead"><h2>扫描速度已验证，展示实测而非夸大承诺</h2><p>119,668 份本地模拟文件、无变化扫描，同一目录改造前后各一次。</p></div>
+<div class="pagehead"><h2>扫描速度已验证，本地模拟目录的对照测试</h2><p>119,668 份本地模拟文件、无变化扫描，使用两种扫描处理方式进行同条件对照。</p></div>
 
-<div class="tech-compare"><div class="tech-metric"><div class="metric-caption">改造前 · 单次本地扫描</div><div class="metric-value">11.685<span style="font-size:31px"> 秒</span></div><div class="tech-barrow"><span>耗时</span><div class="tech-track"><i style="width:100%"></i></div><b>100%</b></div></div>
-<div class="tech-metric"><div class="metric-caption">改造后 · 4 个扫描线程</div><div class="metric-value">6.239<span style="font-size:31px"> 秒</span></div><div class="tech-barrow"><span>耗时</span><div class="tech-track"><i class="after" style="width:53.4%"></i></div><b>53.4%</b></div></div></div>
-<div class="tech-grid two" style="margin-top:23px"><div class="tech-panel soft" style="min-height:160px"><div class="step-num">OBSERVED</div><h3>用时减少约 47%</h3><p>扫描结果均 complete；119,668 seen / unchanged；0 errors。</p></div>
+<div class="tech-compare"><div class="tech-metric"><div class="metric-caption">常规方式 · 单次本地扫描</div><div class="metric-value">11.685<span style="font-size:31px"> 秒</span></div><div class="tech-barrow"><span>耗时</span><div class="tech-track"><i style="width:100%"></i></div><b>100%</b></div></div>
+<div class="tech-metric"><div class="metric-caption">优化方式 · 4 个扫描线程</div><div class="metric-value">6.239<span style="font-size:31px"> 秒</span></div><div class="tech-barrow"><span>耗时</span><div class="tech-track"><i class="after" style="width:53.4%"></i></div><b>53.4%</b></div></div></div>
+<div class="tech-grid two" style="margin-top:23px"><div class="tech-panel soft" style="min-height:160px"><div class="step-num">OBSERVED</div><h3>用时减少约 47%</h3><p>两种方案均完整扫描 119,668 个文件，无异常。</p></div>
 <div class="tech-panel soft" style="min-height:160px"><div class="step-num">TRADE-OFF</div><h3>用内存换扫描效率</h3><p>峰值 RSS 约从 114 MiB 提升到 240 MiB。适合按内存配额和并发调整。</p></div></div>
-<div class="tech-note">这是 2026-11-05 的本地模拟盘、单轮先旧后新对比，受操作系统缓存和测试顺序影响；不可对客户承诺真实 NAS 一定提升 47%。</div>
+<div class="tech-note">以上为本地模拟盘单轮对照测试，受文件系统缓存及测试顺序影响；真实 NAS 环境的扫描表现需以现场测试为准。</div>
 
-<p class="fine">依据：docs/SCAN_AND_LIMITED_PREVIEW.md；配套回归：tests/test_scan_and_preview_upgrade.py。</p>
+<p class="fine">以上为本地模拟目录的对照测试结果，实际共享盘速度以现场测量为准。</p>
 </section>
-<section class="slide tech-slide" data-name="检索机制" data-notes="检索和内容分析是两件事，检索过程不读大 Excel，排名依据文件的元数据与业务短词。">
+<section class="slide tech-slide" data-name="检索机制">
 <header class="mast"><span>企业文件资产中心 · 技术说明</span><span>检索机制</span></header>
 <div class="pagehead"><h2>真正快的原因：用户搜索不再重新扫描网盘</h2><p>SQLite FTS5 先召回候选，再由本地规则排序，兼容中文、英文缩写与目录线索。</p></div>
 
 <div class="tech-split"><div>
-<div class="tech-feature"><h3>01 · 建索引而不是反复找文件</h3><p>预先保留文件 ID、名称、路径、格式、大小、mtime 等字段；普通搜索只读本地索引。</p></div>
+<div class="tech-feature"><h3>01 · 建索引而不是反复找文件</h3><p>预先记录文件标识、名称、目录、格式、大小、修改时间等信息；普通搜索只读本地索引。</p></div>
 <div class="tech-feature"><h3>02 · 关键词与中文片段召回</h3><p>中文字符片段 + FTS5，支持名称/路径命中、严格匹配无结果后的宽松降级。</p></div>
 <div class="tech-feature"><h3>03 · 业务相关度综合排序</h3><p>文件名精确命中、短词/英文缩写、文件类型与目录命中分别评分；修改时间可单独排序。</p></div></div>
 <div><div class="tech-panel soft" style="min-height:400px"><div class="step-num">SEARCH EXAMPLE</div><h3>“投放 ROI 月报”</h3><div class="tech-rule"></div>
@@ -322,67 +320,55 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
 <p style="margin-top:26px">返回文件名、目录、更新时间及相关度；用户选定后才按需读取预览数据。</p></div></div></div>
 <div class="tech-note">未建立 Excel 单元格正文全文索引：当用户说“搜表内内容”，不能向客户承诺跨 13 万文件的单元格全文检索。</div>
 
-<p class="fine">源码：app.py::candidate_search / extract_query_features / score_candidate / /api/search；调用前由目录 ACL 限制候选集。</p>
+<p class="fine">关键词搜索以预先构建的文件元数据索引为基础，结果只包含当前用户有权访问的文件。</p>
 </section>
-<section class="slide tech-slide" data-name="AI 找表" data-notes="AI 不等于遍历十几万个文件，它先检索授权内索引。模型不能编文件；如果未命中只能建议下一步找哪个目录。">
+<section class="slide tech-slide" data-name="AI 找表">
 <header class="mast"><span>企业文件资产中心 · 技术说明</span><span>AI 找表</span></header>
 <div class="pagehead"><h2>AI 是“增强检索”，不是替代索引的全盘扫表</h2><p>不记得文件名时，先本地候选，再由模型辅助给出可能目录与替代关键词。</p></div>
 
 <div class="tech-strip"><div class="tech-node"><strong>自然语言描述</strong><span>“晨会要看<br>新品上市情况”</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>业务词拆解</strong><span>去口语停用词<br>抽取核心实体</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>权限内 FTS</strong><span>先查索引候选<br>高分直接返回</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>模型兜底</strong><span>低匹配时利用<br>部分授权目录</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>可核对结果</strong><span>候选文件卡片<br>目录与关键词</span></div></div>
-<div class="tech-grid two"><div class="tech-panel"><div class="step-num">LOCAL FIRST</div><h3>有线索，直接给证据</h3><p>本地高分命中时给出真实文件名、所属目录和路径，不必调用外部大模型；“今天/昨天/最新”可先按授权索引 mtime 做确定性检索。</p></div>
+<div class="tech-grid two"><div class="tech-panel"><div class="step-num">LOCAL FIRST</div><h3>有线索，直接给证据</h3><p>本地高分命中时给出真实文件名、所属目录和路径，不必调用外部大模型；“今天/昨天/最新”可先按授权索引中的文件修改时间检索。</p></div>
 <div class="tech-panel"><div class="step-num">MODEL OPTIONAL</div><h3>没找到，辅助推测方向</h3><p>支持配置主模型和备用模型；发送的是提问及受限候选目录/元数据，不是读取全网盘 Excel 正文。模型异常可回落到本地建议。</p></div></div>
 <div class="tech-note">模型给出的“可能目录”是推测，不代表原件存在。启用外部模型前，要确认目录名和文件名等元数据是否允许出网。</div>
 
-<p class="fine">源码：app.py::ai_guess_and_supplement / answer_dated_file_request / call_llm / /api/ai/chat；服务端按当前账号 ACL 获取数据。</p>
+<p class="fine">AI 返回的候选始终基于权限内检索结果；无法确认的目录仅以建议方式展示。</p>
 </section>
-<section class="slide tech-slide" data-name="限行预览" data-notes="服务端限行是核心区别：不是完整 Excel 发到浏览器后只隐藏多余行，而是服务器返回有限 JSON。">
+<section class="slide tech-slide" data-name="限行预览">
 <header class="mast"><span>企业文件资产中心 · 技术说明</span><span>限行预览</span></header>
-<div class="pagehead"><h2>安全边界前移：服务端裁剪数据，再交给浏览器</h2><p>过去“先下载原件、前端只显示几行”的方式已替换为服务端 JSON 分页。</p></div>
+<div class="pagehead"><h2>安全边界前移：服务端裁剪数据，再交给浏览器</h2><p>服务器按页读取并返回有限表格数据，浏览器不直接接收整份原始工作簿。</p></div>
 
 <div class="tech-grid four"><div class="tech-panel"><div class="step-num">PAGING</div><h3>100 行</h3><p>默认每页；最多 200 行 / 页</p></div><div class="tech-panel"><div class="step-num">ROWS</div><h3>10,000</h3><p>最多预览前一万行</p></div><div class="tech-panel"><div class="step-num">COLUMNS</div><h3>100 列</h3><p>每格最多 2,000 字符</p></div><div class="tech-panel"><div class="step-num">SHEETS</div><h3>50 个</h3><p>最多列出前 50 个工作表</p></div></div>
-<div class="tech-split"><div><div class="tech-feature"><h3>服务端解析与资源封顶</h3><p>xlsx/xlsm 使用 openpyxl 只读模式；CSV 按行读取；源文件通常限制 32 MB，部分旧格式 16 MB；解压总体积 128 MB。</p></div><div class="tech-feature"><h3>一次仅解析一份，短缓存复用</h3><p>同一进程单个未缓存解析任务；60 秒内缓存最多 32 页或 16 MB；原件变化后失效。</p></div></div>
-<div><div class="tech-panel soft" style="min-height:355px"><div class="step-num">SECURITY GATE</div><h3>授权校验 → 限行解析 → JSON 返回</h3><div class="tech-rule"></div><p>每次先按账号定位授权文件；缓存命中仍重新做权限判断；响应使用 no-store，原件字节不通过预览接口下发。</p><p class="sub">旧原件直传预览接口、浏览器 Worker 和磁盘原件缓存已移除。</p></div></div></div>
+<div class="tech-split"><div><div class="tech-feature"><h3>服务端解析与资源封顶</h3><p>xlsx/xlsm 使用 openpyxl 只读模式；CSV 按行读取；源文件通常限制 32 MB，部分旧格式 16 MB；解压总体积 128 MB。</p></div><div class="tech-feature"><h3>一次仅解析一份，短缓存复用</h3><p>未缓存解析任务按序执行；60 秒内缓存最多 32 页或 16 MB；原件变化后失效。</p></div></div>
+<div><div class="tech-panel soft" style="min-height:355px"><div class="step-num">SECURITY GATE</div><h3>授权校验 → 限行解析 → JSON 返回</h3><div class="tech-rule"></div><p>每次先按账号定位授权文件；缓存命中仍重新做权限判断；避免浏览器持久缓存，原件字节不通过预览接口下发。</p><p class="sub">预览不提供原始工作簿下载入口，完整原件由独立审批流程控制。</p></div></div></div>
 
-<p class="fine">源码：limited_preview.py、app.py::preview_data；前端 preview.html；超过范围请按审批获取原件。</p>
+<p class="fine">预览只返回限定范围内的数据；完整工作簿需依照下载审批流程获取。</p>
 </section>
-<section class="slide tech-slide" data-name="权限模型" data-notes="客户可以问即使搜到了 ID 能否直接下载：不行，所有接口再走授权。这里的部门匹配是精确部门，不是字符串相似猜测。">
+<section class="slide tech-slide" data-name="权限模型">
 <header class="mast"><span>企业文件资产中心 · 技术说明</span><span>权限模型</span></header>
 <div class="pagehead"><h2>先确认谁能看见，再决定哪些文件参与搜索</h2><p>应用层目录 ACL 不仅保护详情页，也在召回、统计和分页前过滤。</p></div>
 
 <div class="tech-split"><div><div class="tech-panel soft" style="min-height:445px"><div class="step-num">POLICY ENGINE</div><h3>成员 / 部门 + 精确目录</h3><p>超级管理员向已有成员或部门授权目录；允许规则对子目录生效，拒绝规则优先，默认未授权不展示。</p>
 <div class="tech-rule"></div><p>授权“财务 / 利润”时，界面可显示通向该目录的祖先节点，但不会自动暴露兄弟目录的文件。</p></div></div>
-<div><div class="tech-feature"><h3>01 · 请求建立权限上下文</h3><p>从登录会话加载用户和部门授权策略，包含当前根目录作用域。</p></div><div class="tech-feature"><h3>02 · SQLite 可见视图过滤</h3><p>连接局部 visible_files 等视图，把目录授权前置到 SQL 召回、统计和分页。</p></div><div class="tech-feature"><h3>03 · 每次请求重新校验</h3><p>AI 候选、预览、下载等走同一可见范围；撤权后新请求按新授权重验，授权动作留审计。</p></div></div></div>
+<div><div class="tech-feature"><h3>01 · 请求建立权限上下文</h3><p>从登录会话加载用户和部门授权策略，包含当前根目录作用域。</p></div><div class="tech-feature"><h3>02 · SQLite 可见视图过滤</h3><p>数据库可见范围隔离，把目录授权前置到 SQL 召回、统计和分页。</p></div><div class="tech-feature"><h3>03 · 每次请求重新校验</h3><p>AI 候选、预览、下载等走同一可见范围；撤权后新请求按新授权重验，授权动作留审计。</p></div></div></div>
 <div class="tech-note">已做的是应用目录权限；它不自动继承 NAS/SMB 文件系统 ACL。实际访问仍由服务账号的共享盘权限决定，正式推广前需做身份与原生 ACL 对接验收。</div>
 
-<p class="fine">源码：directory_access.py / app.py::optional_shared_access_token / /api/system/directory-grants；回归见 test_directory_access.py。</p>
+<p class="fine">目录授权在检索、统计、预览与下载时统一生效，并保留授权操作记录。</p>
 </section>
-<section class="slide tech-slide" data-name="审批闭环" data-notes="这一页回答客户最关心的安全问题：在线看不等于下载全量，原件有独立出口且有管理员审批。">
+<section class="slide tech-slide" data-name="审批闭环">
 <header class="mast"><span>企业文件资产中心 · 技术说明</span><span>审批闭环</span></header>
 <div class="pagehead"><h2>预览和下载是两种独立权限，不混为一谈</h2><p>看见允许范围内的预览数据，不代表可以绕过审批取走整个 Excel。</p></div>
 
 <div class="tech-strip"><div class="tech-node"><strong>登录与目录 ACL</strong><span>身份合法<br>且有目录访问权</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>限定内容预览</strong><span>服务端只回<br>可预览行列</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>申请原件</strong><span>填写下载用途<br>进入审批单</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>管理员审核</strong><span>同意 / 拒绝<br>记录审核动作</span></div><div class="tech-arrow">→</div><div class="tech-node"><strong>限时票据下载</strong><span>再次核验 ACL<br>返回真实文件</span></div></div>
-<div class="tech-grid two"><div class="tech-panel"><div class="step-num">TECHNICAL CONTROL</div><h3>单独的原件出口</h3><p>下载接口基于 file_id 定位并校验原件路径；普通成员持审批后的有效票据才能下载，管理员遵循现有角色直下规则。</p></div><div class="tech-panel"><div class="step-num">USER EXPERIENCE</div><h3>不强制安装客户端</h3><p>浏览器内可以预览数据；复制共享路径供已接入网盘的电脑使用。远程网页不能直接启动访问者本机的 Excel。</p></div></div>
+<div class="tech-grid two"><div class="tech-panel"><div class="step-num">TECHNICAL CONTROL</div><h3>单独的原件出口</h3><p>下载服务定位文件并再次核验访问权限；普通成员持审批后的有效票据才能下载，管理员遵循现有角色直下规则。</p></div><div class="tech-panel"><div class="step-num">USER EXPERIENCE</div><h3>不强制安装客户端</h3><p>浏览器内可以预览数据；复制共享路径供已接入网盘的电脑使用。远程网页不能直接启动访问者本机的 Excel。</p></div></div>
 <div class="tech-note">限行是降低原件直接暴露面，不是字段级脱敏、DRM、防截图或防复制。需要敏感字段脱敏时必须另行制定并实现策略。</div>
 
-<p class="fine">源码：app.py::download_file / /api/file/{id}/preview-data / 下载审批路由。远程打开文件的限制来自浏览器与终端权限边界。</p>
-</section>
-<section class="slide tech-slide" data-name="上线边界" data-notes="客户看到的不只是产品功能，还能理解技术投入、已经做到的程度、风险边界和推广路径。">
-<header class="mast"><span>企业文件资产中心 · 技术说明</span><span>上线边界</span></header>
-<div class="pagehead"><h2>目前具备试点基础，生产开放还要做针对性验收</h2><p>代码实现、模拟目录验证、客户真实环境验收，是三种不同的完成状态。</p></div>
-
-<div class="tech-grid two"><div class="tech-panel"><span class="tech-status">仓库已实现</span><h3 style="margin-top:17px">可以现场演示的能力</h3><ul><li>动态扫描与失败保留旧索引</li><li>FTS5 索引检索和业务词排序</li><li>权限内 AI 找表与模型备援</li><li>服务端限行 JSON 预览</li><li>应用目录 ACL 和下载审批</li></ul></div>
-<div class="tech-panel"><span class="tech-status warn">真实环境待验收</span><h3 style="margin-top:17px">需要客户共同确认</h3><ul><li>NAS/SMB 原生 ACL 与企业 SSO</li><li>现有明文密码存储的哈希化迁移</li><li>HTTPS 反向代理、审计与密钥治理</li><li>真实共享盘扫描与多人并发压测</li><li>敏感字段脱敏、审批策略与恢复演练</li></ul></div></div>
-<div class="tech-call">推荐试点路径：<strong>先选授权业务目录 → 建索引 → 验证命中率与 P95 → 预览/权限越权测试 → 审批闭环 → 再扩大范围。</strong></div>
-<div class="tech-note">部署约束：当前扫描状态与锁在进程内，推荐单应用进程；一套服务维护一个 FILE_ROOT。不要把演示环境性能或零字节样本当作生产交付指标。</div>
-
-<p class="fine">代码与文档基准：main@411ecd8（2026-11-05 检查）；涉及用户身份认证、文件原生 ACL 和敏感信息安全的事项需上线前单独验收。</p>
+<p class="fine">预览与原件下载分离：已授权可查看限定内容，获取完整文件仍须遵循对应权限与审批规则。</p>
 </section>
 <nav id="chrome" aria-label="阅读控制">
   <div><span id="counter" aria-live="polite"></span><span id="steps" aria-hidden="true"></span><span id="trail"></span></div>
-  <div><button id="toggle-notes" aria-controls="notes" aria-pressed="false">讲解备注 N</button><button id="fullscreen">全屏 F</button>
+  <div><button id="fullscreen">全屏 F</button>
     <button class="arrow" id="prev" aria-label="上一页">←</button><button class="arrow" id="next" aria-label="下一页">→</button></div>
 </nav>
-<aside id="notes" hidden><button id="close-notes">关闭</button><b>讲解备注</b><p id="speech"></p></aside>
 </main>
 <script>
 (() => {
@@ -392,7 +378,6 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
   const steps = slides.map(() => byId('steps').appendChild(document.createElement('i')));
   let current = 0;
   let pointerStart;
-  let notesOpen = false;
 
   function fit() {
     const scale = Math.min(innerWidth / 1920, innerHeight / 1080);
@@ -410,16 +395,9 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
     byId('trail').textContent = slide.dataset.name;
     byId('prev').disabled = current === 0;
     byId('next').disabled = current === slides.length - 1;
-    byId('notes').hidden = !notesOpen;
-    byId('toggle-notes').setAttribute('aria-pressed', String(notesOpen));
-    byId('speech').textContent = slide.dataset.notes.split('|').join('\n');
   }
   function move(delta) {
     current = Math.max(0, Math.min(slides.length - 1, current + delta));
-    render();
-  }
-  function toggleNotes() {
-    notesOpen = !notesOpen;
     render();
   }
   async function fullscreen() {
@@ -432,11 +410,6 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
   }
   byId('prev').onclick = () => move(-1);
   byId('next').onclick = () => move(1);
-  byId('toggle-notes').onclick = toggleNotes;
-  byId('close-notes').onclick = () => {
-    toggleNotes();
-    byId('toggle-notes').focus();
-  };
   byId('fullscreen').onclick = fullscreen;
   byId('fullscreen').hidden = !document.fullscreenEnabled;
   document.addEventListener('fullscreenchange', () => {
@@ -454,9 +427,7 @@ button:disabled {opacity:.3;cursor:default}#chrome .arrow:hover{text-decoration:
         if (event.target.closest('button,a')) return;
         move(1);
         break;
-      case 'n': toggleNotes(); break;
       case 'f': if (document.fullscreenEnabled) fullscreen(); break;
-      case 'escape': if (notesOpen) toggleNotes(); break;
       default: return;
     }
     event.preventDefault();
