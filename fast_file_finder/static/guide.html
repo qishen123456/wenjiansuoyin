@@ -31,7 +31,8 @@
 <a href="#download"><span>05</span> 下载与审批</a>
 <a href="#archive"><span>06</span> 完成归档待办</a>
 <a href="#management"><span>07</span> 管理与审核 <i>管理员</i></a>
-<a href="#faq"><span>08</span> 常见问题</a>
+<a href="#technology"><span>08</span> 技术原理与安全边界</a>
+<a href="#faq"><span>09</span> 常见问题</a>
 </nav>
 <div class="sidebar-note"><span class="note-dot"></span> 先找到文件，再开始工作。<small>实际可见的文件与操作，以你的账号权限为准。</small></div>
 </aside>
@@ -88,12 +89,32 @@
 <div class="admin-grid"><div><svg class="icon"><use href="#g-shield"/></svg><h3>分配目录权限</h3><p>超级管理员进入“人员权限 → 目录访问授权”，选择成员或部门及目录。子目录继承授权，拒绝规则优先；其他账号不会自动获得全盘访问权。</p></div><div><svg class="icon"><use href="#g-check"/></svg><h3>处理审核申请</h3><p>在“下载审批”处理下载用途申请，在“归档合规”审核待办凭证。部门管理员只管理自己获准访问的目录。</p></div><div><svg class="icon"><use href="#g-folder"/></svg><h3>设置归档规则</h3><p>选择目标目录，填写报表关键词、统计周期和责任人，再设置当天 / 次日、下周或下月第几天几点检测。可按自然日或工作日计数，选择遇假顺延、照常检测或跳过，并预览最近检测节点，最后预检保存。确认目录确有文件；只有空占位文件时不能据此判断交付已达标。</p></div><div><svg class="icon"><use href="#g-file"/></svg><h3>检查同步情况</h3><p>超级管理员可以在“索引与同步”刷新索引，查看最近扫描结果。文件刚放入网盘却尚未出现时，可以从这里排查。</p></div></div>
 <div class="mini-note">“当前规则达标率”描述的是规则当前是否满足更新要求，不是历史上每次都按时完成的比例。</div>
 </section>
+
+<section id="technology" class="guide-section" data-guide-section>
+<div class="section-heading"><span class="section-number">08</span><div><h2>系统背后是怎么跑的？</h2><p>为业务方和技术验收人员说明扫描、检索、AI、预览与访问控制的真实处理流程。</p></div><span class="section-tag">技术原理</span></div>
+<div class="callout"><svg class="icon"><use href="#g-file"/></svg><p><strong>基本架构：</strong>共享盘原件 → 后台目录元数据扫描 → 本地 SQLite / FTS5 索引 → 按登录账号过滤目录权限 → 文件搜索、AI 找表或按需预览。普通搜索不会重新遍历 NAS，也不逐个打开 Excel。</p></div>
+<div class="feature-pair">
+<div><span class="feature-label">01 / 扫描提速</span><h3>动态多线程扫描，增量写入</h3><p>目录任务通过共享队列动态分配给扫描线程，默认根据 CPU 使用 2–8 个线程，可配置且最大 16 个；文件元数据经有界队列交给单个写库消费者。已索引文件在内存中按路径、大小与时间比较，无变化的不重复更新；写库默认每 300 条或每 1 秒提交。</p><small>扫描遇到访问失败时标记为部分完成，避免错误删除尚未确认消失的文件记录。仍需遍历目录元数据，并非 NAS 实时事件通知。</small></div>
+<div><span class="feature-label">02 / 索引检索</span><h3>搜索读本地索引，不读全盘正文</h3><p>系统为文件名、目录、大小、格式与修改时间等元数据建立 SQLite FTS5 索引。使用中文字符片段、业务关键词、缩写和相关度评分召回候选，再按更新时间等条件缩小结果。</p><small>当前并未建立 Excel 单元格正文的跨文件全文索引；表内数据只在打开授权文件后按需读取。</small></div>
+</div>
+<div class="feature-pair">
+<div><span class="feature-label">03 / AI 找表</span><h3>授权范围内先检索，再模型辅助</h3><p>用户用业务语言提问时，先抽取主题关键词并检索已授权文件。直接命中就返回真实文件与目录；不足时可调用配置的主模型/备用模型，利用有限的已授权目录元数据提出替代搜索词或可能位置。</p><small>模型生成的目录推测不代表文件一定存在。启用外部模型前需确认文件名、目录名等元数据能否发送给服务商。</small></div>
+<div><span class="feature-label">04 / 限行预览</span><h3>服务端解析有限数据，浏览器不取原件</h3><p>在线预览默认每页 100 行，最多 200 行；最多展示前 10,000 行、100 列、50 个工作表，每格最多 2,000 字符。服务端有文件大小、并发和短时缓存上限，返回分页 JSON 而不是整份 Excel 字节。</p><small>这属于限量展示，并非字段脱敏或防截图。要下载完整原件仍需执行既有审批。</small></div>
+</div>
+<div class="feature-pair">
+<div><span class="feature-label">05 / 权限执行</span><h3>权限在 SQL 查询之前生效</h3><p>超级管理员可以对成员或精确部门配置目录允许/拒绝规则。子目录继承，拒绝优先；请求按当前登录身份加载目录策略，SQLite 连接局部视图在召回、统计及分页前过滤未授权文件。</p><small>默认无授权无文件；权限变更后新请求重新判断。应用目录 ACL 尚不能替代 NAS/SMB 原生权限与企业 SSO。</small></div>
+<div><span class="feature-label">06 / 审批与原件</span><h3>看内容与拿走原件分开控制</h3><p>在线数据预览和完整文件下载分别通过不同接口。普通成员对已授权文件提交用途、等待管理员审核；通过后使用限时下载票据，再由后端验证访问范围并返回原始文件。</p><small>网页不能从远端直接启动访问者电脑上的 Excel；复制共享路径仍要求终端有网盘访问权。</small></div>
+</div>
+<div class="mini-note"><strong>性能证据：</strong>仓库 2026-11-05 的本地模拟目录单轮实验，119,668 文件的无变化扫描由 11.685 秒降至 6.239 秒（约减少 47%），但峰值内存上升。该结果仅说明本地条件下改造有效，不能作为客户 NAS 的速度承诺。</div>
+<div class="mini-note"><strong>生产验收边界：</strong>正式推广前，应验证真实 NAS 扫描与检索 P95、用户与原生文件 ACL 的映射、HTTPS / SSO、密码哈希迁移、敏感字段策略、审计备份与越权测试。系统当前可做有边界的试点，不宣称这些事项已全部完成。</div>
+<a class="text-link" href="https://github.com/qishen123456/wenjiansuoyin/blob/main/docs/customer_technology_manual.html" target="_blank" rel="noopener noreferrer">查看完整技术演示手册 <svg class="icon"><use href="#g-arrow"/></svg></a>
+</section>
 <section id="faq" class="guide-section" data-guide-section>
-<div class="section-heading"><span class="section-number">08</span><div><h2>可能会遇到的问题</h2><p>先做这几项检查，通常就能继续工作。</p></div></div>
+<div class="section-heading"><span class="section-number">09</span><div><h2>可能会遇到的问题</h2><p>先做这几项检查，通常就能继续工作。</p></div></div>
 <div class="faq-list">
 <details><summary>为什么搜索不到文件？</summary><p>先减少关键词和筛选条件，或按部门进入目录查找。仍然找不到时，请管理员确认该文件已同步、格式受支持，并且你拥有访问权限。系统不会展示未授权文件的名称或数量。</p></details>
 <details><summary>登录后没有可见文件，怎么办？</summary><p>请联系超级管理员，为你的账号或所属部门分配目录访问权。没有授权时，文件数量可能显示为 0；更换搜索词无法解决权限问题。</p></details>
-<details><summary>为什么有的文件不能预览？</summary><p>先检查文件是否为空，或原文件是否已被移动、删除。大文件可能需要等待；文件刚发生变化时，请管理员同步后重试。预览仍失败，可以提供文件名和页面提示给管理员。</p></details>
+<details><summary>为什么有的文件不能预览？</summary><p>先检查文件是否为空、原文件是否移动或超过预览大小上限。繁忙时可能提示稍后重试；文件正在更新时请刷新后重试。预览仍失败，可以提供文件名和页面提示给管理员。</p></details>
 <details><summary>部门有今日更新，为什么仍有未更新提醒？</summary><p>监控任务检查的是名称匹配的指定报表。部门里其他文件的更新，或仅提交了空文件，都不代表这份监控报表已完成交付。打开任务详情，查看应更新时间、最近有效报表和异常原因。</p></details>
 <details><summary>“今日更新”就是今天新增的文件吗？</summary><p>它按文件的最后修改日期统计，包含今天修改过的旧文件，并不等同于今天首次上传的数量。月度图也按最后修改日期归集，本月尚未结束时不宜直接与完整月份比较。</p></details>
 <details><summary>演示环境里的报表可以当成业务结论吗？</summary><p>不能。演示报表只用于体验功能，会按日期更新。实际工作请以公司正式业务文件为准。</p></details>
