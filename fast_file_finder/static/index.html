@@ -1363,6 +1363,8 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 .btn-table-action:hover { background: var(--surface-subtle); border-color: var(--line-strong); }
 .btn-table-action.primary { background: var(--brand); border-color: var(--brand); color: #FFF; font-weight: 600; }
 .btn-table-action.danger { color: var(--danger); }
+/* 公网/远程访问隐藏「本机打开」：该操作在服务器本机执行，用户看不到结果 */
+body.remote-mode .btn-open-local { display: none !important; }
 .breadcrumb-part { color: var(--muted); }
 .breadcrumb-sep { color: var(--faint); margin: 0 2px; }
 
@@ -3228,7 +3230,7 @@ function renderResults(data) {
           </div>
         </div>
         <div class="card-actions">
-          <button class="btn-action-primary" onclick="event.stopPropagation();openFileLocally(${r.id})" title="用本机默认程序（Excel/WPS）打开"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-arrow-up-right"/></svg></button>
+          <button class="btn-action-primary btn-open-local" onclick="event.stopPropagation();openFileLocally(${r.id})" title="用本机默认程序（Excel/WPS）打开"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-arrow-up-right"/></svg></button>
           <button class="btn-action-secondary" onclick="event.stopPropagation();previewFile(${r.id})" title="浏览器内在线预览"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-eye"/></svg></button>
           <button class="btn-action-secondary" onclick="event.stopPropagation();locateInCatalog('${esc(r.parent || r.path)}')" title="在组织架构树中定位"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-network"/></svg></button>
           <button class="btn-action-secondary" onclick="event.stopPropagation();handleSearchDownload(${i})" title="申请或直接下载"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-download"/></svg></button>
@@ -3435,6 +3437,11 @@ async function copyPath(i) {
 }
 
 async function openFileLocally(fileId) {
+  // 公网/远程访问时该操作会在服务器本机执行，用户看不到结果，引导改用预览/下载
+  if (document.body.classList.contains('remote-mode') || !['127.0.0.1', 'localhost'].includes(location.hostname)) {
+    toast('当前是公网访问，文件位于服务器，「打开」不可用，请改用「预览」或「下载」');
+    return;
+  }
   try {
     await api(`/api/file/${fileId}/open`, { method: 'POST' });
     toast('已调用本机默认程序打开文件（Excel/WPS），请稍候');
