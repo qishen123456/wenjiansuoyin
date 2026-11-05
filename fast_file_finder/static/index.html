@@ -1828,10 +1828,10 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
           <div class="status-left">
             <button class="btn-back-cockpit" onclick="showHomeCockpit()" title="返回数据概览"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chevron-left"/></svg> 数据概览</button>
             <span class="status-dot"></span>
-            <span id="metricsSummary">本地索引极速召回</span>
+            <span id="metricsSummary">按当前索引检索</span>
             <span style="color:var(--line)">|</span>
-            <span id="metricsDetails">在 130,451 个表格中匹配</span>
-            <span class="timing-badge">耗时 <strong id="metricsElapsed">0.0</strong> ms</span>
+            <span id="metricsDetails">正在读取可访问文件范围</span>
+            <span class="timing-badge" id="metricsTiming" title="本次服务端查询耗时，随数据、负载和环境变化，供排查参考"><span id="metricsTimingLabel">本次查询</span> <strong id="metricsElapsed">—</strong> 秒</span>
           </div>
           <div class="status-right"></div>
         </div>
@@ -1940,7 +1940,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
           <div class="kpi-info">
             <div class="kpi-label">今日更新文件</div>
             <div class="kpi-value-row">
-              <span class="kpi-value" id="kpiTodayAdded">—</span><span class="pulse-dot-sm" title="实时更新"></span>
+              <span class="kpi-value" id="kpiTodayAdded">—</span><span class="pulse-dot-sm" title="按已同步的文件修改日期统计"></span>
             </div>
             <div class="kpi-sub">按今日修改时间统计</div>
           </div>
@@ -2220,7 +2220,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <div style="font-size:16px;font-weight:800;color:#18181B" id="approvalTitle">下载审批中心</div>
-            <div style="font-size:12px;color:#71717A;margin-top:2px">普通成员下载文件需管理员审批；通过后链接限时有效，申请、审批、下载全程留痕可审计</div>
+            <div style="font-size:12px;color:#71717A;margin-top:2px">普通成员下载文件需管理员审批；通过后链接限时有效，可查看申请、审批与下载记录</div>
           </div>
           <button class="btn-action-secondary" onclick="loadApprovalCenter()"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-refresh"/></svg> 刷新</button>
         </div>
@@ -2262,7 +2262,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
           <div class="kpi-meta-wrap">
             <div class="kpi-label-text">内网运行模式</div>
             <div class="kpi-value-text" style="font-size:14px;color:var(--success);font-weight:600">纯内网免映射</div>
-            <div class="kpi-sub-text">手机号+密码安全登录</div>
+            <div class="kpi-sub-text">使用手机号与密码登录</div>
           </div>
         </div>
       </div>
@@ -2315,7 +2315,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
       <div class="portal-page-heading">
 <div>
 <h1>索引与同步</h1>
-<p id="portalSyncDescription">查看搜索索引状态与后台同步任务。</p>
+<p id="portalSyncDescription">查看索引状态与扫描计划。新文件在相应扫描完成后进入检索范围。</p>
 </div>
 <button class="portal-button" onclick="refreshPortalSync()">刷新状态</button>
 </div>
@@ -2333,7 +2333,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 <strong id="lastScan">尚未扫描</strong>
 </div>
 <div>
-<span>定时增量同步</span>
+<span>定时索引扫描</span>
 <strong id="portalSyncInterval">—</strong>
 </div>
       </div>
@@ -2342,7 +2342,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 <section class="home-panel">
 <div class="home-panel-heading">
 <h2>后台任务</h2>
-<span class="portal-muted">随服务自动运行</span>
+<span class="portal-muted">按配置运行</span>
 </div>
 <div class="portal-table-scroll">
 <table class="portal-table">
@@ -2358,7 +2358,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 <tr>
 <td>
 <b>增量同步</b>
-<small>扫描新增与修改的文件</small>
+<small>遍历目录并更新有变化的文件信息</small>
 </td>
 <td id="portalJobInterval">—</td>
 <td id="portalJobState">—</td>
@@ -2712,7 +2712,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
       <div>
         <label style="font-size:12.5px;font-weight:700;color:#18181B;display:block;margin-bottom:6px">分配系统权限角色：</label>
         <select id="newUserRole" class="sort-select-pill" style="width:100%">
-          <option value="user">普通用户 (报表极速检索、AI寻访与下载)</option>
+          <option value="user">普通用户（报表检索、AI 找表与下载申请）</option>
           <option value="dept_admin">部门管理员 (归档规则维护与审核关闭)</option>
           <option value="super_admin">系统超管 (全部系统与人员权限管理)</option>
         </select>
@@ -3116,14 +3116,20 @@ function renderResults(data) {
   // 搜索结果摘要
   const banner = $('searchMetricsBanner');
   banner.classList.remove('hidden');
-  const elapsed = Number(data.elapsed_ms || 0).toFixed(1);
+  const elapsed = Math.max(0.1, Number(data.elapsed_ms || 0) / 1000).toFixed(1);
   $('metricsElapsed').textContent = elapsed;
+  const isPacedDemo = Number(data.demo_delay_ms || 0) > 0;
+  const timingLabel = isPacedDemo ? '演示查询' : '本次查询';
+  $('metricsTimingLabel').textContent = timingLabel;
+  $('metricsTiming').title = isPacedDemo
+    ? '包含演示节奏等待的实际响应耗时。演示参考 5 秒内；实际环境以现场实测为准。'
+    : '本次服务端查询耗时，随数据、负载和环境变化，供排查参考';
   $('metricsSummary').textContent = !lastResults.length && !data.ai_used ? '未找到匹配文件，可调整关键词或筛选条件。' : (data.message || '已按所选条件检索');
-  $('metricsDetails').textContent = `在 ${indexedTotalCache.toLocaleString()} 个全网盘表格中命中 ${totalCandidates} 个结果 · 当前第 ${currentPage} / ${totalPages || 1} 页`;
+  $('metricsDetails').textContent = `在 ${indexedTotalCache.toLocaleString()} 个可访问索引文件中找到 ${totalCandidates} 个结果 · 当前第 ${currentPage} / ${totalPages || 1} 页`;
 
   const modeLabel = matchMode === 'any' ? '宽松匹配' : '严格匹配';
   $('resultTitle').innerHTML = `搜索结果 <span style="font-size:12px;color:var(--muted);font-weight:400;white-space:nowrap">（“${esc(data.query)}” · ${modeLabel}）</span>`;
-  $('resultMeta').textContent = `共 ${totalCandidates} 份表格 · 本页呈现 ${lastResults.length} 份 · 检索耗时 ${elapsed} ms`;
+  $('resultMeta').textContent = `共 ${totalCandidates} 份表格 · 本页呈现 ${lastResults.length} 份 · ${isPacedDemo ? '演示查询（含节奏等待）' : '本次服务端查询'} ${elapsed} 秒`;
 
   // 已激活筛选条件 chips（点击单个移除）
   const chips = [];
@@ -3152,7 +3158,7 @@ function renderResults(data) {
             <svg class="icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--brand)"><use href="#i-sparkles"/></svg>
             <div>
               <div style="font-weight:600;color:var(--brand);font-size:14px">AI 智能推测补齐与目录定位诊断</div>
-              <div style="font-size:11.5px;color:var(--muted);margin-top:2px">由【${esc(g.model_used || '白山/百炼模型')}】结合网盘真实文件的已有目录与命名规律实时推理</div>
+              <div style="font-size:11.5px;color:var(--muted);margin-top:2px">参考来源：${esc(g.model_used || '来源未标注')} · 根据已有目录与命名规律给出建议，请核对文件</div>
             </div>
           </div>
           <div class="ai-guess-body" style="background:#ffffff;padding:12px 14px;border-radius:8px;border:1px solid var(--line)">
@@ -3207,7 +3213,7 @@ function renderResults(data) {
     const timeInfo = fmtDate(r.mtime);
     const cls = extClass(r.ext);
     const hasData = r.size > 0;
-    const scoreVal = r.score ? (r.score >= 99.9 ? '100% 精确命中' : `匹配度 ${r.score}%`) : '';
+    const scoreVal = r.score ? '按索引相关性排序' : '';
     return `
       <article class="result-card" data-idx="${i}" tabindex="0" role="button" aria-label="${esc(r.name)}" onclick="selectAndInspectResult(${i}, true)" onkeydown="if(event.key==='Enter'){event.preventDefault();selectAndInspectResult(${i}, true)}">
         <div class="file-badge-icon ${cls}">${esc((r.ext || 'FILE').replace('.', '').toUpperCase())}</div>
@@ -3221,7 +3227,7 @@ function renderResults(data) {
           <div class="card-meta-row">
             <span class="meta-time">${renderFileTime(r.mtime)}</span>
             <span>${fmtBytes(r.size)}</span>
-            ${hasData ? '<span class="badge-real-data">真实数据</span>' : ''}
+            ${hasData ? '<span class="badge-real-data">非空文件</span>' : ''}
             ${scoreVal ? `<span class="score-badge">${scoreVal}</span>` : ''}
             <span class="match-tag">${esc(r.match_reason || '全词包含')}</span>
           </div>
@@ -3597,7 +3603,7 @@ async function submitDownloadRequest() {
   } catch (e) { toast(e.message); }
 }
 
-// ---------- 在线预览（应用内置 SheetJS 渲染，数据不落地） ----------
+// ---------- 在线预览（服务端限行解析，浏览器接收分页数据） ----------
 function previewFile(fileId) {
   recordPortalEvent('preview_open', fileId);
   // 直接同步打开预览页：避免异步 window.open 被浏览器弹窗拦截，点开即有加载反馈

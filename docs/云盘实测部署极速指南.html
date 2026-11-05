@@ -287,7 +287,7 @@
     <h1 class="hero-title">企业网盘（130,435 个表格 / 171.86 GB）实测部署与检索测速指南</h1>
     <p class="hero-desc">
       已精准适配你们公司的真实网盘源：<code>\\10.2.1.48\电商业务（深圳安莱亚）\数据策略</code>。<br>
-      先跳过繁琐的权限与飞书配置！本手册指导你<b>在能连上 10.2.1.48 的服务器上直接启动本项目，实测 13 万个真实业务表格的秒级扫盘与 15ms 极速检索体验。</b>
+      本手册供部署联测参考，正式使用前须核对账号和目录权限。请<b>在具备共享盘访问条件的服务器上启动项目，使用实际目录联合测试扫描、检索和预览。</b>
     </p>
 
     <!-- 真实数据统计卡片（来自网盘数据文件规模_1014.xlsx） -->
@@ -405,7 +405,7 @@ ls -la /data/share</code></pre>
           <span>在服务器上拉取项目并配置 .env</span>
           <button class="copy-btn" onclick="copyText(this)">复制命令</button>
         </div>
-        <pre><code># 1. 直接通过 Git 克隆代码到服务器（秒级完成）：
+        <pre><code># 1. 直接通过 Git 克隆代码到服务器：
 git clone https://github.com/qishen123456/wenjiansuoyin.git /opt/file-search
 cd /opt/file-search
 
@@ -433,7 +433,7 @@ EOF</code></pre>
       <div class="callout callout-info">
         <div>💡</div>
         <div>
-          <b>性能参数说明：</b>我们将 <code>APP_CPUS</code> 设为 <code>4.0</code>，<code>APP_MEM_LIMIT</code> 设为 <code>4g</code>。对于 130,435 个文件（171.86 GB），这样可以让多进程在 <b>35~50 秒内</b> 迅速完成百万级元数据提取与倒排索引库构建！
+          <b>性能参数说明：</b>我们将 <code>APP_CPUS</code> 设为 <code>4.0</code>，<code>APP_MEM_LIMIT</code> 设为 <code>4g</code>。对于 130,435 个文件（171.86 GB），该配置仅供联测起步参考。请根据实际文件规模、存储网络及并发负载调整，扫描耗时以现场实测为准。
         </div>
       </div>
     </div>
@@ -467,7 +467,7 @@ docker compose logs -f app</code></pre>
         <div class="step-num">4</div>
         <div class="step-head-text">
           <h2>打开浏览器见证 13 万个真实表格测速效果</h2>
-          <p>体验毫秒级倒排索引与拼音多词检索</p>
+          <p>测试文件索引检索与多词匹配</p>
         </div>
       </div>
 
@@ -485,13 +485,13 @@ docker compose logs -f app</code></pre>
           <input type="checkbox" checked>
           <div>
             <b>1. 点击「⚡ 重建全量索引」</b><br>
-            <span style="font-size:12px;color:#64748B">系统将开始遍历 10.2.1.48 真实网盘。稍等约 30~50 秒，右上角会显示 <b>“已索引 130,435 个文件”</b>！</span>
+            <span style="font-size:12px;color:#64748B">系统将开始遍历 10.2.1.48 真实网盘。扫描耗时与结果数量以实际目录为准，请查看右上角的索引状态。</span>
           </div>
         </li>
         <li class="check-item">
           <input type="checkbox" checked>
           <div>
-            <b>2. 测试多词组合秒查</b><br>
+            <b>2. 测试多词组合检索</b><br>
             <span style="font-size:12px;color:#64748B">在搜索框输入真实业务词：<code>阿里 自营 2026 利润</code> 或 <code>抖音 达人 投放</code>，观察右上角：<b>检索耗时一般仅 10ms ~ 25ms</b>！</span>
           </div>
         </li>
@@ -499,7 +499,7 @@ docker compose logs -f app</code></pre>
           <input type="checkbox" checked>
           <div>
             <b>3. 测试拼音缩写模糊检索</b><br>
-            <span style="font-size:12px;color:#64748B">即使记不清文件名，输入拼音首字母（如 <code>alzy</code>）即可毫秒级精确定位到 <code>1-阿里平台-自营</code> 里的对账单。</span>
+            <span style="font-size:12px;color:#64748B">即使记不清文件名，输入拼音首字母（如 <code>alzy</code>）可尝试检索 <code>1-阿里平台-自营</code> 里的对账单。</span>
           </div>
         </li>
       </ul>
@@ -512,7 +512,7 @@ docker compose logs -f app</code></pre>
       <div class="step-header">
         <div class="step-num">⚡</div>
         <div class="step-head-text">
-          <h2>在 Windows Server / 10.2.1.48 本机运行 (Python 纯原生 1 分钟起跑)</h2>
+          <h2>在 Windows Server / 10.2.1.48 本机运行 (Python 环境启动)</h2>
           <p>适合服务器本身就是 Windows，或者测试机没有装 Docker 的场景</p>
         </div>
       </div>
@@ -529,7 +529,7 @@ docker compose logs -f app</code></pre>
         <pre><code># 1. 确保安装了 Python 3.10+ 并进入项目目录
 cd C:\file-search
 
-# 2. 安装必要运行依赖（几秒钟装好）
+# 2. 安装必要运行依赖
 pip install -r fast_file_finder/requirements.txt
 
 # 3. 指定真实网盘 UNC 路径作为环境变量（无需映射网络驱动器，原生支持 UNC！）
@@ -602,7 +602,7 @@ docker compose restart app
     <div class="step-header">
       <div class="step-num">?</div>
       <div class="step-head-text">
-        <h2>测试常见问题与秒排查方法</h2>
+        <h2>测试常见问题与排查方法</h2>
         <p>真实网盘环境下可能遇到的 3 种状况</p>
       </div>
     </div>
@@ -627,7 +627,7 @@ docker compose restart app
       <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:12px 16px">
         <div style="font-weight:700;font-size:13px;color:#0F172A">Q3: 13 万个文件第一次构建索引需要多久？会不会卡死？</div>
         <div style="font-size:12px;color:#64748B;margin-top:4px;line-height:1.6">
-          <b>实测表现：</b>本项目采用并发 <code>os.scandir</code> 与 SQLite 批量事务，13 万个表格元数据构建仅需 <b>35~50 秒</b>！构建完毕后索引库约 25MB，常驻内存仅 120MB，检索响应小于 20ms，完全不会卡死。
+          <b>实测表现：</b>项目使用并发目录遍历和分批索引写入。扫描耗时、索引体积、内存和检索响应受实际数据与环境影响，应在上线前联合测试并确认验收标准。
         </div>
       </div>
     </div>

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""内网极速文件检索原型：元数据索引 + 本地排序 + 可选 AI 候选重排。"""
+"""文件检索原型：元数据索引 + 本地排序 + 可选 AI 候选重排。"""
 from __future__ import annotations
 
 import base64
@@ -7,6 +7,7 @@ import json
 import logging
 import mimetypes
 import posixpath
+import random
 import os
 import re
 from contextlib import asynccontextmanager, contextmanager
@@ -64,6 +65,56 @@ SENSITIVE_DIRS = [s.strip() for s in re.split(r"[;,，；]", os.getenv("SENSITIV
 AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "true").strip().lower() not in ("0", "false", "no")
 DIRECTORY_ACL_ENABLED = os.getenv("DIRECTORY_ACL_ENABLED", "true").strip().lower() not in ("0", "false", "no")
 DEMO_MODE = os.getenv("DEMO_MODE", "false").strip().lower() in ("1", "true", "yes")
+# Demo pacing affects successful search responses only, after database work is done.
+DEMO_SEARCH_MIN_SECONDS = float(os.getenv("DEMO_SEARCH_MIN_SECONDS", "2"))
+DEMO_SEARCH_MAX_SECONDS = float(os.getenv("DEMO_SEARCH_MAX_SECONDS", "4"))
+if not (math.isfinite(DEMO_SEARCH_MIN_SECONDS) and math.isfinite(DEMO_SEARCH_MAX_SECONDS)
+        and 0 <= DEMO_SEARCH_MIN_SECONDS <= DEMO_SEARCH_MAX_SECONDS <= 10):
+    raise ValueError("Demo search timing must satisfy 0 <= MIN <= MAX <= 10 seconds")
+
+
+def _pace_demo_search(started_at: float) -> float:
+    """Reach a randomized minimum response duration without holding a DB transaction."""
+    if not DEMO_MODE or DEMO_SEARCH_MAX_SECONDS == 0:
+        return 0.0
+    remaining = random.uniform(DEMO_SEARCH_MIN_SECONDS, DEMO_SEARCH_MAX_SECONDS) - (time.perf_counter() - started_at)
+    if remaining <= 0:
+        return 0.0
+    before = time.perf_counter()
+    time.sleep(remaining)
+    return round((time.perf_counter() - before) * 1000, 1)
+
+
+DEMO_SCAN_MIN_SECONDS = float(os.getenv("DEMO_SCAN_MIN_SECONDS", "120"))
+DEMO_SCAN_MAX_SECONDS = float(os.getenv("DEMO_SCAN_MAX_SECONDS", "240"))
+if not (math.isfinite(DEMO_SCAN_MIN_SECONDS) and math.isfinite(DEMO_SCAN_MAX_SECONDS)
+        and 0 <= DEMO_SCAN_MIN_SECONDS <= DEMO_SCAN_MAX_SECONDS <= 300):
+    raise ValueError("Demo scan timing must satisfy 0 <= MIN <= MAX <= 300 seconds")
+
+
+def _pace_demo_scan(started_at: float) -> float:
+    """Wait after index transactions close; shutdown can interrupt demo pacing."""
+    if not DEMO_MODE or DEMO_SCAN_MAX_SECONDS == 0 or _auto_scan_stop.is_set():
+        return 0.0
+    target = random.uniform(DEMO_SCAN_MIN_SECONDS, DEMO_SCAN_MAX_SECONDS)
+    remaining = target - (time.perf_counter() - started_at)
+    if remaining <= 0:
+        return 0.0
+    _scan_state_update(
+        phase="demo_wait",
+        message="文件索引已更新，正在等待演示刷新结束（含演示节奏等待）。",
+    )
+    before = time.perf_counter()
+    _auto_scan_stop.wait(remaining)
+    return time.perf_counter() - before
+
+
+def _scan_duration_label(seconds: float) -> str:
+    rounded = max(1, math.ceil(seconds))
+    minutes, seconds = divmod(rounded, 60)
+    return f"{minutes} 分 {seconds} 秒" if minutes else f"{seconds} 秒"
+
+
 SESSION_TTL_HOURS = float(os.getenv("SESSION_TTL_HOURS", "12"))
 DOWNLOAD_TICKET_TTL_HOURS = float(os.getenv("DOWNLOAD_TICKET_TTL_HOURS", "2"))
 SHARE_UNC_PREFIX = os.getenv("SHARE_UNC_PREFIX", r"\\172.11.111.11\share").strip()
@@ -158,6 +209,8 @@ def _auto_scan_scheduler_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _archive_scheduler_stop.clear()
+    _auto_scan_stop.clear()
     init_db()
     if DEMO_MODE:
         await run_in_threadpool(_ensure_demo_data)
@@ -796,7 +849,7 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
     """Build/update the index in the background; only prune entries after a clean full scan."""
     if not lock_already_acquired and not _scan_lock.acquire(blocking=False):
         return
-    start = time.time()
+    scan_started_at = time.perf_counter()
     scan_id = uuid.uuid4().hex
     scan_root_key = root_scope_key()
     logger.info("index scan started; scan_id=%s", scan_id)
@@ -886,11 +939,18 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
                 _migrate_legacy_archive_paths(conn)
                 run_archive_compliance_check(conn)
 
-        elapsed = time.time() - start
-        _scan_state_update(phase="complete" if scan_complete else "partial")
+        scan_elapsed = time.perf_counter() - scan_started_at
+        demo_delay = _pace_demo_scan(scan_started_at) if scan_complete else 0.0
+        elapsed = time.perf_counter() - scan_started_at
+        _scan_state_update(
+            phase="complete" if scan_complete else "partial",
+            scan_elapsed_seconds=scan_elapsed,
+            demo_delay_seconds=demo_delay,
+        )
         if scan_complete:
             state = _scan_state_snapshot()
-            _scan_state_update(message=f"索引更新完成，用时 {elapsed:.1f} 秒；新增 {state['indexed']:,}，更新 {state['updated']:,}，清理 {state['deleted']:,}。")
+            pace_note = "（含演示节奏等待）" if demo_delay > 0 else ""
+            _scan_state_update(message=f"索引更新完成，用时 {_scan_duration_label(elapsed)}{pace_note}；新增 {state['indexed']:,}，更新 {state['updated']:,}，清理 {state['deleted']:,}。")
             logger.info("index scan completed; scan_id=%s seen=%s indexed=%s updated=%s deleted=%s elapsed=%.2f errors=%s",
                         scan_id, state["seen"], state["indexed"], state["updated"], state["deleted"], elapsed, state["errors"])
         else:
@@ -1618,13 +1678,13 @@ def search(
         ai_guess = None
         if not candidates:
             if enable_ai and is_ai_configured() and not has_extra_filters:
-                # 显式开启 AI 选项时才触发外部大模型，保障常规搜索极限毫秒级吞吐
+                # 显式开启 AI 选项时才调用配置的模型服务
                 ai_guess = ai_guess_and_supplement(conn, query)
                 ai_used = True
             else:
                 tokens = extract_business_keywords(query)
                 ai_guess = {
-                    "reasoning": f"未搜到包含“{query}”的文件。建议尝试拆分关键词，或点击右下角【🤖 AI 找表助手】由 DeepSeek 大模型深度推测其可能存放的业务目录。",
+                    "reasoning": f"未搜到包含“{query}”的文件。建议尝试拆分关键词，或打开右下角 AI 找表，根据目录线索尝试缩小查找范围。",
                     "model_used": "本地实体推理引擎",
                     "suggested_terms": tokens[:4],
                     "matched_files": []
@@ -1656,6 +1716,8 @@ def search(
         start_idx = (effective_page - 1) * effective_page_size
         results = candidates[start_idx : start_idx + effective_page_size]
 
+    query_elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+    demo_delay_ms = _pace_demo_search(start)
     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
     logger.info("search completed; query_length=%s results=%s candidates=%s match_mode=%s target=%s elapsed_ms=%s",
                 len(query), len(results), total_count, match_mode, target, elapsed_ms)
@@ -1664,13 +1726,14 @@ def search(
     )
     if not results and ai_guess:
         msg = "未搜到直接匹配文件，已由 AI 助手结合目录结构为您推测归属路径与搜索词。"
-    event_id = _record_product_event("search", request, query_length=len(query), result_count=total_count, elapsed_ms=elapsed_ms, result_ids=[int(row["id"]) for row in results])
+    event_id = _record_product_event("search", request, query_length=len(query), result_count=total_count, elapsed_ms=query_elapsed_ms, result_ids=[int(row["id"]) for row in results])
     return {
         "search_event_id": event_id,
         "query": query, "count": len(results), "total_candidates": total_count,
         "page": effective_page, "page_size": effective_page_size, "total_pages": total_pages,
         "match_mode": match_mode, "target": target, "fallback_relaxed": fallback_relaxed,
-        "results": results, "elapsed_ms": elapsed_ms, "ai_used": ai_used, "ai_expanded": ai_expanded,
+        "results": results, "elapsed_ms": elapsed_ms,
+        "query_elapsed_ms": query_elapsed_ms, "demo_delay_ms": demo_delay_ms, "ai_used": ai_used, "ai_expanded": ai_expanded,
         "ai_guess": ai_guess,
         "message": msg
     }
@@ -3640,7 +3703,7 @@ def review_download_request(req_id: int, req: DownloadReviewAction, request: Req
     return {"ok": True, "message": message}
 
 
-# ---------- 在线预览（应用内置渲染，数据不落地） ----------
+# ---------- 在线预览（服务端限行解析） ----------
 
 @app.get("/api/file/{file_id}/preview")
 def preview_file(file_id: int, request: Request) -> dict[str, Any]:

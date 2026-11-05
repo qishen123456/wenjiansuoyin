@@ -132,11 +132,19 @@ function updatePortalStatus(data) {
   portalText('portalSyncState', state);
   portalText('portalCatalogSync', state);
   portalText('kpiSyncTime', portalDate(data.last_scan_at));
-  portalText('portalSyncDescription', data.running ? '正在同步文件索引，已有搜索结果仍然可用。' : `搜索索引最近更新：${portalDate(data.last_scan_at)}。`);
+  const syncDescription = data.phase === 'demo_wait'
+    ? '文件索引已更新，正在等待演示刷新结束；可以继续搜索已有文件。'
+    : data.running
+      ? '正在扫描目录并更新索引。新文件需等待相应扫描完成，耗时取决于目录规模、网络和负载。'
+      : `索引最近更新：${portalDate(data.last_scan_at)}。扫描按配置运行，新文件在相应扫描完成后可检索。`;
+  portalText('portalSyncDescription', syncDescription);
+  if (currentUser?.demo_mode) {
+    $('portalSyncDescription').textContent += ' 演示刷新以 5 分钟内为节奏参考，含演示等待；实际环境以现场实测为准。';
+  }
   portalText('lastScan', portalDate(data.last_scan_at));
   const interval = Number(data.auto_scan_interval_minutes || 0);
-  portalText('portalSyncInterval', interval > 0 ? `每 ${interval} 分钟` : '未启用');
-  portalText('portalJobInterval', interval > 0 ? `每 ${interval} 分钟` : '手动运行');
+  portalText('portalSyncInterval', interval > 0 ? `间隔 ${interval} 分钟触发` : '未启用');
+  portalText('portalJobInterval', interval > 0 ? `间隔 ${interval} 分钟触发` : '手动运行');
   portalText('portalJobState', data.running ? '运行中' : interval > 0 ? '已启用' : '未启用');
   portalText('portalHomeIndexStatus', `${data.running ? '索引同步中' : warning ? '索引扫描需检查' : data.last_scan_at ? '索引正常' : '索引待建立'} · ${portalDate(data.last_scan_at)}${data.last_scan_at ? ' 更新' : ''}`);
   const detail = data.running ? `已检查 ${fmtNumber(data.seen || 0)} 份 · 新增 ${fmtNumber(data.indexed || 0)} · 更新 ${fmtNumber(data.updated || 0)}` : (data.message || state);
@@ -522,7 +530,7 @@ function renderPortalScanReconciliation(scans) {
 
 function renderPortalProductBaseline(product) {
   const format = (value, unit = '') => value == null ? '待采集' : `${fmtNumber(value)}${unit}`;
-  const entries = [['搜索次数', format(product.searches)], ['零结果率', format(product.zero_result_rate, '%')], ['检索计算 P95', format(product.search_p95_ms, ' ms')], ['有效操作搜索占比', format(product.action_search_rate, '%')], ['首次有效操作 P50', format(product.first_action_p50_seconds, ' 秒')]];
+  const entries = [['搜索次数', format(product.searches)], ['零结果率', format(product.zero_result_rate, '%')], ['检索计算 P95', product.search_p95_ms == null ? '待采集' : product.search_p95_ms < 1000 ? '不足 1 秒' : format(product.search_p95_ms / 1000, ' 秒')], ['有效操作搜索占比', format(product.action_search_rate, '%')], ['首次有效操作 P50', format(product.first_action_p50_seconds, ' 秒')]];
   const eventNames = { search: '搜索', result_click: '结果选择', preview_open: '预览', path_copy: '复制路径', download_request: '下载申请', download_review: '下载审核', archive_submit: '归档提交', archive_review: '归档审核', index_start: '刷新触发', rule_create: '新建规则', rule_update: '修改规则', rule_toggle: '规则启停', rule_delete: '删除规则' };
   $('portalProductBaseline').innerHTML = `<div class="foundation-metric-grid">${entries.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('')}</div><div class="foundation-reasons">${Object.entries(product.event_counts || {}).map(([name, count]) => `<span>${esc(eventNames[name] || name)} ${fmtNumber(count)}</span>`).join('')}</div><p class="foundation-scope-note">${esc(product.privacy || '')} ${product.collection_started_at ? `自 ${esc(fmtDate(product.collection_started_at).full)} 开始采集；` : ''}数据不足两周时只展示已采集数据，不宣称达标。检索计算耗时分位数最多使用最近 ${fmtNumber(product.latency_sample_limit || 10000)} 次搜索，当前样本 ${fmtNumber(product.latency_sample_size || 0)} 次。</p>${(product.by_role || []).length ? `<div class="foundation-reasons">${product.by_role.map(role => `<span>${esc({ super_admin: '超级管理员', dept_admin: '部门管理员', user: '成员', anonymous: '未登录访客' }[role.actor_role] || role.actor_role)}：${fmtNumber(role.searches)} 次搜索 / ${fmtNumber(role.zero_results)} 次零结果</span>`).join('')}</div>` : ''}`;
 }
@@ -587,7 +595,7 @@ function renderDirectoryGrants() {
       await api(`/api/system/directory-grants/${button.dataset.revokeGrant}`, { method:'DELETE' });
       directoryGrantData = directoryGrantData.filter(g => g.id !== Number(button.dataset.revokeGrant));
       renderDirectoryGrants();
-      $('directoryGrantStatus').textContent = '已撤销；后续搜索、预览及下载立即按新权限校验。';
+      $('directoryGrantStatus').textContent = '已撤销；后续搜索、预览及下载将重新校验目录权限。';
     } catch (error) { $('directoryGrantStatus').textContent = error.message; button.disabled = false; }
   }));
 }

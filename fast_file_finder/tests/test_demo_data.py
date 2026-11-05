@@ -16,6 +16,9 @@ def demo(foundation,monkeypatch):
     for domain in ['01-华东-自营','02-华南-经销','09-产品研发-新品简报']:
         (root/domain).mkdir()
     monkeypatch.setattr(application,'DEMO_MODE',True)
+    # Data-generation tests exercise indexing, not presentation pacing.
+    monkeypatch.setattr(application,'DEMO_SCAN_MAX_SECONDS',0)
+    monkeypatch.setattr(application,'DEMO_SEARCH_MAX_SECONDS',0)
     monkeypatch.setattr(application,'_demo_state',{})
     return client,root,add
 
