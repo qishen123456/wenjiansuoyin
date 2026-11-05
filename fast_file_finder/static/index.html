@@ -1363,6 +1363,8 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 .btn-table-action:hover { background: var(--surface-subtle); border-color: var(--line-strong); }
 .btn-table-action.primary { background: var(--brand); border-color: var(--brand); color: #FFF; font-weight: 600; }
 .btn-table-action.danger { color: var(--danger); }
+/* 公网/他人电脑访问时，「打开」无法调起对方电脑的 Excel，隐藏该本机专属操作；同位置已有「预览」按钮可用 */
+body.remote-mode .btn-open-local { display: none !important; }
 .breadcrumb-part { color: var(--muted); }
 .breadcrumb-sep { color: var(--faint); margin: 0 2px; }
 
@@ -3228,7 +3230,7 @@ function renderResults(data) {
           </div>
         </div>
         <div class="card-actions">
-          <button class="btn-action-primary btn-open-local" onclick="event.stopPropagation();openFileLocally(${r.id})" title="用本机默认程序（Excel/WPS）打开"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-arrow-up-right"/></svg></button>
+          <button class="btn-action-primary btn-open-local" onclick="event.stopPropagation();openFileLocally(${r.id})" title="${openBtnTitle()}"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-arrow-up-right"/></svg></button>
           <button class="btn-action-secondary" onclick="event.stopPropagation();previewFile(${r.id})" title="浏览器内在线预览"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-eye"/></svg></button>
           <button class="btn-action-secondary" onclick="event.stopPropagation();locateInCatalog('${esc(r.parent || r.path)}')" title="在组织架构树中定位"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-network"/></svg></button>
           <button class="btn-action-secondary" onclick="event.stopPropagation();handleSearchDownload(${i})" title="申请或直接下载"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-download"/></svg></button>
@@ -3434,11 +3436,26 @@ async function copyPath(i) {
   }
 }
 
+// 是否为服务器本机访问。跨机器永远调不起对方电脑上的 Excel/WPS，这是浏览器的安全边界。
+function isLocalHost() {
+  return ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+}
+
+// 「打开」按钮文案随访问方式切换，避免在别人电脑上误导用户去装 Excel。
+function openBtnLabel(localLabel) {
+  return isLocalHost() ? localLabel : '预览';
+}
+function openBtnTitle() {
+  return isLocalHost()
+    ? '用本机默认程序（Excel/WPS）直接打开'
+    : '在浏览器中在线预览（任何人的电脑都能打开，无需安装 Office）';
+}
+
 async function openFileLocally(fileId) {
-  // 本机部署：调用本机默认程序（Excel/WPS）打开；
-  // 公网/远程访问：无法调起对方电脑的 Excel，改为浏览器内在线预览，别人用自己的电脑也能打开查看。
-  const isLocal = ['127.0.0.1', 'localhost'].includes(location.hostname);
-  if (!isLocal) {
+  // 两条路径：
+  //   1. 服务器本机访问（localhost）→ 调本地默认程序 Excel/WPS 打开；
+  //   2. 公网/他人电脑访问 → 跨机器无法调起对方 Excel，改为浏览器内 SheetJS 在线预览。
+  if (!isLocalHost()) {
     previewFile(fileId);
     return;
   }
@@ -3501,9 +3518,8 @@ function applyUserUI() {
   // 非管理员隐藏"人员与账号权限"入口（该页接口本身也已被后端限制为管理员）
   const permTab = $('navPermTab');
   if (permTab) permTab.style.display = currentUser?.role === 'super_admin' ? '' : 'none';
-  // 非本机访问隐藏"本机打开"按钮（服务器部署时该操作发生在服务器上）
-  const isLocal = ['127.0.0.1', 'localhost'].includes(location.hostname);
-  document.body.classList.toggle('remote-mode', !isLocal);
+  // 公网/他人电脑访问：本机专属操作（调本地 Excel）不可用，隐藏并改用在线预览
+  document.body.classList.toggle('remote-mode', !isLocalHost());
 }
 
 async function doLogin() {
@@ -5811,7 +5827,7 @@ function renderInspectorDetail(r) {
         <span class="inspector-file-times">修改 ${renderFileTime(r.mtime)}<br>创建 ${renderFileTime(r.ctime)}</span>
       </div>
       <div class="inspector-quick-actions">
-        <button class="btn-action-primary" style="padding:4px 10px;font-size:11.5px" onclick="openFileLocally(${r.id})">本机打开</button>
+        <button class="btn-action-primary" style="padding:4px 10px;font-size:11.5px" onclick="openFileLocally(${r.id})" title="${openBtnTitle()}">${openBtnLabel('本机打开')}</button>
         <button class="btn-action-secondary" style="padding:4px 10px;font-size:11.5px" onclick="handleSearchDownload(${selectedResultIndex})">下载</button>
         <button class="btn-action-secondary" style="padding:4px 10px;font-size:11.5px" onclick="copyUncPath(${selectedResultIndex})">⧉ 复制路径</button>
       </div>
