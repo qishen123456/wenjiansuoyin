@@ -1363,8 +1363,6 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 .btn-table-action:hover { background: var(--surface-subtle); border-color: var(--line-strong); }
 .btn-table-action.primary { background: var(--brand); border-color: var(--brand); color: #FFF; font-weight: 600; }
 .btn-table-action.danger { color: var(--danger); }
-/* 公网/远程访问隐藏「本机打开」：该操作在服务器本机执行，用户看不到结果 */
-body.remote-mode .btn-open-local { display: none !important; }
 .breadcrumb-part { color: var(--muted); }
 .breadcrumb-sep { color: var(--faint); margin: 0 2px; }
 
@@ -3437,9 +3435,11 @@ async function copyPath(i) {
 }
 
 async function openFileLocally(fileId) {
-  // 公网/远程访问时该操作会在服务器本机执行，用户看不到结果，引导改用预览/下载
-  if (document.body.classList.contains('remote-mode') || !['127.0.0.1', 'localhost'].includes(location.hostname)) {
-    toast('当前是公网访问，文件位于服务器，「打开」不可用，请改用「预览」或「下载」');
+  // 本机部署：调用本机默认程序（Excel/WPS）打开；
+  // 公网/远程访问：无法调起对方电脑的 Excel，改为浏览器内在线预览，别人用自己的电脑也能打开查看。
+  const isLocal = ['127.0.0.1', 'localhost'].includes(location.hostname);
+  if (!isLocal) {
+    previewFile(fileId);
     return;
   }
   try {
