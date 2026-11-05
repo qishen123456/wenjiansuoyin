@@ -18,7 +18,6 @@ import time
 import unicodedata
 import math
 import secrets
-import shutil
 import uuid
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -67,8 +66,6 @@ DIRECTORY_ACL_ENABLED = os.getenv("DIRECTORY_ACL_ENABLED", "true").strip().lower
 DEMO_MODE = os.getenv("DEMO_MODE", "false").strip().lower() in ("1", "true", "yes")
 SESSION_TTL_HOURS = float(os.getenv("SESSION_TTL_HOURS", "12"))
 DOWNLOAD_TICKET_TTL_HOURS = float(os.getenv("DOWNLOAD_TICKET_TTL_HOURS", "2"))
-# 在线预览为应用内置（SheetJS 前端渲染）；此密钥仅保留给外部渲染器回拉字节流的可选场景
-PREVIEW_SOURCE_KEY = os.getenv("PREVIEW_SOURCE_KEY", uuid.uuid4().hex)
 SHARE_UNC_PREFIX = os.getenv("SHARE_UNC_PREFIX", r"\\172.11.111.11\share").strip()
 
 def to_unc_path(posix_path: str) -> str:
@@ -213,7 +210,7 @@ async def optional_shared_access_token(request: Request, call_next):
     # 登录门禁：除白名单外，所有 /api 接口需要有效会话
     user = None
     if (AUTH_REQUIRED or DIRECTORY_ACL_ENABLED) and path.startswith("/api/"):
-        if path not in _AUTH_OPEN_PATHS and (DIRECTORY_ACL_ENABLED or "/preview-source/" not in path):
+        if path not in _AUTH_OPEN_PATHS:
             user = _get_session_user(request)
             if not user:
                 return JSONResponse(status_code=401, content={"detail": "请先登录后再使用本系统。"})
@@ -3691,57 +3688,6 @@ def preview_data(file_id: int,request: Request,sheet: str=Query(default='',max_l
     except HTTPException:raise
     except Exception as exc:raise HTTPException(422,detail=f'无法预览：{str(exc)[:180]}')
     finally:_limited_preview_gate.release()
-
-
-@app.get('/api/file/{file_id}/preview-source/{filename}')
-def preview_source(file_id: int,filename: str,request: Request,key: str=Query(default='')):
-    # Raw originals must follow the same approval flow as explicit downloads.
-    if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:_require_user(request)
-    _get_indexed_file(file_id)
-    user=_get_session_user(request)
-    if not user or user['role'] not in _ADMIN_ROLES:
-        raise HTTPException(403,'原文件请走下载审批，在线预览请使用服务端分页接口')
-    return download_file(file_id,request)
-
-
-PREVIEW_CACHE_DIR = DB_PATH.parent / "preview_cache"
-PREVIEW_CACHE_MAX_BYTES = int(os.getenv("PREVIEW_CACHE_MAX_MB", "2048")) * 1024 * 1024
-_preview_cache_lock = threading.Lock()
-
-
-def _preview_cache_get(file_id: int, src: Path) -> Path:
-    """返回可用于 FileResponse 的本地缓存文件路径（未命中则从网盘复制一份）。"""
-    try:
-        st = src.stat()
-    except OSError:
-        return src  # 网盘读取失败时原样抛出给 FileResponse 处理
-    PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    source_key = uuid.uuid5(uuid.NAMESPACE_URL, f"{DB_PATH}|{root_scope_key()}|{src}").hex
-    cache_prefix = f"{file_id}_{source_key}_"
-    cache_key = f"{cache_prefix}{st.st_mtime_ns}_{st.st_size}"
-    hit = PREVIEW_CACHE_DIR / cache_key
-    if hit.exists():
-        return hit
-    with _preview_cache_lock:
-        if hit.exists():
-            return hit
-        tmp = PREVIEW_CACHE_DIR / (cache_key + ".tmp")
-        shutil.copyfile(src, tmp)
-        tmp.replace(hit)
-        # 清理：本文件的历史版本 + 总量超限的最旧文件
-        for old in PREVIEW_CACHE_DIR.glob(f"{cache_prefix}*"):
-            if old.name != cache_key:
-                old.unlink(missing_ok=True)
-        entries = sorted(PREVIEW_CACHE_DIR.iterdir(), key=lambda p: p.stat().st_mtime)
-        total = sum(p.stat().st_size for p in entries)
-        for p in entries:
-            if total <= PREVIEW_CACHE_MAX_BYTES:
-                break
-            if p.name == cache_key:
-                continue
-            total -= p.stat().st_size
-            p.unlink(missing_ok=True)
-        return hit
 
 
 # ============================================================

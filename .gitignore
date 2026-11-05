@@ -44,3 +44,8 @@ skills/
 fast_file_finder/index.db
 fast_file_finder/data/
 fast_file_finder/.venv/
+
+# Historical source backups are not part of the maintained application.
+*.bak
+*.bak_*
+*.orig

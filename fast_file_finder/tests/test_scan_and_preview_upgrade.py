@@ -73,3 +73,13 @@ def test_xlsx_preview_lists_sheets_and_does_not_execute_formulas(foundation,monk
     assert d['sheets']==['销售','库存'] and d['rows'][2][1]==''
     assert client.get(f'/api/file/{fid}/preview-data?sheet=库存').json()['rows'][0]==['商品','数量']
     assert client.get(f'/api/file/{fid}/preview-data?sheet=未知').status_code==422
+
+
+def test_retired_preview_assets_and_raw_route_are_removed(foundation):
+    client,root,add=foundation
+    fid=add()
+    assert client.get(f'/api/file/{fid}/preview-source/report.csv').status_code==404
+    for name in ['preview-worker.js','xlsx.full.min.js','index.html.bak_v1','index.html.bak_ui_redesign','preview.html.bak_ui_redesign','guide.html.bak_ui_redesign','bi_workbench.html.bak_ui_redesign']:
+        assert client.get('/static/'+name).status_code==404
+    assert client.get('/workbench').status_code==200
+    assert client.get(f'/api/file/{fid}/preview-data').status_code==200

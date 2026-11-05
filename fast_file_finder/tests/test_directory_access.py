@@ -13,7 +13,6 @@ from test_product_foundation import foundation, login, rule_payload
 @pytest.fixture
 def secure(foundation, monkeypatch):
     monkeypatch.setattr(application, 'DIRECTORY_ACL_ENABLED', True)
-    monkeypatch.setattr(application, 'PREVIEW_CACHE_DIR', foundation[1].parent / 'preview-cache')
     return foundation
 
 
@@ -38,7 +37,7 @@ def flatten(node):
 def test_acl_forces_login_even_when_development_auth_is_disabled(secure):
     c, root, add = secure
     fid = add()
-    for endpoint in ['/api/catalog/tree', '/api/search?q=报表', f'/api/file/{fid}/preview-source/a.csv?key={application.PREVIEW_SOURCE_KEY}', '/api/index/status']:
+    for endpoint in ['/api/catalog/tree', '/api/search?q=报表', f'/api/file/{fid}/preview-data', '/api/index/status']:
         assert c.get(endpoint).status_code == 401
     assert c.get('/api/health').json()['indexed_files'] == 0
     login(c, admin=False)
@@ -82,7 +81,7 @@ def test_deep_grant_only_shows_required_ancestors_and_revocation_invalidates_tre
     assert {n['name'] for n in flatten(tree)} >= {'公司','财务','利润'}
     assert not any(n['name'] == '预算' for n in flatten(tree))
     assert c.get(f'/api/file/{fid}/preview-data').status_code == 200
-    assert c.get(f'/api/file/{fid}/preview-source/a.csv').status_code == 403
+    assert c.get(f'/api/file/{fid}/preview-source/a.csv').status_code == 404
     login(c)
     assert c.delete(f'/api/system/directory-grants/{gid}').status_code == 200
     login(c, admin=False)
@@ -207,22 +206,21 @@ def test_directory_predicate_handles_quotes_wildcards_and_case_exactly():
         assert conn.execute('SELECT '+directory_access.directory_sql('/')+' FROM (SELECT ? AS parent)',('/',)).fetchone()[0] == 1
 
 
-def test_preview_cache_separates_sources_and_subsecond_versions(tmp_path, monkeypatch):
+def test_preview_cache_separates_sources_and_subsecond_versions(foundation):
     import os
-    monkeypatch.setattr(application,'PREVIEW_CACHE_DIR',tmp_path/'cache')
-    paths = [tmp_path/'one.csv',tmp_path/'two.csv']
-    paths[0].write_bytes(b'a,b\n1,2\n')
-    paths[1].write_bytes(b'a,b\n3,4\n')
-    stamp = 1_700_000_000_100_000_000
-    for path in paths:
-        os.utime(path,ns=(stamp,stamp))
-    first = application._preview_cache_get(1,paths[0])
-    second = application._preview_cache_get(1,paths[1])
-    assert first != second and first.read_bytes() != second.read_bytes()
-    paths[0].write_bytes(b'a,b\n5,6\n')
+    client,root,add=foundation
+    first=add('业务域/one.csv',content='a,b\n1,2\n')
+    second=add('业务域/two.csv',content='a,b\n3,4\n')
+    stamp=1_700_000_000_100_000_000
+    paths=[root/'业务域/one.csv',root/'业务域/two.csv']
+    for path in paths:os.utime(path,ns=(stamp,stamp))
+    a=client.get(f'/api/file/{first}/preview-data').json()
+    b=client.get(f'/api/file/{second}/preview-data').json()
+    assert a['rows']!=b['rows']
+    paths[0].write_text('a,b\n5,6\n')
     os.utime(paths[0],ns=(stamp+100_000_000,stamp+100_000_000))
-    changed = application._preview_cache_get(1,paths[0])
-    assert changed != first and changed.read_bytes() == b'a,b\n5,6\n'
+    changed=client.get(f'/api/file/{first}/preview-data').json()
+    assert changed['rows'][1]==['5','6'] and changed['rows']!=a['rows']
 
 
 def test_ai_latest_date_search_keeps_directory_permissions(secure, monkeypatch):
