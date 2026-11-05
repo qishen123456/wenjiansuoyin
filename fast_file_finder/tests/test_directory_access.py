@@ -81,7 +81,8 @@ def test_deep_grant_only_shows_required_ancestors_and_revocation_invalidates_tre
     assert tree['file_count'] == 1
     assert {n['name'] for n in flatten(tree)} >= {'公司','财务','利润'}
     assert not any(n['name'] == '预算' for n in flatten(tree))
-    assert c.get(f'/api/file/{fid}/preview-source/a.csv').status_code == 200
+    assert c.get(f'/api/file/{fid}/preview-data').status_code == 200
+    assert c.get(f'/api/file/{fid}/preview-source/a.csv').status_code == 403
     login(c)
     assert c.delete(f'/api/system/directory-grants/{gid}').status_code == 200
     login(c, admin=False)

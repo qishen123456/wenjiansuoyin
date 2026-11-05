@@ -41,6 +41,9 @@ import directory_access
 import demo_data
 import archive_schedule
 import demo_approvals
+import scan_pipeline
+import limited_preview
+from collections import OrderedDict
 from starlette.concurrency import run_in_threadpool
 
 APP_DIR = Path(__file__).resolve().parent
@@ -656,9 +659,10 @@ def update_index_file(
     *,
     root_key: str | None = None,
     scan_id: str | None = None,
+    known_rows: dict | None = None,
 ) -> str:
     """Upsert one file and stamp it for the current scan generation."""
-    path_str = str(file_path.resolve(strict=False))
+    path_str = str(file_path.resolve(strict=False)) if known_rows is None else os.path.normpath(str(file_path))
     root_key = root_key if root_key is not None else root_scope_key()
     scan_id = scan_id or uuid.uuid4().hex
     row = conn.execute(
@@ -679,7 +683,8 @@ def update_index_file(
         and row["name"] == name
     )
     if unchanged and row["root_key"] == root_key:
-        conn.execute("UPDATE files SET last_seen_scan=? WHERE id=?", (scan_id, row["id"]))
+        if known_rows is None:
+            conn.execute("UPDATE files SET last_seen_scan=? WHERE id=?", (scan_id, row["id"]))
         return "unchanged"
     if row:
         file_id = row["id"]
@@ -819,57 +824,52 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
         root = get_root()
         root_key = root_scope_key()
         with db_session() as conn:
-            for current, dirs, filenames in os.walk(root, followlinks=False, onerror=on_walk_error):
-                allowed_dirs = []
-                for directory in dirs:
-                    if directory in {"$RECYCLE.BIN", "System Volume Information", ".snapshot"} or (DEMO_MODE and directory == demo_data.UNCLASSIFIED_DIRECTORY) or any(seg in directory for seg in SENSITIVE_DIRS) or (Path(current) / directory).is_symlink():
-                        _scan_state_increment("excluded_directories")
-                    else:
-                        allowed_dirs.append(directory)
-                dirs[:] = allowed_dirs
-                for filename in filenames:
-                    _scan_state_increment("discovered")
-                    if filename.startswith("~$"):
-                        _scan_exclude("temporary")
-                        continue  # Excel editing lock/temp files are not real business workbooks.
-                    if any(seg in filename for seg in SENSITIVE_DIRS):
-                        _scan_exclude("sensitive_name")
-                        continue  # 敏感关键词命中文件名同样不入库
-                    ext = Path(filename).suffix.lower()
-                    if ALLOWED_EXTENSIONS and ext not in ALLOWED_EXTENSIONS:
-                        _scan_exclude("unsupported_format")
-                        continue
-                    fp = Path(current) / filename
-                    try:
-                        # Avoid indexing file symlinks that may point outside the approved root.
-                        if fp.is_symlink():
-                            _scan_exclude("symbolic_link")
-                            continue
-                        stat = fp.stat()
-                        if not fp.is_file():
-                            _scan_exclude("not_a_regular_file")
-                            continue
-                        action = update_index_file(conn, fp, stat, root_key=root_key, scan_id=scan_id)
-                        _scan_state_increment("seen")
-                        if action == "unchanged":
-                            _scan_state_increment("unchanged")
-                        if action in ("indexed", "updated"):
-                            _scan_state_increment(action)
-                        seen = _scan_state_snapshot()["seen"]
-                        if seen % 300 == 0:
-                            conn.commit()
-                            _scan_state_update(message=f"已检查 {seen:,} 个表格文件，新增 {_scan_state_snapshot()['indexed']:,} 个。")
-                    except (PermissionError, FileNotFoundError, OSError):
-                        _scan_state_increment("errors")
-                conn.commit()
+            known = {r['path']:r for r in conn.execute('SELECT id,path,size,mtime,ctime,name,root_key FROM files')}
+            unseen = {path for path,row in known.items() if row["root_key"]==root_key}
+            workers = max(1,min(16,int(os.getenv('SCAN_WORKERS',str(min(8,max(2,os.cpu_count() or 4)))))))
+            batch=max(1,int(os.getenv('SCAN_BATCH_SIZE','300')))
+            interval=max(.1,float(os.getenv('SCAN_COMMIT_SECONDS','1')))
+            last_commit=time.monotonic();processed=0
+            def excluded_directory(name):
+                return name in {'$RECYCLE.BIN','System Volume Information','.snapshot'} or (DEMO_MODE and name==demo_data.UNCLASSIFIED_DIRECTORY) or any(t in name for t in SENSITIVE_DIRS)
+            def file_filter(name):
+                if name.startswith('~$'):return 'temporary'
+                if any(t in name for t in SENSITIVE_DIRS):return 'sensitive_name'
+                if ALLOWED_EXTENSIONS and Path(name).suffix.lower() not in ALLOWED_EXTENSIONS:return 'unsupported_format'
+            for event in scan_pipeline.walk_metadata(root,workers=workers,file_filter=file_filter,capacity=max(16,int(os.getenv('SCAN_QUEUE_SIZE','1024'))),excluded_directory=excluded_directory):
+                kind=event[0]
+                if kind=='idle':
+                    if conn.in_transaction and time.monotonic()-last_commit>=interval:conn.commit();last_commit=time.monotonic()
+                    continue
+                if kind=='directory_error':on_walk_error(OSError(event[1]+': '+event[2]));continue
+                if kind=='excluded_directory':_scan_state_increment('excluded_directories');continue
+                _scan_state_increment('discovered')
+                if kind=='excluded_file':_scan_exclude(event[1]);continue
+                if kind=='file_error':_scan_state_increment('errors');continue
+                if kind=='link':_scan_exclude('symbolic_link');continue
+                if kind=='special':_scan_exclude('not_a_regular_file');continue
+                fp=Path(event[1]);filename=fp.name
+                if filename.startswith('~$'):_scan_exclude('temporary');continue
+                if any(t in filename for t in SENSITIVE_DIRS):_scan_exclude('sensitive_name');continue
+                if ALLOWED_EXTENSIONS and fp.suffix.lower() not in ALLOWED_EXTENSIONS:_scan_exclude('unsupported_format');continue
+                action=update_index_file(conn,fp,event[2],root_key=root_key,scan_id=scan_id,known_rows=known)
+                unseen.discard(os.path.normpath(str(fp)))
+                _scan_state_increment('seen');_scan_state_increment(action)
+                processed+=1
+                if processed % batch==0 or time.monotonic()-last_commit>=interval:
+                    conn.commit();last_commit=time.monotonic()
+                    _scan_state_update(message=f'已检查 {processed:,} 个文件 · {workers} 个目录扫描线程')
+            conn.commit()
 
             state = _scan_state_snapshot()
             scan_complete = walk_error_count == 0 and state["errors"] == 0
             if scan_complete:
-                # Generation markers mean we do not need to keep every path in memory or load all DB paths.
-                stale_deleted = _delete_index_rows(
-                    conn, "root_key = ? AND last_seen_scan <> ?", (root_key, scan_id)
-                )
+                # Only a complete enumeration can prove that an old indexed record is missing.
+                stale_deleted=0
+                stale_ids=[known[path]['id'] for path in unseen]
+                for offset in range(0,len(stale_ids),400):
+                    ids=stale_ids[offset:offset+400]
+                    stale_deleted+=_delete_index_rows(conn,'root_key=? AND id IN ('+','.join('?' for _ in ids)+')',(root_key,*ids))
                 # This service indexes one configured root at a time. When FILE_ROOT changes,
                 # old-root entries are hidden from search during scanning and purged only after
                 # the new root has completed successfully.
@@ -3647,26 +3647,61 @@ def review_download_request(req_id: int, req: DownloadReviewAction, request: Req
 
 @app.get("/api/file/{file_id}/preview")
 def preview_file(file_id: int, request: Request) -> dict[str, Any]:
-    """返回应用内置预览页地址（前端 SheetJS 渲染，支持合并单元格/样式/分页）。"""
+    """返回服务端限行预览页地址；原件下载使用独立审批流程。"""
     if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:
         _require_user(request)
     _get_indexed_file(file_id)
     return {"ok": True, "url": f"/static/preview.html?id={file_id}"}
 
 
-@app.get("/api/file/{file_id}/preview-source/{filename}")
-def preview_source(file_id: int, filename: str, request: Request, key: str = Query(default="")) -> FileResponse:
-    """预览文件字节流：kkFileView 容器用密钥拉取，登录用户用会话直接拉取。
+_limited_preview_gate=threading.BoundedSemaphore(1)
+_limited_preview_cache=OrderedDict()
+_limited_preview_cache_lock=threading.Lock()
 
-    带本地磁盘缓存：网盘文件只读一次，后续预览直接发本地副本；
-    网盘文件变更（mtime/size 变化）自动换新缓存键。
-    """
-    if DIRECTORY_ACL_ENABLED or not (key and secrets.compare_digest(key, PREVIEW_SOURCE_KEY)):
-        if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:
-            _require_user(request)
-    file_info, path = _get_indexed_file(file_id)
-    cached = _preview_cache_get(file_id, path)
-    return FileResponse(path=cached, filename=file_info["name"], media_type="application/octet-stream")
+
+@app.get('/api/file/{file_id}/preview-data')
+def preview_data(file_id: int,request: Request,sheet: str=Query(default='',max_length=200),
+                 page: int=Query(default=1,ge=1),page_size: int=Query(default=100,ge=1,le=200)):
+    if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:_require_user(request)
+    info,path=_get_indexed_file(file_id)
+    start=(page-1)*page_size
+    if start>=limited_preview.MAX_ROWS:raise HTTPException(422,'仅预览前 10,000 行，请使用已批准的下载获取完整文件')
+    st=path.stat()
+    if st.st_size==0:raise HTTPException(422,'空文件，暂无可预览内容')
+    limit=int(os.getenv('MAX_PREVIEW_FILE_MB','32'))*1024*1024
+    if path.suffix.lower() not in {'.csv','.tsv','.xlsx','.xlsm'}:limit=min(limit,16*1024*1024)
+    if st.st_size>limit:raise HTTPException(413,'文件超过当前服务端预览大小上限，请拆分文件或申请下载')
+    key=(str(DB_PATH),root_scope_key(),str(path),st.st_mtime_ns,st.st_size,sheet,page,page_size)
+    with _limited_preview_cache_lock:
+        cached=_limited_preview_cache.get(key)
+        if cached and time.monotonic()-cached[0]<60:
+            _limited_preview_cache.move_to_end(key)
+            return JSONResponse(cached[1],headers={'Cache-Control':'no-store'})
+    if not _limited_preview_gate.acquire(timeout=.2):raise HTTPException(429,'预览任务繁忙，请稍后重试',headers={'Retry-After':'2'})
+    try:
+        data=limited_preview.read(path,sheet,start,page_size)
+        after=path.stat()
+        if (st.st_mtime_ns,st.st_size)!=(after.st_mtime_ns,after.st_size):raise HTTPException(409,'文件正在更新，请重试')
+        data.update(ok=True,file_id=file_id,name=info['name'],page=page,page_size=page_size)
+        with _limited_preview_cache_lock:
+            _limited_preview_cache[key]=(time.monotonic(),data)
+            while len(_limited_preview_cache)>32 or sum(len(json.dumps(v[1],ensure_ascii=False).encode()) for v in _limited_preview_cache.values())>16*1024*1024:
+                _limited_preview_cache.popitem(last=False)
+        return JSONResponse(data,headers={'Cache-Control':'no-store'})
+    except HTTPException:raise
+    except Exception as exc:raise HTTPException(422,detail=f'无法预览：{str(exc)[:180]}')
+    finally:_limited_preview_gate.release()
+
+
+@app.get('/api/file/{file_id}/preview-source/{filename}')
+def preview_source(file_id: int,filename: str,request: Request,key: str=Query(default='')):
+    # Raw originals must follow the same approval flow as explicit downloads.
+    if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:_require_user(request)
+    _get_indexed_file(file_id)
+    user=_get_session_user(request)
+    if not user or user['role'] not in _ADMIN_ROLES:
+        raise HTTPException(403,'原文件请走下载审批，在线预览请使用服务端分页接口')
+    return download_file(file_id,request)
 
 
 PREVIEW_CACHE_DIR = DB_PATH.parent / "preview_cache"

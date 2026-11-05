@@ -176,10 +176,9 @@ def test_scan_reconciliation_is_persisted_and_explains_exclusions(foundation):
 def test_partial_scan_keeps_old_index_and_records_unknown_directory_scope(foundation, monkeypatch):
     client, root, add = foundation
     file_id = add()
-    def denied_walk(_root, followlinks=False, onerror=None):
-        onerror(PermissionError("目录不可访问"))
-        return iter([])
-    monkeypatch.setattr(application.os, "walk", denied_walk)
+    def denied_scandir(_root):
+        raise PermissionError("目录不可访问")
+    monkeypatch.setattr(application.os, "scandir", denied_scandir)
     application._scan_worker()
     status = client.get("/api/index/status").json()
     assert status["indexed_files"] == 1

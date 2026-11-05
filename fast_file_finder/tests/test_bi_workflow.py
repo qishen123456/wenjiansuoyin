@@ -301,12 +301,10 @@ def test_incomplete_scan_does_not_prune_missing_files(client_and_sample, monkeyp
     client, indexed_path = client_and_sample
     indexed_path.unlink()
 
-    def incomplete_walk(root, followlinks=False, onerror=None):
-        if onerror:
-            onerror(PermissionError("simulated inaccessible directory"))
-        yield str(root), [], []
+    def inaccessible_scandir(root):
+        raise PermissionError("simulated inaccessible directory")
 
-    monkeypatch.setattr(application.os, "walk", incomplete_walk)
+    monkeypatch.setattr(application.os, "scandir", inaccessible_scandir)
     application._scan_worker()
     status = client.get("/api/index/status").json()
     assert status["phase"] == "partial"

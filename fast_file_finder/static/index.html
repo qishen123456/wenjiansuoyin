@@ -5832,11 +5832,11 @@ function renderInspectorDetail(r) {
     <!-- 3 个核心 KPI 画像卡片 -->
     <div class="inspector-kpi-deck">
       <div class="inspector-kpi-tile">
-        <div class="kpi-tile-label">记录规模</div>
+        <div class="kpi-tile-label">预览行数</div>
         <div class="kpi-tile-val" id="inspKpiRows">${hasData ? '读取中…' : '0 行'}</div>
       </div>
       <div class="inspector-kpi-tile">
-        <div class="kpi-tile-label">字段维度</div>
+        <div class="kpi-tile-label">预览列数</div>
         <div class="kpi-tile-val" id="inspKpiCols">${hasData ? '读取中…' : '-'}</div>
       </div>
       <div class="inspector-kpi-tile">
@@ -5864,71 +5864,32 @@ function renderInspectorDetail(r) {
   }
 }
 
-async function loadInspectorSheetSnippet(fileId, fileName) {
+async function loadInspectorSheetSnippet(fileId,fileName,sheet='') {
   try {
-    const token = sessionStorage.getItem('fileFinderAccessToken') || '';
-    const res = await fetch(`/api/file/${fileId}/preview-source/${encodeURIComponent(fileName)}`, { headers: token ? { 'X-App-Token': token } : {} });
-    if (!res.ok) throw new Error('读取预览字节流失败');
-    const buf = await res.arrayBuffer();
-    const wb = XLSX.read(buf, { type: 'array' });
-    if (lastResults[selectedResultIndex]?.id !== fileId) return;
-    currentWorkbookCache = wb;
-
-    if (wb.SheetNames && wb.SheetNames.length) {
-      renderInspSheetTabs(wb.SheetNames, 0);
-      renderInspSheetTable(wb.SheetNames[0]);
-    }
-  } catch (err) {
-    if (lastResults[selectedResultIndex]?.id !== fileId) return;
-    const vp = $('inspViewport');
-    if (vp) vp.innerHTML = `<div style="padding:24px;color:var(--danger);font-size:11.5px">切片加载失败: ${esc(err.message)}</div>`;
+    const data=await api(`/api/file/${fileId}/preview-data?`+new URLSearchParams({sheet,page_size:12}));
+    if(lastResults[selectedResultIndex]?.id!==fileId)return;
+    currentWorkbookCache=data;
+    renderInspSheetTabs(data.sheets,data.sheets.indexOf(data.sheet));
+    renderInspSheetTable(data.sheet);
+  }catch(error){
+    if(lastResults[selectedResultIndex]?.id!==fileId)return;
+    $('inspViewport').innerHTML=`<div style="padding:24px;font-size:11px;color:var(--muted)">${esc(error.message)}<button class="chip-btn" onclick="loadInspectorSheetSnippet(${fileId},'')">重试</button></div>`;
   }
 }
-
-function renderInspSheetTabs(names, activeIdx) {
-  const tabs = $('inspSheetTabs');
-  if (!tabs) return;
-  tabs.innerHTML = names.map((name, idx) => `
-    <button class="sheet-tab-btn ${idx === activeIdx ? 'active' : ''}" onclick="switchInspSheet(${idx})">${esc(name)}</button>
-  `).join('');
+function renderInspSheetTabs(names,activeIdx){
+  $('inspSheetTabs').innerHTML=names.map((name,i)=>`<button class="sheet-tab-btn ${i===activeIdx?'active':''}" onclick="switchInspSheet(${i})">${esc(name)}</button>`).join('');
 }
-
-function switchInspSheet(idx) {
-  if (!currentWorkbookCache) return;
-  const name = currentWorkbookCache.SheetNames[idx];
-  renderInspSheetTabs(currentWorkbookCache.SheetNames, idx);
-  renderInspSheetTable(name);
+function switchInspSheet(index){
+  const r=lastResults[selectedResultIndex];if(!r||!currentWorkbookCache)return;
+  loadInspectorSheetSnippet(r.id,r.name,currentWorkbookCache.sheets[index]);
 }
-
-function renderInspSheetTable(sheetName) {
-  if (!currentWorkbookCache) return;
-  const sheet = currentWorkbookCache.Sheets[sheetName];
-  const jsonRows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
-  const vp = $('inspViewport');
-  if (!vp) return;
-
-  if (jsonRows && jsonRows.length > 0) {
-    const headers = jsonRows[0] || [];
-    const bodyRows = jsonRows.slice(1, 12);
-
-    if ($('inspKpiRows')) $('inspKpiRows').textContent = `${jsonRows.length - 1} 行`;
-    if ($('inspKpiCols')) $('inspKpiCols').textContent = `${headers.length} 列`;
-
-    let html = '<table class="snippet-table"><thead><tr>';
-    headers.forEach(h => { html += `<th>${esc(h)}</th>`; });
-    html += '</tr></thead><tbody>';
-    bodyRows.forEach(row => {
-      html += '<tr>';
-      headers.forEach((_, colIdx) => {
-        html += `<td>${esc(row[colIdx] != null ? row[colIdx] : '')}</td>`;
-      });
-      html += '</tr>';
-    });
-    html += '</tbody></table>';
-    vp.innerHTML = html;
-  } else {
-    vp.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:11px">该工作表暂无可视数据</div>';
-  }
+function renderInspSheetTable(){
+  const d=currentWorkbookCache;if(!d)return;
+  if($('inspKpiRows'))$('inspKpiRows').textContent=d.rows_truncated?`前 ${d.row_count} 行`:`${d.row_count} 行`;
+  if($('inspKpiCols'))$('inspKpiCols').textContent=`${d.column_count} 列`;
+  const rows=d.rows || [];
+  $('inspViewport').innerHTML=(d.truncated?'<div style="padding:8px;color:var(--muted);font-size:10px">预览限前 10,000 行、100 列，每个单元格最多 2,000 字符。</div>':'')+
+    (rows.length?`<table class="snippet-table"><thead><tr>${(rows[0]||[]).map(v=>`<th>${esc(v)}</th>`).join('')}</tr></thead><tbody>${rows.slice(1).map(row=>`<tr>${row.map(v=>`<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>`:'<div class="portal-empty">工作表暂无数据</div>');
 }
 
 // 键盘方向键无缝切表
