@@ -1,0 +1,66 @@
+# 云服务器（腾讯云 Lighthouse，广州）演示环境编排。
+#
+# 与 docker-compose.yml / docker-compose.prod.yml 的区别：
+#   - 复用服务器上已有的「网盘模拟数据」与 271MB 索引库，不接真实 NAS；
+#   - 不强制 APP_ACCESS_TOKEN、不启用 read_only 根文件系统（演示模式会刷新当日报表）；
+#   - 基础镜像用服务器已有的 python:3.11-slim，避免拉取 python:3.12-slim 卡住。
+#
+# 用法：
+#   # 1) 并行验证（不占用线上 8080，裸机服务保持运行）
+#   HOST_PORT=8081 DEMO_MODE=false docker compose -f docker-compose.cloud.yml up -d --build
+#   curl http://127.0.0.1:8081/api/health
+#
+#   # 2) 验证通过后切换为线上服务
+#   systemctl disable --now file-finder
+#   HOST_PORT=8080 docker compose -f docker-compose.cloud.yml up -d
+#
+#   # 回退到裸机部署
+#   docker compose -f docker-compose.cloud.yml down
+#   systemctl enable --now file-finder
+name: file-search
+
+services:
+  app:
+    image: file-finder:cloud
+    container_name: file-finder
+    build:
+      context: ./fast_file_finder
+      dockerfile: Dockerfile.cloud
+    restart: unless-stopped
+    # 复用宿主机 root 属主的模拟数据与索引库，避免权限问题和全量重建索引
+    user: "0:0"
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      FILE_ROOT: /data/share
+      INDEX_DB_PATH: /app/data/file_index.db
+      ALLOWED_EXTENSIONS: ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods"
+      APP_ACCESS_TOKEN: ""
+      AUTH_REQUIRED: "true"
+      DIRECTORY_ACL_ENABLED: "true"
+      DEMO_MODE: "${DEMO_MODE:-true}"
+      DEMO_SEARCH_MIN_SECONDS: "2"
+      DEMO_SEARCH_MAX_SECONDS: "4"
+      DEMO_AI_MIN_SECONDS: "5"
+      DEMO_AI_MAX_SECONDS: "10"
+      DEMO_SCAN_MIN_SECONDS: "120"
+      DEMO_SCAN_MAX_SECONDS: "240"
+      SCAN_WORKERS: "4"
+      SCAN_QUEUE_SIZE: "1024"
+      SCAN_BATCH_SIZE: "300"
+      SCAN_COMMIT_SECONDS: "1"
+      MAX_PREVIEW_FILE_MB: "32"
+      AUTO_SCAN_INTERVAL_MINUTES: "30"
+      TZ: Asia/Shanghai
+    volumes:
+      # 演示模式下 demo_data.refresh 会刷新当日报表，目录需可写
+      - /opt/wenjiansuoyin/网盘模拟数据:/data/share
+      # 直接复用裸机部署已建好的索引库，零重建
+      - /opt/wenjiansuoyin/fast_file_finder/data:/app/data
+    cpus: "2.0"
+    mem_limit: 2g
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

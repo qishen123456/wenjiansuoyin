@@ -1,0 +1,43 @@
+# 云服务器（腾讯云 Lighthouse）演示环境专用镜像。
+# 与 Dockerfile（生产多阶段镜像）分开，避免改动既有生产配置。
+#
+# 为什么单独一份：
+#   1. 服务器上已有 python:3.11-slim 基础镜像，直接复用，不必拉 python:3.12-slim；
+#   2. 依赖走国内 PyPI 镜像，避免海外源卡住；
+#   3. 生产版 Dockerfile 的 COPY 清单停留在早期版本，漏了 scan_pipeline.py /
+#      limited_preview.py，直接构建会因 import 失败。
+#
+# 构建上下文固定为 fast_file_finder/：
+#   docker build -f Dockerfile.cloud -t file-finder:cloud .
+FROM python:3.11-slim
+
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TZ=Asia/Shanghai
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
+
+# 运行时全部模块；新增模块必须同步加进这里，否则启动即 ImportError。
+COPY app.py governance.py directory_access.py demo_data.py \
+     scan_pipeline.py limited_preview.py /app/
+COPY static /app/static
+
+ENV FILE_ROOT=/data/share \
+    INDEX_DB_PATH=/app/data/file_index.db \
+    APP_HOST=0.0.0.0 \
+    APP_PORT=8080 \
+    LOG_LEVEL=INFO
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import sys,urllib.request;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/',timeout=4).status==200 else 1)"]
+
+# 单进程是硬性约束：扫描锁 _scan_lock 和进度状态 _scan_state 都是进程内对象，
+# 多 worker 会各自全量扫描并并发写同一个 SQLite。
+CMD ["sh", "-c", "exec python -m uvicorn app:app --host 0.0.0.0 --port 8080 --workers 1 --no-proxy-headers"]
