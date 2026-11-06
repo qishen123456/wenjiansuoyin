@@ -22,9 +22,8 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
 
-# 运行时全部模块；新增模块必须同步加进这里，否则启动即 ImportError。
-COPY app.py governance.py directory_access.py demo_data.py \
-     scan_pipeline.py limited_preview.py /app/
+# 运行时全部模块。用通配符一次拷全，避免逐个列举时漏掉新增模块（启动会 ImportError）。
+COPY *.py /app/
 COPY static /app/static
 
 ENV FILE_ROOT=/data/share \
