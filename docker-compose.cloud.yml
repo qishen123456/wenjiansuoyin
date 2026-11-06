@@ -32,7 +32,9 @@ services:
     ports:
       - "${HOST_PORT:-8080}:8080"
     environment:
-      FILE_ROOT: /data/share
+      # 必须与宿主机路径完全一致：索引库按 FILE_ROOT 字符串计算 root_key，
+      # 且索引里存的是文件绝对路径；容器内换路径会查不到已有索引、预览也找不到文件。
+      FILE_ROOT: /opt/wenjiansuoyin/网盘模拟数据
       INDEX_DB_PATH: /app/data/file_index.db
       ALLOWED_EXTENSIONS: ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods"
       APP_ACCESS_TOKEN: ""
@@ -53,8 +55,9 @@ services:
       AUTO_SCAN_INTERVAL_MINUTES: "30"
       TZ: Asia/Shanghai
     volumes:
-      # 演示模式下 demo_data.refresh 会刷新当日报表，目录需可写
-      - /opt/wenjiansuoyin/网盘模拟数据:/data/share
+      # 演示模式下 demo_data.refresh 会刷新当日报表，目录需可写。
+      # 用同路径挂载，保证索引中的绝对路径在容器内依然有效。
+      - /opt/wenjiansuoyin/网盘模拟数据:/opt/wenjiansuoyin/网盘模拟数据
       # 直接复用裸机部署已建好的索引库，零重建
       - /opt/wenjiansuoyin/fast_file_finder/data:/app/data
     cpus: "2.0"
