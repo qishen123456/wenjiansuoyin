@@ -73,16 +73,31 @@ if not (math.isfinite(DEMO_SEARCH_MIN_SECONDS) and math.isfinite(DEMO_SEARCH_MAX
     raise ValueError("Demo search timing must satisfy 0 <= MIN <= MAX <= 10 seconds")
 
 
-def _pace_demo_search(started_at: float) -> float:
-    """Reach a randomized minimum response duration without holding a DB transaction."""
-    if not DEMO_MODE or DEMO_SEARCH_MAX_SECONDS == 0:
+DEMO_AI_MIN_SECONDS = float(os.getenv("DEMO_AI_MIN_SECONDS", "5"))
+DEMO_AI_MAX_SECONDS = float(os.getenv("DEMO_AI_MAX_SECONDS", "10"))
+if not (math.isfinite(DEMO_AI_MIN_SECONDS) and math.isfinite(DEMO_AI_MAX_SECONDS)
+        and 0 <= DEMO_AI_MIN_SECONDS <= DEMO_AI_MAX_SECONDS <= 60):
+    raise ValueError("Demo AI timing must satisfy 0 <= MIN <= MAX <= 60 seconds")
+
+
+def _pace_demo_response(started_at: float, minimum: float, maximum: float) -> float:
+    """Reach a randomized minimum response duration after database work is done."""
+    if not DEMO_MODE or maximum == 0:
         return 0.0
-    remaining = random.uniform(DEMO_SEARCH_MIN_SECONDS, DEMO_SEARCH_MAX_SECONDS) - (time.perf_counter() - started_at)
+    remaining = random.uniform(minimum, maximum) - (time.perf_counter() - started_at)
     if remaining <= 0:
         return 0.0
     before = time.perf_counter()
     time.sleep(remaining)
     return round((time.perf_counter() - before) * 1000, 1)
+
+
+def _pace_demo_search(started_at: float) -> float:
+    return _pace_demo_response(started_at, DEMO_SEARCH_MIN_SECONDS, DEMO_SEARCH_MAX_SECONDS)
+
+
+def _pace_demo_ai(started_at: float) -> float:
+    return _pace_demo_response(started_at, DEMO_AI_MIN_SECONDS, DEMO_AI_MAX_SECONDS)
 
 
 DEMO_SCAN_MIN_SECONDS = float(os.getenv("DEMO_SCAN_MIN_SECONDS", "120"))
@@ -1717,7 +1732,7 @@ def search(
         results = candidates[start_idx : start_idx + effective_page_size]
 
     query_elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-    demo_delay_ms = _pace_demo_search(start)
+    demo_delay_ms = _pace_demo_ai(start) if ai_used else _pace_demo_search(start)
     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
     logger.info("search completed; query_length=%s results=%s candidates=%s match_mode=%s target=%s elapsed_ms=%s",
                 len(query), len(results), total_count, match_mode, target, elapsed_ms)
@@ -1817,19 +1832,32 @@ def answer_dated_file_request(conn: sqlite3.Connection, message: str) -> dict[st
 @app.post("/api/ai/chat")
 def ai_chat(req: AIChatRequest) -> dict[str, Any]:
     """AI 找表对话框专属接口：结合网盘目录与相近文件进行多轮深度解答与推荐。"""
-    with db_session() as conn:
-        q = req.message.strip() or req.query.strip()
-        dated = answer_dated_file_request(conn, q)
-        if dated is not None:
-            return dated
-        guess = ai_guess_and_supplement(conn, q)
-    return {
-        "ok": True,
-        "reply": guess["reasoning"],
-        "model_used": guess["model_used"],
-        "suggested_terms": guess["suggested_terms"],
-        "matched_files": guess["matched_files"]
-    }
+    started_at = time.perf_counter()
+    q = req.message.strip() or req.query.strip()
+    greeting = re.sub(r"[\s?!？！。,.，~～]+", "", q).lower()
+    if greeting in {"在吗", "在不在", "你好", "您好", "嗨", "hi", "hello"}:
+        result = {
+            "ok": True,
+            "reply": "在的。告诉我想找的报表名称、业务主题或时间范围，我来帮你找。",
+            "model_used": "本地对话引导",
+            "suggested_terms": [],
+            "matched_files": [],
+        }
+    else:
+        with db_session() as conn:
+            result = answer_dated_file_request(conn, q)
+            if result is None:
+                guess = ai_guess_and_supplement(conn, q)
+                result = {
+                    "ok": True,
+                    "reply": guess["reasoning"],
+                    "model_used": guess["model_used"],
+                    "suggested_terms": guess["suggested_terms"],
+                    "matched_files": guess["matched_files"],
+                }
+    result["demo_delay_ms"] = _pace_demo_ai(started_at)
+    result["response_elapsed_ms"] = round((time.perf_counter() - started_at) * 1000, 1)
+    return result
 
 
 

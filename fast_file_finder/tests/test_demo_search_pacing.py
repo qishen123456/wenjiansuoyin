@@ -115,3 +115,70 @@ def test_partial_scan_reports_error_without_demo_wait(foundation, monkeypatch):
     assert application._scan_state_snapshot()['phase'] == 'partial'
     with application.db_session() as conn:
         assert conn.execute('SELECT id FROM files WHERE id=?', (fid,)).fetchone()
+
+
+@pytest.mark.parametrize('enabled,compute,expected', [(True, 1, 6.5), (True, 12, 0), (False, 1, 0)])
+def test_ai_demo_pacing_uses_its_own_range(monkeypatch, enabled, compute, expected):
+    clock = [10 + compute]
+    ranges = []
+    waits = []
+
+    def sample(low, high):
+        ranges.append((low, high))
+        return 7.5
+
+    def sleep(seconds):
+        waits.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(application, 'DEMO_MODE', enabled)
+    monkeypatch.setattr(application, 'DEMO_AI_MIN_SECONDS', 5)
+    monkeypatch.setattr(application, 'DEMO_AI_MAX_SECONDS', 10)
+    monkeypatch.setattr(application.random, 'uniform', sample)
+    monkeypatch.setattr(application, 'time', SimpleNamespace(perf_counter=lambda: clock[0], sleep=sleep))
+    assert application._pace_demo_ai(10) == expected * 1000
+    assert sum(waits) == expected
+    assert ranges == ([(5, 10)] if enabled else [])
+
+
+@pytest.mark.parametrize('dated', [True, False])
+def test_ai_chat_waits_outside_db_for_both_reply_paths(foundation, monkeypatch, dated):
+    import sqlite3
+    client, _, _ = foundation
+    reply = {'ok': True, 'reply': '本地检索结果', 'model_used': '本地索引',
+             'matched_files': [], 'suggested_terms': []}
+    monkeypatch.setattr(application, 'answer_dated_file_request', lambda *args: dict(reply) if dated else None)
+    monkeypatch.setattr(application, 'ai_guess_and_supplement', lambda *args: {
+        'reasoning': reply['reply'], 'model_used': reply['model_used'],
+        'matched_files': [], 'suggested_terms': []})
+    calls = []
+
+    def pace(started):
+        with sqlite3.connect(str(application.DB_PATH), timeout=.1) as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.rollback()
+        calls.append(started)
+        return 5000
+
+    monkeypatch.setattr(application, '_pace_demo_ai', pace)
+    data = client.post('/api/ai/chat', json={'message': '今天的新品简报'}).json()
+    assert data['reply'] == reply['reply']
+    assert data['demo_delay_ms'] == 5000
+    assert data['response_elapsed_ms'] >= 0
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('message', ['在吗', '你好！', ' Hello? '])
+def test_greetings_reply_locally_and_still_use_demo_pacing(foundation, monkeypatch, message):
+    client, _, _ = foundation
+    def unexpected_model(*args, **kwargs):
+        pytest.fail('Greeting must not invoke the model or search')
+    monkeypatch.setattr(application, 'call_llm', unexpected_model)
+    monkeypatch.setattr(application, 'ai_guess_and_supplement', unexpected_model)
+    monkeypatch.setattr(application, 'answer_dated_file_request', unexpected_model)
+    monkeypatch.setattr(application, '_pace_demo_ai', lambda started: 5000)
+    result = client.post('/api/ai/chat', json={'message': message}).json()
+    assert result['reply'].startswith('在的。')
+    assert result['model_used'] == '本地对话引导'
+    assert result['matched_files'] == []
+    assert result['demo_delay_ms'] == 5000

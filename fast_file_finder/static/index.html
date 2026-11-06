@@ -3036,13 +3036,15 @@ async function api(url, opts = {}) {
   }
   if (token) headers['X-App-Token'] = token;
 
-  const timeoutMs = opts.timeoutMs || 15000;
+  const requestUrl = new URL(url, window.location.origin);
+  const isAiRequest = requestUrl.pathname === '/api/ai/chat' ||
+    (requestUrl.pathname === '/api/search' && requestUrl.searchParams.get('enable_ai') === 'true');
+  const timeoutMs = opts.timeoutMs || (isAiRequest ? 120000 : 15000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(url, { ...opts, headers, body, signal: controller.signal });
-    clearTimeout(timer);
     const data = (res.headers.get('content-type') || '').includes('application/json') ? await res.json() : await res.text();
     const rawDetail = data?.detail || data?.message;
     const errText = typeof rawDetail === 'object' ? (Array.isArray(rawDetail) ? rawDetail.map(d => d.msg || JSON.stringify(d)).join('; ') : JSON.stringify(rawDetail)) : rawDetail;
@@ -3050,11 +3052,14 @@ async function api(url, opts = {}) {
     if (!res.ok) throw new Error(errText || `服务响应异常 (${res.status})`);
     return data;
   } catch (err) {
-    clearTimeout(timer);
     if (err.name === 'AbortError') {
-      throw new Error(`请求超时 (${timeoutMs / 1000}s)，请检查网络连接或稍后重试`);
+      throw new Error(isAiRequest
+        ? '回答等待超时，请稍后重试，或改用文件名关键词检索。'
+        : `请求超时 (${timeoutMs / 1000}s)，请检查网络连接或稍后重试`);
     }
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -3122,7 +3127,7 @@ function renderResults(data) {
   const timingLabel = isPacedDemo ? '演示查询' : '本次查询';
   $('metricsTimingLabel').textContent = timingLabel;
   $('metricsTiming').title = isPacedDemo
-    ? '包含演示节奏等待的实际响应耗时。演示参考 5 秒内；实际环境以现场实测为准。'
+    ? `${data.ai_used ? '包含 AI 找表演示等待，通常约 5～10 秒' : '包含演示查询等待，通常约 2～4 秒'}；实际环境以现场实测为准。`
     : '本次服务端查询耗时，随数据、负载和环境变化，供排查参考';
   $('metricsSummary').textContent = !lastResults.length && !data.ai_used ? '未找到匹配文件，可调整关键词或筛选条件。' : (data.message || '已按所选条件检索');
   $('metricsDetails').textContent = `在 ${indexedTotalCache.toLocaleString()} 个可访问索引文件中找到 ${totalCandidates} 个结果 · 当前第 ${currentPage} / ${totalPages || 1} 页`;
@@ -5584,7 +5589,7 @@ async function sendAIChat() {
       <div class="msg-avatar"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sparkles"/></svg></div>
       <div class="msg-bubble" style="display:flex;align-items:center;gap:6px">
         <span class="spinner-anim" style="border-color:#2563eb;border-top-color:transparent"></span>
-        <span style="color:#71717A;font-size:12px">正在查找你可访问的文件…</span>
+        <span style="color:#71717A;font-size:12px">${currentUser?.demo_mode ? '正在准备回答，演示模式包含节奏等待…' : '正在查找你可访问的文件…'}</span>
       </div>
     </div>
   `);
@@ -5600,8 +5605,14 @@ async function sendAIChat() {
     const loadingEl = $(loadingId);
     if (loadingEl) loadingEl.remove();
 
+    const showAnswerSource = Boolean(res.model_used && res.model_used !== '本地对话引导');
     const modelBadge = $('aiModelBadge');
-    if (modelBadge) modelBadge.textContent = `由【${res.model_used || 'AI推理引擎'}】提供支持`;
+    if (modelBadge) {
+      modelBadge.hidden = !showAnswerSource;
+      modelBadge.textContent = showAnswerSource
+        ? `由【${res.model_used}】提供支持${res.demo_delay_ms > 0 ? ' · 含演示等待' : ''}`
+        : '';
+    }
 
     let extraHtml = '';
     if (res.suggested_terms?.length) {
@@ -5665,7 +5676,7 @@ async function sendAIChat() {
         <div class="msg-avatar"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sparkles"/></svg></div>
         <div class="msg-bubble">
           ${formattedReply}
-          <div class="ai-answer-source">${esc(res.model_used || '本地索引检索')}</div>
+          ${showAnswerSource ? `<div class="ai-answer-source">${esc(res.model_used)}</div>` : ''}
           ${extraHtml}
         </div>
       </div>
