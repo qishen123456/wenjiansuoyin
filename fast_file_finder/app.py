@@ -3636,7 +3636,8 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
         raise HTTPException(status_code=401, detail="手机号或密码错误。")
     stored_password = (row["password"] or "").strip()
     supplied_password = req.password.strip()
-    password_ok = (not supplied_password) if not stored_password else secrets.compare_digest(stored_password, supplied_password)
+    # 账号密码为空即免密：忽略密码框内容（浏览器自动填充、手机键盘联想都会塞值，只认空串会把人挡在门外）
+    password_ok = True if not stored_password else secrets.compare_digest(stored_password, supplied_password)
     if not password_ok:
         raise HTTPException(status_code=401, detail="手机号或密码错误。")
     if row["status"] != "active":
