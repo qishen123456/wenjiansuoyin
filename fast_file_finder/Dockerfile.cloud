@@ -12,6 +12,9 @@
 FROM python:3.11-slim
 
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# apt 也走国内镜像：libreoffice-impress + fonts-noto-cjk 有好几百 MB，
+# 直连 deb.debian.org 在国内只有 ~100KB/s，构建要一个多小时。
+ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -19,7 +22,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-impress fonts-noto-cjk && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do \
+      [ -f "$f" ] || continue; \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" "$f"; \
+    done; \
+    apt-get update && apt-get install -y --no-install-recommends libreoffice-impress fonts-noto-cjk && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
