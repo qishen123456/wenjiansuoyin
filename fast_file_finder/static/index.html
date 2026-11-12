@@ -1563,8 +1563,8 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 }
 
 </style>
-<link rel="stylesheet" href="/static/portal.css">
-<link rel="stylesheet" href="/static/ui.css">
+<link rel="stylesheet" href="/static/portal.css?v=20261108-robot">
+<link rel="stylesheet" href="/static/ui.css?v=20261108-robot">
 </head>
 <body>
 
@@ -1726,7 +1726,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
           <button class="search-clear" id="clearSearch" title="清空检索词"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-x"/></svg></button>
           <button type="button" class="kbd-badge" title="按 ⌘K 快速聚焦" onclick="$('q').focus()">⌘K</button>
 
-          <button class="ai-search-toggle" id="portalAiToggle" onclick="togglePortalAI()" aria-pressed="false" title="启用或关闭 AI 关键词扩展">AI 理解 · 关</button><button class="btn-hero-search" id="searchBtn" onclick="search(1)">搜索</button>
+          <button class="ai-search-toggle" id="portalAiToggle" onclick="togglePortalAI()" aria-pressed="false" title="启用或关闭 AI 关键词扩展">AI 理解 · 关</button><button class="btn-hero-search" id="searchBtn" onclick="search(1)">搜索</button><button type="button" class="search-reset-button" onclick="resetAllFilters()" title="重置格式、日期和其他筛选">重置筛选</button>
           <!-- 搜索历史下拉（聚焦输入框且为空时展示） -->
           <div class="search-history-dd hidden" id="searchHistoryDD"></div>
         </div>
@@ -1766,12 +1766,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
                   </section>
                   <section class="search-filter-format">
                   <div class="filter-popover-title">文件格式筛选</div>
-                  <div class="filter-popover-grid">
-                    <button class="popover-ext-btn active" data-ext="">全部</button>
-                    <button class="popover-ext-btn" data-ext=".xlsx">XLSX</button>
-                    <button class="popover-ext-btn" data-ext=".xls">XLS</button>
-                    <button class="popover-ext-btn" data-ext=".csv">CSV</button>
-                  </div>
+                  <div class="filter-popover-grid grouped-formats"><button type="button" class="popover-ext-btn active" data-ext="" aria-pressed="true">全部格式</button><div class="format-category"><span class="format-category-name">表格</span><div class="format-category-options"><button type="button" class="popover-ext-btn" data-ext=".xlsx" aria-pressed="false">XLSX</button><button type="button" class="popover-ext-btn" data-ext=".xls" aria-pressed="false">XLS</button><button type="button" class="popover-ext-btn" data-ext=".csv" aria-pressed="false">CSV</button><button type="button" class="popover-ext-btn" data-ext=".xlsm" aria-pressed="false">XLSM</button><button type="button" class="popover-ext-btn" data-ext=".xlsb" aria-pressed="false">XLSB</button><button type="button" class="popover-ext-btn" data-ext=".tsv" aria-pressed="false">TSV</button><button type="button" class="popover-ext-btn" data-ext=".ods" aria-pressed="false">ODS</button></div></div><div class="format-category"><span class="format-category-name">演示文稿</span><div class="format-category-options"><button type="button" class="popover-ext-btn" data-ext=".pptx" aria-pressed="false">PPTX</button><button type="button" class="popover-ext-btn" data-ext=".ppt" aria-pressed="false">PPT</button></div></div><div class="format-category"><span class="format-category-name">图片</span><div class="format-category-options"><button type="button" class="popover-ext-btn" data-ext=".png" aria-pressed="false">PNG</button><button type="button" class="popover-ext-btn" data-ext=".jpg" aria-pressed="false">JPG</button><button type="button" class="popover-ext-btn" data-ext=".jpeg" aria-pressed="false">JPEG</button><button type="button" class="popover-ext-btn" data-ext=".webp" aria-pressed="false">WEBP</button></div></div></div>
 </section>                  <section class="search-filter-mode">
                     <div class="filter-popover-title" style="margin-bottom:6px">匹配模式</div>
                     <div style="display:flex;gap:4px">
@@ -1782,12 +1777,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 
                   <!-- 日期筛选：快捷标签 + 自定义范围 + 修改/创建切换 -->
                   
-                  <!-- 筛选重置 -->
-                  <div class="search-filter-reset">
-                    <button type="button" class="btn-action-secondary" style="width:100%;height:28px;font-size:11.5px;padding:0" onclick="resetAllFilters()">重置全部筛选</button>
-                  </div>
                 </div>
-
 
         <!-- 热搜推荐直达词 -->
         <div class="search-prompts-bar">
@@ -1841,14 +1831,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 <label>文件大小<select id="searchSizeFilter" onchange="setPortalExtraFilter('size',this.value)"><option value="">不限大小</option><option value="small">小于 100 KB</option><option value="medium">100 KB – 1 MB</option><option value="large">1 MB – 10 MB</option><option value="huge">10 MB 及以上</option></select></label>
 <label>文件状态<select id="searchContentFilter" onchange="setPortalExtraFilter('content_state',this.value)"><option value="all">全部文件</option><option value="nonempty">非空文件</option><option value="empty">空文件（0 字节）</option></select></label>
 </div><div class="qf-strip" id="quickFilterStrip">
-          <div class="qf-group">
-            <span class="qf-label">类型</span>
-            <button type="button" class="qf-chip active" data-qf-ext="">全部</button>
-            <button type="button" class="qf-chip" data-qf-ext=".xlsx">XLSX</button>
-            <button type="button" class="qf-chip" data-qf-ext=".xls">XLS</button>
-            <button type="button" class="qf-chip" data-qf-ext=".csv">CSV</button>
-            <button type="button" class="qf-chip" data-qf-ext=".xlsm">XLSM</button><button type="button" class="qf-chip" data-qf-ext=".xlsb">XLSB</button><button type="button" class="qf-chip" data-qf-ext=".tsv">TSV</button><button type="button" class="qf-chip" data-qf-ext=".ods">ODS</button>
-          </div>
+<div class="qf-group grouped-formats sidebar-format-groups"><span class="qf-label">文件格式</span><button type="button" class="qf-chip active" data-qf-ext="" aria-pressed="true">全部格式</button><div class="format-category"><span class="format-category-name">表格</span><div class="format-category-options"><button type="button" class="qf-chip" data-qf-ext=".xlsx" aria-pressed="false">XLSX</button><button type="button" class="qf-chip" data-qf-ext=".xls" aria-pressed="false">XLS</button><button type="button" class="qf-chip" data-qf-ext=".csv" aria-pressed="false">CSV</button><button type="button" class="qf-chip" data-qf-ext=".xlsm" aria-pressed="false">XLSM</button><button type="button" class="qf-chip" data-qf-ext=".xlsb" aria-pressed="false">XLSB</button><button type="button" class="qf-chip" data-qf-ext=".tsv" aria-pressed="false">TSV</button><button type="button" class="qf-chip" data-qf-ext=".ods" aria-pressed="false">ODS</button></div></div><div class="format-category"><span class="format-category-name">演示文稿</span><div class="format-category-options"><button type="button" class="qf-chip" data-qf-ext=".pptx" aria-pressed="false">PPTX</button><button type="button" class="qf-chip" data-qf-ext=".ppt" aria-pressed="false">PPT</button></div></div><div class="format-category"><span class="format-category-name">图片</span><div class="format-category-options"><button type="button" class="qf-chip" data-qf-ext=".png" aria-pressed="false">PNG</button><button type="button" class="qf-chip" data-qf-ext=".jpg" aria-pressed="false">JPG</button><button type="button" class="qf-chip" data-qf-ext=".jpeg" aria-pressed="false">JPEG</button><button type="button" class="qf-chip" data-qf-ext=".webp" aria-pressed="false">WEBP</button></div></div></div>
           <span class="qf-divider"></span>
           <div class="qf-group">
             <span class="qf-label">时间</span>
@@ -2050,7 +2033,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 
           <div class="catalog-child-folders hidden" id="catalogChildFolders" aria-label="当前目录的子目录"></div>
           <!-- 文件筛选标签栏 -->
-          <div class="catalog-filter-bar">
+          <div class="catalog-filter-bar"><button class="tree-tool-btn" onclick="uploadToFolder()">上传文件</button><button class="tree-tool-btn" data-scan-button onclick="startScan('directory',catalogState.selectedNode?.path || '')">同步本目录</button>
             <div class="filter-tabs-group">
               <button class="filter-tab-pill active" id="tabAllFiles" onclick="setFileFilterMode('all')">全部文件 (<span id="tabCountAll">--</span>)</button>
               <button class="filter-tab-pill" id="tabTodayFiles" onclick="setFileFilterMode('today')">仅看今日更新 (<span id="tabCountToday">--</span>)</button>
@@ -2220,7 +2203,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <div style="font-size:16px;font-weight:800;color:#18181B" id="approvalTitle">下载审批中心</div>
-            <div style="font-size:12px;color:#71717A;margin-top:2px">普通成员下载文件需管理员审批；通过后链接限时有效，可查看申请、审批与下载记录</div>
+            <div style="font-size:12px;color:#71717A;margin-top:2px">下载按文件夹权限执行；需审批时填写用途，通过后获得限时授权，可查看处理记录</div>
           </div>
           <button class="btn-action-secondary" onclick="loadApprovalCenter()"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-refresh"/></svg> 刷新</button>
         </div>
@@ -2229,7 +2212,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
     </section>
 
     <!-- 视图 5：人员与账号权限中心 (完整保留) -->
-    <section id="permissionView" class="hidden archive-shell">
+    <section id="permissionView" class="hidden archive-shell"><section id="feishuPanel" class="directory-grant-panel"></section>
       <div id="directoryGrantPanel" class="directory-grant-panel"></div>
       <!-- 4 大指标卡片 -->
       <div class="catalog-overview-grid" style="grid-template-columns: repeat(4, 1fr);">
@@ -2337,6 +2320,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 <strong id="portalSyncInterval">—</strong>
 </div>
       </div>
+      <section class="home-panel" id="systemBackupPanel" hidden style="margin-bottom:20px"></section>
       <div class="sync-content-grid">
         <div class="sync-left-column">
 <section class="home-panel">
@@ -2357,7 +2341,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 <tbody>
 <tr>
 <td>
-<b>增量同步</b>
+<b>全量扫描</b>
 <small>遍历目录并更新有变化的文件信息</small>
 </td>
 <td id="portalJobInterval">—</td>
@@ -2368,7 +2352,8 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 </tr>
 <tr>
 <td>
-<b>归档检测</b>
+<b>重建检索索引</b><small>重新生成检索词，完整扫描成功后生效</small></td><td>手动</td><td>按需运行</td><td><button class="table-link" data-scan-button onclick="startScan('rebuild')">重建索引</button></td></tr>
+<tr><td><b>归档检测</b>
 <small>对照规则，生成归档待办</small>
 </td>
 <td id="portalArchiveInterval">—</td>
@@ -2754,7 +2739,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 
 
 
-  <button id="aiRobotLauncher" class="ai-robot-launcher" onclick="toggleAIChat()" aria-label="打开文件小助手" aria-controls="aiChatDrawer" aria-expanded="false" title="问问小助手 · ⌘/Ctrl + J">
+  <button id="aiRobotLauncher" class="ai-robot-launcher" onclick="toggleAIChat()" aria-label="打开文件小助手" aria-controls="aiChatDrawer" aria-expanded="false" title="点击提问，拖动调整位置 · ⌘/Ctrl + J">
     <svg viewBox="0 0 64 64" fill="none" aria-hidden="true"><path d="M32 9v7" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><circle cx="32" cy="7" r="4" fill="#9ef1df"/><rect x="10" y="19" width="44" height="34" rx="14" fill="white"/><rect x="5" y="30" width="5" height="13" rx="2.5" fill="#b9c9ff"/><rect x="54" y="30" width="5" height="13" rx="2.5" fill="#b9c9ff"/><rect x="18" y="27" width="28" height="17" rx="8" fill="#233263"/><ellipse class="robot-eye" cx="26" cy="35" rx="2.5" ry="3.5" fill="#9ef1df"/><ellipse class="robot-eye" cx="38" cy="35" rx="2.5" ry="3.5" fill="#9ef1df"/><path d="M28 48h8" stroke="#6b7ec5" stroke-width="2.5" stroke-linecap="round"/></svg><span class="ai-robot-hint">问问小助手</span>
   </button>
   <div class="hidden ai-robot-popover" id="aiDrawerOverlay">
@@ -2785,6 +2770,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
       <input id="loginPhone" class="modal-input" type="tel" placeholder="员工手机号 / 账号" autocomplete="username" style="width:100%;height:38px;padding:0 12px;border-radius:6px;border:1px solid var(--line-strong);margin-bottom:10px;font-size:13px">
       <input id="loginPassword" class="modal-input" type="password" placeholder="密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()" style="width:100%;height:38px;padding:0 12px;border-radius:6px;border:1px solid var(--line-strong);margin-bottom:14px;font-size:13px">
       <button class="btn-action-primary" onclick="doLogin()" style="width:100%;height:38px;border-radius:6px;font-weight:600;font-size:13px">登 录</button>
+      <a id="feishuLoginLink" hidden href="/integrations/feishu/login">使用飞书登录</a>
       <div id="loginError" style="color:var(--danger);font-size:11.5px;margin-top:10px;min-height:16px"></div>
     </div>
   </div>
@@ -3133,7 +3119,7 @@ function renderResults(data) {
   $('metricsDetails').textContent = `在 ${indexedTotalCache.toLocaleString()} 个可访问索引文件中找到 ${totalCandidates} 个结果 · 当前第 ${currentPage} / ${totalPages || 1} 页`;
 
   const modeLabel = matchMode === 'any' ? '宽松匹配' : '严格匹配';
-  $('resultTitle').innerHTML = `搜索结果 <span style="font-size:12px;color:var(--muted);font-weight:400;white-space:nowrap">（“${esc(data.query)}” · ${modeLabel}）</span>`;
+  $('resultTitle').innerHTML = data.query ? `搜索结果 <span style="font-size:12px;color:var(--muted);font-weight:400">（“${esc(data.query)}” · ${modeLabel}）</span>` : '筛选结果';
   $('resultMeta').textContent = `共 ${totalCandidates} 份表格 · 本页呈现 ${lastResults.length} 份 · ${isPacedDemo ? '演示查询（含节奏等待）' : '本次服务端查询'} ${elapsed} 秒`;
 
   // 已激活筛选条件 chips（点击单个移除）
@@ -3238,7 +3224,6 @@ function renderResults(data) {
           </div>
         </div>
         <div class="card-actions">
-          <button class="btn-action-primary btn-open-local" onclick="event.stopPropagation();openFileLocally(${r.id})" title="${openBtnTitle()}"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-arrow-up-right"/></svg></button>
           <button class="btn-action-secondary" onclick="event.stopPropagation();previewFile(${r.id})" title="浏览器内在线预览"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-eye"/></svg></button>
           <button class="btn-action-secondary" onclick="event.stopPropagation();locateInCatalog('${esc(r.parent || r.path)}')" title="在组织架构树中定位"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-network"/></svg></button>
           <button class="btn-action-secondary" onclick="event.stopPropagation();handleSearchDownload(${i})" title="申请或直接下载"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-download"/></svg></button>
@@ -3259,7 +3244,7 @@ function renderResults(data) {
 
 async function search(page = 1) {
   const q = $('q').value.trim();
-  if (!q) { toast('请输入想查找的报表名称或关键词'); $('q').focus(); return; }
+  hideSearchHistory();
   currentPage = (typeof page === 'number' && !isNaN(page) && page >= 1) ? Math.floor(page) : 1;
   currentQuery = q;
   const btn = $('searchBtn');
@@ -3290,7 +3275,7 @@ async function search(page = 1) {
       sort: sortMode,
       match_mode: matchMode,
       target: searchTarget,
-      enable_ai: String(portalAiEnabled)
+      enable_ai: String(Boolean(q) && portalAiEnabled)
     });
     appendPortalExtraFilters(p);
     if (dateFrom) p.set('date_from', dateFrom);
@@ -3429,7 +3414,7 @@ function resetAllFilters() {
   updateFilterToggleState();
   toggleFilterPopover(false);
   toast('已重置全部筛选条件');
-  if ($('q').value.trim()) search(1);
+  search(1);
 }
 
 async function copyPath(i) {
@@ -3447,30 +3432,6 @@ async function copyPath(i) {
 // 是否为服务器本机访问。跨机器永远调不起对方电脑上的 Excel/WPS，这是浏览器的安全边界。
 function isLocalHost() {
   return ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
-}
-
-// 「打开」按钮的悬停提示，随访问方式切换，提前告知用户点击后会走哪条路径。
-function openBtnTitle() {
-  return isLocalHost()
-    ? '用本机默认程序（Excel/WPS）直接打开'
-    : '公网访问无法调起本机 Excel，点击将改为浏览器内在线预览（无需安装 Office）';
-}
-
-async function openFileLocally(fileId) {
-  // 两条路径：
-  //   1. 服务器本机访问（localhost）→ 调本地默认程序 Excel/WPS 打开；
-  //   2. 公网/他人电脑访问 → 跨机器无法调起对方 Excel，提示后改为浏览器内 SheetJS 在线预览。
-  if (!isLocalHost()) {
-    previewFile(fileId);
-    toast('公网访问无法调起本机 Excel，已为你打开浏览器内在线预览');
-    return;
-  }
-  try {
-    await api(`/api/file/${fileId}/open`, { method: 'POST' });
-    toast('已调用本机默认程序打开文件（Excel/WPS），请稍候');
-  } catch (e) {
-    toast(e.message || '打开失败，可复制路径后在资源管理器中打开');
-  }
 }
 
 async function copyCatalogPath(i) {
@@ -3554,17 +3515,16 @@ async function doLogout() {
   location.reload();
 }
 
-// ---------- 下载：管理员直下，成员走申请/票据 ----------
+// ---------- 下载：按当前文件夹权限执行 ----------
 async function startDownload(fileId, fileName) {
   if (!currentUser) { showLoginOverlay(); return; }
-  if (isAdminUser()) {
-    window.open(`/api/file/${fileId}/download`, '_blank');
-    return;
-  }
   try {
+    const access = await api(`/api/file/${fileId}/permissions`);
+    if (access.download === 'deny') { toast('你没有此文件的下载权限'); return; }
+    if (access.download === 'direct') { await saveApprovedDownload(fileId); return; }
     const res = await api('/api/downloads/requests', { method: 'POST', body: { file_id: fileId, reason: '', search_event_id: portalSearchEventId } });
     if (res.status === 'approved' && res.ticket) {
-      window.open(`/api/file/${fileId}/download?ticket=${res.ticket}`, '_blank');
+      await saveApprovedDownload(fileId, res.ticket);
       toast('已有有效授权，开始下载');
     } else {
       toast('该文件的下载申请正在审批中，可在下载审批中心查看进度');
@@ -3599,7 +3559,7 @@ async function submitDownloadRequest() {
     const res = await api('/api/downloads/requests', { method: 'POST', body: { file_id: fileId, reason, search_event_id: portalSearchEventId } });
     $('downloadModal').style.display = 'none';
     if (res.status === 'approved' && res.ticket) {
-      window.open(`/api/file/${fileId}/download?ticket=${res.ticket}`, '_blank');
+      await saveApprovedDownload(fileId, res.ticket);
       toast('已获授权，开始下载');
     } else {
       toast('下载申请已提交，等待管理员审批');
@@ -3754,12 +3714,13 @@ function _setIndexBtnSpinning(spinning) {
 }
 
 /* 手动触发增量扫描 */
-async function startScan() {
+async function startScan(mode='full', path='') {
+  if (mode==='rebuild' && !confirm('重建期间可继续搜索，写入操作需等待。开始重建索引？')) return;
   if (_scanPollTimer) { toast('索引扫描正在进行中，请稍候…'); return; }
   try {
-    const res = await api('/api/index/start', { method: 'POST' });
+    const res = await api('/api/index/start?' + new URLSearchParams({mode,path}), { method: 'POST' });
     if (res.started) {
-      toast('索引扫描已启动，正在增量同步新文件…');
+      toast(({full:'全量扫描已启动',directory:'目录同步已启动',rebuild:'索引重建已启动'})[mode]);
     } else {
       toast('索引扫描已在运行中，正在同步新文件…');
     }
@@ -4324,9 +4285,9 @@ function renderCatalogTable(items, total, page, pageSize) {
         <td class="catalog-time-cell" data-time-field="mtime">${renderFileTime(f.mtime)}</td>
         <td style="text-align:right">
           <div class="table-action-btns" style="justify-content:flex-end">
-            <button class="btn-table-action primary btn-open-local" onclick="openFileLocally(${f.id})" title="${openBtnTitle()}">打开</button>
             <button class="btn-table-action" onclick="previewFile(${f.id})" title="在浏览器中查看表格内容">预览</button>
-            <button class="btn-table-action" onclick="handleCatalogDownload(${idx})" title="管理员直接下载；成员需申请审批">下载</button>
+            <button class="btn-table-action" onclick="updateFileContent(${f.id})">更新／恢复</button>
+            <button class="btn-table-action" onclick="handleCatalogDownload(${idx})" title="按当前文件夹下载权限执行">下载</button>
             <button class="btn-table-action" onclick="copyCatalogPath(${idx})" title="复制共享路径">复制</button>
           </div>
         </td>
@@ -4983,6 +4944,7 @@ async function loadPermissionOverview() {
     // 3. 人员表格渲染
     renderPermissionUsersTable();
     await loadDirectoryGrantPanel();
+    await loadFeishuPanel();
   } catch (e) {
     console.error('loadPermissionOverview error:', e);
   }
@@ -5197,6 +5159,9 @@ function setExtFilter(ext) {
 
 /* 快捷筛选条 ↔ Popover 双向同步：以全局状态为准刷新各组高亮 */
 function syncQuickFilterStrip() {
+  document.querySelectorAll('.popover-ext-btn').forEach(button => button.setAttribute('aria-pressed',String((button.dataset.ext || '') === selectedExt)));
+  document.querySelectorAll('[data-qf-ext]').forEach(button => button.setAttribute('aria-pressed',String((button.dataset.qfExt || '') === selectedExt)));
+
   syncPortalAdvancedFilters();
   const strip = $('quickFilterStrip');
   if (!strip) return;
@@ -5277,6 +5242,8 @@ function refreshDateQuickTags(activeRange) {
   if (!wrap) return;
   wrap.querySelectorAll('button').forEach(btn => {
     const active = btn.dataset.range === activeRange;
+    btn.classList.toggle('active',active);
+    btn.setAttribute('aria-pressed',String(active));
     if (active) {
       btn.style.background = '#eff6ff';
       btn.style.borderColor = '#2563eb';
@@ -5791,6 +5758,7 @@ function toggleAIChat(forceOpen) {
   launcher.setAttribute('aria-expanded', String(willOpen));
   launcher.setAttribute('aria-label', willOpen ? '收起文件小助手' : '打开文件小助手');
   launcher.classList.toggle('is-open', willOpen);
+  window.positionRobotPanel?.();
   if (willOpen) $('aiInput')?.focus();
   else (aiPreviousFocus?.isConnected ? aiPreviousFocus : launcher)?.focus();
 }
@@ -5823,6 +5791,7 @@ function renderInspectorDetail(r) {
   const ext = (r.ext || '').replace('.', '').toLowerCase();
   const dept = (r.parent || '').split('/').slice(-1)[0] || '根目录';
   const hasData = (r.size || 0) > 0;
+  const mediaType = ['ppt','pptx'].includes(ext) ? 'slides' : ['png','jpg','jpeg','webp'].includes(ext) ? 'image' : '';
   const timeInfo = fmtDate(r.mtime);
 
   act.innerHTML = `
@@ -5839,7 +5808,7 @@ function renderInspectorDetail(r) {
         <span class="inspector-file-times">修改 ${renderFileTime(r.mtime)}<br>创建 ${renderFileTime(r.ctime)}</span>
       </div>
       <div class="inspector-quick-actions">
-        <button class="btn-action-primary" style="padding:4px 10px;font-size:11.5px" onclick="openFileLocally(${r.id})" title="${openBtnTitle()}">本机打开</button>
+        <button class="btn-action-primary" style="padding:6px 12px;font-size:11.5px" onclick="previewFile(${r.id})">网页预览</button>
         <button class="btn-action-secondary" style="padding:4px 10px;font-size:11.5px" onclick="handleSearchDownload(${selectedResultIndex})">下载</button>
         <button class="btn-action-secondary" style="padding:4px 10px;font-size:11.5px" onclick="copyUncPath(${selectedResultIndex})">⧉ 复制路径</button>
       </div>
@@ -5848,23 +5817,23 @@ function renderInspectorDetail(r) {
     <!-- 3 个核心 KPI 画像卡片 -->
     <div class="inspector-kpi-deck">
       <div class="inspector-kpi-tile">
-        <div class="kpi-tile-label">预览行数</div>
+        <div class="kpi-tile-label">${mediaType ? '预览页数' : '预览行数'}</div>
         <div class="kpi-tile-val" id="inspKpiRows">${hasData ? '读取中…' : '0 行'}</div>
       </div>
       <div class="inspector-kpi-tile">
-        <div class="kpi-tile-label">预览列数</div>
+        <div class="kpi-tile-label">${mediaType ? '文件类型' : '预览列数'}</div>
         <div class="kpi-tile-val" id="inspKpiCols">${hasData ? '读取中…' : '-'}</div>
       </div>
       <div class="inspector-kpi-tile">
         <div class="kpi-tile-label">数据状态</div>
-        <div class="kpi-tile-val" style="color:var(--success)">${hasData ? '结构化就绪' : '0字节占位'}</div>
+        <div class="kpi-tile-val" id="inspKpiState">${hasData ? '读取中…' : '空文件'}</div>
       </div>
     </div>
 
     <!-- Sheet Tabs 与 切片表格 -->
     <div class="inspector-tabs-wrap">
       <div class="inspector-tabs-bar" id="inspSheetTabs">
-        <button class="sheet-tab-btn active">数据切片</button>
+        <button class="sheet-tab-btn active">${mediaType === 'slides' ? '幻灯片预览' : mediaType === 'image' ? '图片预览' : '数据切片'}</button>
       </div>
     </div>
     <div class="inspector-table-viewport" id="inspViewport">
@@ -5875,20 +5844,40 @@ function renderInspectorDetail(r) {
     </div>
   `;
 
-  if (hasData) {
+  if (hasData && mediaType) {
+    $('inspKpiRows').textContent = mediaType === 'image' ? '1 页' : '幻灯片';
+    $('inspKpiCols').textContent = mediaType === 'slides' ? '演示文稿' : '图片';
+    $('inspKpiState').textContent = '网页预览';
+    currentWorkbookCache = null;
+    $('inspViewport').innerHTML = `<iframe class="inspector-media-frame" src="/static/preview.html?id=${Number(r.id)}&v=20261108-media" title="${esc(r.name)} 网页预览" allowfullscreen></iframe>`;
+  } else if (hasData) {
     loadInspectorSheetSnippet(r.id, r.name);
   }
 }
 
 async function loadInspectorSheetSnippet(fileId,fileName,sheet='') {
   try {
-    const data=await api(`/api/file/${fileId}/preview-data?`+new URLSearchParams({sheet,page_size:12}));
+    const data=await api(`/api/file/${fileId}/preview-data?`+new URLSearchParams({sheet,page_size:12}), {timeoutMs:90000});
     if(lastResults[selectedResultIndex]?.id!==fileId)return;
+    if (data.kind === 'slides' || data.kind === 'image') {
+      currentWorkbookCache = null;
+      $('inspKpiRows').textContent = `${data.page_count} 页`;
+      $('inspKpiCols').textContent = data.kind === 'slides' ? '演示文稿' : '图片';
+      $('inspKpiState').textContent = '可预览';
+      $('inspSheetTabs').innerHTML = `<span class="inspector-media-caption">${data.kind === 'slides' ? '幻灯片预览' : '图片预览'}</span>`;
+      $('inspViewport').innerHTML = `<iframe class="inspector-media-frame" src="/static/preview.html?id=${Number(fileId)}" title="${esc(fileName)} 网页预览" allowfullscreen></iframe>`;
+      return;
+    }
+    $('inspKpiState').textContent = '可预览';
     currentWorkbookCache=data;
+    if (!Array.isArray(data.sheets)) throw new Error('预览数据暂不可用，请点击网页预览重试。');
     renderInspSheetTabs(data.sheets,data.sheets.indexOf(data.sheet));
     renderInspSheetTable(data.sheet);
   }catch(error){
     if(lastResults[selectedResultIndex]?.id!==fileId)return;
+    $('inspKpiRows').textContent = '—';
+    $('inspKpiCols').textContent = '—';
+    $('inspKpiState').textContent = '加载失败';
     $('inspViewport').innerHTML=`<div style="padding:24px;font-size:11px;color:var(--muted)">${esc(error.message)}<button class="chip-btn" onclick="loadInspectorSheetSnippet(${fileId},'')">重试</button></div>`;
   }
 }
@@ -5928,7 +5917,7 @@ document.addEventListener('keydown', (e) => {
         if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       }
     } else if (e.key === 'Enter') {
-      if (lastResults[selectedResultIndex]) openFileLocally(lastResults[selectedResultIndex].id);
+      if (lastResults[selectedResultIndex]) previewFile(lastResults[selectedResultIndex].id);
     } else if (e.key === ' ') {
       e.preventDefault();
       if (lastResults[selectedResultIndex]) previewFile(lastResults[selectedResultIndex].id);
@@ -5938,6 +5927,8 @@ document.addEventListener('keydown', (e) => {
 
 
 </script>
-<script src="/static/portal.js"></script>
+<script src="/static/portal.js?v=20261108-robot"></script>
+<script src="/static/operations.js?v=20261108-robot"></script>
+<script src="/static/robot-drag.js?v=20261108"></script>
 </body>
 </html>

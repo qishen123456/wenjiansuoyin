@@ -12,8 +12,6 @@ import os
 import re
 from contextlib import asynccontextmanager, contextmanager
 import sqlite3
-import subprocess
-import sys
 import threading
 import time
 import unicodedata
@@ -27,7 +25,7 @@ from io import BytesIO
 from urllib.parse import quote
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import base64
 import httpx
@@ -43,6 +41,10 @@ import archive_schedule
 import demo_approvals
 import scan_pipeline
 import limited_preview
+import file_management
+import media_preview
+import feishu_integration
+import sys
 from collections import OrderedDict
 from starlette.concurrency import run_in_threadpool
 
@@ -164,7 +166,7 @@ logger = logging.getLogger("file_finder")
 logging.getLogger("uvicorn.access").addFilter(governance.RedactQueryStringFilter())
 ALLOWED_EXTENSIONS = {
     x.strip().lower() if x.strip().startswith(".") else "." + x.strip().lower()
-    for x in os.getenv("ALLOWED_EXTENSIONS", ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods").split(",")
+    for x in os.getenv("ALLOWED_EXTENSIONS", ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods,.ppt,.pptx,.png,.jpg,.jpeg,.webp").split(",")
     if x.strip()
 }
 AI_BASE_URL = os.getenv("AI_BASE_URL", "").rstrip("/")
@@ -205,6 +207,10 @@ def _archive_scheduler_loop() -> None:
                 _archive_scheduler_info["auto_resolved_total"] += res.get("tasks_auto_resolved", 0)
         except Exception as exc:
             logger.warning("Background archive compliance check error: %s", exc)
+        try:
+            feishu_integration.deliver_notices(sys.modules[__name__])
+        except Exception:
+            logger.exception("Feishu notification delivery failed")
         _archive_scheduler_stop.wait(60)
 
 
@@ -227,6 +233,9 @@ async def lifespan(_app: FastAPI):
     _archive_scheduler_stop.clear()
     _auto_scan_stop.clear()
     init_db()
+    with db_session() as conn:
+        file_management.initialize(conn)
+        feishu_integration.initialize(conn)
     if DEMO_MODE:
         await run_in_threadpool(_ensure_demo_data)
     if SENSITIVE_DIRS:
@@ -247,6 +256,8 @@ async def lifespan(_app: FastAPI):
 
     scheduler_thread = threading.Thread(target=_archive_scheduler_loop, daemon=True, name="ArchiveScheduler")
     scheduler_thread.start()
+    threading.Thread(target=file_management.backup_loop, args=(sys.modules[__name__],),
+                     daemon=True, name='DatabaseBackup').start()
 
     if AUTO_SCAN_INTERVAL_MINUTES > 0:
         auto_scan_thread = threading.Thread(target=_auto_scan_scheduler_loop, daemon=True, name="AutoIndexScan")
@@ -725,6 +736,7 @@ def update_index_file(
     root_key: str | None = None,
     scan_id: str | None = None,
     known_rows: dict | None = None,
+    force: bool = False,
 ) -> str:
     """Upsert one file and stamp it for the current scan generation."""
     path_str = str(file_path.resolve(strict=False)) if known_rows is None else os.path.normpath(str(file_path))
@@ -741,7 +753,7 @@ def update_index_file(
     ctime = float(getattr(stat, "st_birthtime", (row["ctime"] if row and row["ctime"] else stat.st_ctime)))
     now = time.time()
     unchanged = (
-        row
+        not force and row
         and row["size"] == size
         and abs(row["mtime"] - mtime) < 0.0001
         and abs(row["ctime"] - ctime) < 0.0001
@@ -860,7 +872,7 @@ def _ensure_demo_data(today: date | None = None) -> dict[str, Any]:
     return _demo_state
 
 
-def _scan_worker(lock_already_acquired: bool = False) -> None:
+def _scan_worker(lock_already_acquired: bool = False, mode: str = 'full', target_path: str = '') -> None:
     """Build/update the index in the background; only prune entries after a clean full scan."""
     if not lock_already_acquired and not _scan_lock.acquire(blocking=False):
         return
@@ -875,6 +887,9 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
         "directory_errors": 0, "excluded_directories": 0,
         "message": "正在扫描目录并增量更新索引；查询不需要等待扫描结束。",
     })
+    rebuilding = mode == "rebuild"
+    scoped = mode == "directory"
+    _scan_state_update(mode=mode, target_path=target_path or FILE_ROOT)
     walk_error_count = 0
     walk_error_samples: list[str] = []
 
@@ -886,11 +901,15 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
             walk_error_samples.append(f"{type(exc).__name__}: {exc}")
 
     try:
-        root = get_root()
+        root = file_management.checked_directory(sys.modules[__name__], target_path) if scoped else get_root()
         root_key = root_scope_key()
         with db_session() as conn:
             known = {r['path']:r for r in conn.execute('SELECT id,path,size,mtime,ctime,name,root_key FROM files')}
-            unseen = {path for path,row in known.items() if row["root_key"]==root_key}
+            unseen = {path for path,row in known.items() if row["root_key"]==root_key
+                      and (not scoped or directory_access.within(directory_access.normalise(path), directory_access.normalise(root)))}
+            if rebuilding:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("DELETE FROM file_fts")
             workers = max(1,min(16,int(os.getenv('SCAN_WORKERS',str(min(8,max(2,os.cpu_count() or 4)))))))
             batch=max(1,int(os.getenv('SCAN_BATCH_SIZE','300')))
             interval=max(.1,float(os.getenv('SCAN_COMMIT_SECONDS','1')))
@@ -898,13 +917,13 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
             def excluded_directory(name):
                 return name in {'$RECYCLE.BIN','System Volume Information','.snapshot'} or (DEMO_MODE and name==demo_data.UNCLASSIFIED_DIRECTORY) or any(t in name for t in SENSITIVE_DIRS)
             def file_filter(name):
-                if name.startswith('~$'):return 'temporary'
+                if name.startswith(('~$', '.file-finder-upload-')):return 'temporary'
                 if any(t in name for t in SENSITIVE_DIRS):return 'sensitive_name'
                 if ALLOWED_EXTENSIONS and Path(name).suffix.lower() not in ALLOWED_EXTENSIONS:return 'unsupported_format'
             for event in scan_pipeline.walk_metadata(root,workers=workers,file_filter=file_filter,capacity=max(16,int(os.getenv('SCAN_QUEUE_SIZE','1024'))),excluded_directory=excluded_directory):
                 kind=event[0]
                 if kind=='idle':
-                    if conn.in_transaction and time.monotonic()-last_commit>=interval:conn.commit();last_commit=time.monotonic()
+                    if not rebuilding and conn.in_transaction and time.monotonic()-last_commit>=interval:conn.commit();last_commit=time.monotonic()
                     continue
                 if kind=='directory_error':on_walk_error(OSError(event[1]+': '+event[2]));continue
                 if kind=='excluded_directory':_scan_state_increment('excluded_directories');continue
@@ -917,17 +936,22 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
                 if filename.startswith('~$'):_scan_exclude('temporary');continue
                 if any(t in filename for t in SENSITIVE_DIRS):_scan_exclude('sensitive_name');continue
                 if ALLOWED_EXTENSIONS and fp.suffix.lower() not in ALLOWED_EXTENSIONS:_scan_exclude('unsupported_format');continue
-                action=update_index_file(conn,fp,event[2],root_key=root_key,scan_id=scan_id,known_rows=known)
+                action=update_index_file(conn,fp,event[2],root_key=root_key,scan_id=scan_id,known_rows=known,force=rebuilding)
                 unseen.discard(os.path.normpath(str(fp)))
                 _scan_state_increment('seen');_scan_state_increment(action)
                 processed+=1
                 if processed % batch==0 or time.monotonic()-last_commit>=interval:
-                    conn.commit();last_commit=time.monotonic()
+                    if not rebuilding:
+                        conn.commit()
+                    last_commit=time.monotonic()
                     _scan_state_update(message=f'已检查 {processed:,} 个文件 · {workers} 个目录扫描线程')
-            conn.commit()
+            if not rebuilding:
+                conn.commit()
 
             state = _scan_state_snapshot()
             scan_complete = walk_error_count == 0 and state["errors"] == 0
+            if rebuilding and not scan_complete:
+                conn.rollback()
             if scan_complete:
                 # Only a complete enumeration can prove that an old indexed record is missing.
                 stale_deleted=0
@@ -938,19 +962,22 @@ def _scan_worker(lock_already_acquired: bool = False) -> None:
                 # This service indexes one configured root at a time. When FILE_ROOT changes,
                 # old-root entries are hidden from search during scanning and purged only after
                 # the new root has completed successfully.
-                old_root_deleted = _delete_index_rows(conn, "root_key <> ?", (root_key,))
-                _scan_state_update(deleted=stale_deleted + old_root_deleted)
-                conn.execute(
-                    "DELETE FROM saved_analyses WHERE file_id NOT IN (SELECT id FROM files WHERE root_key = ?)",
-                    (root_key,),
-                )
-                conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES('indexed_root',?)", (root_key,))
-                conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES(?,?)",
-                             (f"last_scan_at:{root_key}", datetime.now().isoformat(timespec="seconds")))
-                # Keep the legacy key for older deployments that may still read it.
-                conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES('last_scan_at',?)",
-                             (datetime.now().isoformat(timespec="seconds"),))
-                conn.commit()
+                _scan_state_update(deleted=stale_deleted)
+                if not scoped:
+                    old_root_deleted = _delete_index_rows(conn, "root_key <> ?", (root_key,))
+                    _scan_state_update(deleted=stale_deleted + old_root_deleted)
+                    conn.execute(
+                        "DELETE FROM saved_analyses WHERE file_id NOT IN (SELECT id FROM files WHERE root_key = ?)",
+                        (root_key,),
+                    )
+                    conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES('indexed_root',?)", (root_key,))
+                    conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES(?,?)",
+                                 (f"last_scan_at:{root_key}", datetime.now().isoformat(timespec="seconds")))
+                    # Keep the legacy key for older deployments that may still read it.
+                    conn.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES('last_scan_at',?)",
+                                 (datetime.now().isoformat(timespec="seconds"),))
+                if not rebuilding:
+                    conn.commit()
                 _migrate_legacy_archive_paths(conn)
                 run_archive_compliance_check(conn)
 
@@ -1058,14 +1085,18 @@ def index_status() -> dict[str, Any]:
 
 
 @app.post("/api/index/start")
-def start_index(request: Request = None) -> dict[str, Any]:
-    if DIRECTORY_ACL_ENABLED:
+def start_index(request: Request = None, mode: Literal['full','directory','rebuild'] = 'full', path: str = '') -> dict[str, Any]:
+    if DIRECTORY_ACL_ENABLED or AUTH_REQUIRED or mode != 'full':
         _require_super_admin(request)
+    if mode == 'directory':
+        if not path.strip():
+            raise HTTPException(422, '请选择需要同步的文件夹。')
+        path = str(file_management.checked_directory(sys.modules[__name__], path))
     get_root()  # Fast path validation before taking the scan lock.
     # Acquire in the request handler to prevent two near-simultaneous requests from both claiming success.
     if not _scan_lock.acquire(blocking=False):
         return {"started": False, "message": "索引任务已经在运行。", **_scan_state_snapshot()}
-    t = threading.Thread(target=_scan_worker, kwargs={"lock_already_acquired": True}, daemon=True)
+    t = threading.Thread(target=_scan_worker, kwargs={"lock_already_acquired": True, "mode": mode, "target_path": path}, daemon=True)
     try:
         t.start()
     except Exception:
@@ -1602,6 +1633,43 @@ def governance_summary(request: Request, days: int = Query(default=14, ge=1, le=
                 "scans": governance.scan_history(conn, root_scope_key(), limit=10)}
 
 
+def browse_search(conn, *, root_key, ext, date_field, date_from, date_to,
+                  directory, min_size, max_size, content_state, sort, page, page_size):
+    clauses, params = ['root_key=?'], [root_key]
+    if ext:
+        clauses.append('ext=?')
+        params.append(ext)
+    for operator, value in [('>=', date_from), ('<=', date_to)]:
+        if value is not None:
+            clauses.append(f'{date_field} {operator} ?')
+            params.append(value)
+    if directory:
+        condition, values = _catalog_directory_condition(directory)
+        clauses.append(condition)
+        params.extend(values)
+    for operator, value in [('>=', min_size), ('<=', max_size)]:
+        if value is not None:
+            clauses.append(f'size {operator} ?')
+            params.append(value)
+    if content_state == 'nonempty':
+        clauses.append('size>0')
+    elif content_state == 'empty':
+        clauses.append('size=0')
+    where = ' AND '.join(clauses)
+    orders = {'time_asc':'mtime ASC', 'modified_asc':'mtime ASC',
+              'created_desc':'ctime DESC', 'ctime_desc':'ctime DESC',
+              'created_asc':'ctime ASC', 'ctime_asc':'ctime ASC',
+              'name':'name COLLATE NOCASE ASC', 'name_desc':'name COLLATE NOCASE DESC',
+              'size_desc':'size DESC', 'size_asc':'size ASC'}
+    order = orders.get(sort, 'mtime DESC')
+    total = conn.execute(f'SELECT count(*) FROM files WHERE {where}', params).fetchone()[0]
+    rows = conn.execute(f'''SELECT id,name,path,parent,ext,size,mtime,ctime FROM files
+        WHERE {where} ORDER BY {order},id DESC LIMIT ? OFFSET ?''',
+        [*params, page_size, (page-1)*page_size]).fetchall()
+    return total, [{**dict(row), 'unc_path':to_unc_path(row['path']),
+                    'score':None, 'match_reason':'按筛选条件展示'} for row in rows]
+
+
 @app.get("/api/search")
 def search(
     q: str = Query(default="", max_length=300),
@@ -1633,11 +1701,6 @@ def search(
     effective_page_size = limit if limit is not None else page_size
     effective_page = 1 if limit is not None else clean_page
 
-    if not query:
-        return {
-            "query": q, "count": 0, "total_candidates": 0, "page": 1, "page_size": effective_page_size,
-            "total_pages": 0, "results": [], "ai_used": False, "message": "请输入文件名、业务关键词或自然语言描述。"
-        }
     if not FILE_ROOT:
         return {
             "query": query, "count": 0, "total_candidates": 0, "page": 1, "page_size": effective_page_size,
@@ -1668,6 +1731,24 @@ def search(
             ).timestamp()
         except ValueError:
             mtime_to_ts = None
+
+    if not query:
+        with db_session() as conn:
+            total, results = browse_search(conn, root_key=active_root_key, ext=wanted_ext,
+                date_field=date_field, date_from=mtime_from_ts, date_to=mtime_to_ts,
+                sort=sort, page=effective_page, page_size=effective_page_size, **scoped_filters)
+        query_elapsed_ms = round((time.perf_counter()-start)*1000, 1)
+        delay = _pace_demo_search(start) if results else 0
+        event_id = _record_product_event('search', request, query_length=0, result_count=total,
+            elapsed_ms=query_elapsed_ms, result_ids=[r['id'] for r in results])
+        return {'query':'', 'count':len(results), 'total_candidates':total,
+            'page':effective_page, 'page_size':effective_page_size,
+            'total_pages':(total+effective_page_size-1)//effective_page_size,
+            'results':results, 'ai_used':False, 'ai_expanded':False, 'ai_guess':None,
+            'fallback_relaxed':False, 'match_mode':match_mode, 'target':target,
+            'elapsed_ms':round((time.perf_counter()-start)*1000, 1),
+            'query_elapsed_ms':query_elapsed_ms, 'demo_delay_ms':delay,
+            'search_event_id':event_id, 'message':'已按当前筛选条件展示可访问文件。'}
 
     with db_session() as conn:
         search_scope = "title" if target in ("title", "content") else "path"
@@ -1879,9 +1960,11 @@ def download_file(file_id: int, request: Request, ticket: str = Query(default=""
     开启登录后：管理员直接下载；普通成员必须持审批通过的限时票据。"""
     file_info, path = _get_indexed_file(file_id)
     if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:
-        user = _get_session_user(request)
-        is_admin = bool(user and user["role"] in _ADMIN_ROLES)
-        if not is_admin and not _consume_download_ticket(file_id, ticket):
+        user = _require_user(request)
+        mode = _download_mode(file_info['parent'], user)
+        if mode == 'deny':
+            raise HTTPException(403, '你没有此文件的下载权限。')
+        if mode != 'direct' and not _consume_download_ticket(file_id, ticket, user['id']):
             raise HTTPException(status_code=403, detail="下载需审批通过后的有效链接，请先在页面提交下载申请。")
     filename = file_info["name"]
     quoted_filename = quote(filename)
@@ -1894,25 +1977,6 @@ def download_file(file_id: int, request: Request, ticket: str = Query(default=""
         headers=headers,
         media_type="application/octet-stream"
     )
-
-
-@app.post("/api/file/{file_id}/open")
-def open_file_locally(file_id: int, request: Request) -> dict[str, Any]:
-    """在部署本机调用系统默认程序打开文件。服务运行在使用者电脑上时，等价于直接双击网盘原文件。
-    开启登录后仅管理员可用（公网部署时该操作发生在服务器上，需防滥用）。"""
-    if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:
-        _require_admin(request)
-    _file_info, path = _get_indexed_file(file_id)
-    try:
-        if sys.platform.startswith("win"):
-            os.startfile(str(path))  # type: ignore[attr-defined]  # Windows 专属 API
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)])
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"调用系统默认程序打开失败：{exc}")
-    return {"ok": True, "path": str(path)}
 
 
 @app.get("/api/config-check")
@@ -2371,6 +2435,9 @@ def _get_indexed_file(file_id: int) -> tuple[dict[str, Any], Path]:
         file_real = os.path.realpath(row["path"])
         if os.path.commonpath([os.path.normcase(root_real), os.path.normcase(file_real)]) != os.path.normcase(root_real):
             raise HTTPException(status_code=403, detail="该文件不在允许分析的文件根目录内。")
+        policy = directory_access.current.get()
+        if policy is not None and not policy.visible(str(Path(file_real).parent)):
+            raise HTTPException(403, '文件实际位置不在你的可阅读范围内。')
     except ValueError:
         raise HTTPException(status_code=403, detail="文件路径与配置目录不匹配。")
     path = Path(row["path"])
@@ -2775,7 +2842,13 @@ def run_analysis(req: AnalysisRequest) -> dict[str, Any]:
 
 
 @app.post("/api/analysis/export")
-def export_analysis(req: AnalysisRequest) -> StreamingResponse:
+def export_analysis(req: AnalysisRequest, request: Request, ticket: str = Query(default='')) -> StreamingResponse:
+    info, _ = _get_indexed_file(req.file_id)
+    if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:
+        user = _require_user(request)
+        mode = _download_mode(info['parent'], user)
+        if mode == 'deny' or (mode != 'direct' and not _consume_download_ticket(req.file_id, ticket, user['id'])):
+            raise HTTPException(403, '导出包含文件明细，需要下载权限及有效审批授权。')
     result = _analysis_compute(req)
     table = pd.DataFrame(result["pivot"]["rows"], columns=result["pivot"]["headers"])
     detail_info, file_path = _get_indexed_file(req.file_id)
@@ -3605,15 +3678,32 @@ class DownloadReviewAction(BaseModel):
     action: Literal["approve", "reject"]
 
 
-def _consume_download_ticket(file_id: int, ticket: str) -> bool:
+def _download_mode(parent: str, user: dict) -> str:
+    policy = directory_access.current.get()
+    if policy is not None:
+        return policy.decision(parent, 'download')
+    return 'direct' if user['role'] in _ADMIN_ROLES else 'approval'
+
+
+@app.get('/api/file/{file_id}/permissions')
+def file_permissions(file_id: int, request: Request):
+    user = _require_user(request)
+    info, _ = _get_indexed_file(file_id)
+    policy = directory_access.current.get()
+    return {'read': True, 'download': _download_mode(info['parent'], user),
+            'upload': bool(policy and policy.decision(info['parent'], 'upload') == 'allow'),
+            'update': bool(policy and policy.decision(info['parent'], 'update') == 'allow')}
+
+
+def _consume_download_ticket(file_id: int, ticket: str, user_id: int | None = None) -> bool:
     """校验审批票据：需与本文件匹配、已批准且未过期；首次成功下载记录审计时间。"""
     if not ticket:
         return False
     now = time.time()
     with db_session() as conn:
         row = conn.execute(
-            "SELECT id, file_id, expires_at FROM download_requests WHERE ticket = ? AND status = 'approved' AND demo_key=''",
-            (ticket,),
+            "SELECT id, file_id, expires_at FROM download_requests WHERE ticket = ? AND user_id = ? AND status = 'approved' AND demo_key=''",
+            (ticket, user_id),
         ).fetchone()
         if not row or row["file_id"] != file_id or row["expires_at"] < now:
             return False
@@ -3650,6 +3740,9 @@ def create_download_request(req: DownloadRequestCreate, request: Request) -> dic
     """普通成员提交下载申请（用途必填）；管理员自助直下。已有待审批/有效授权时复用不重复创建。"""
     user = _require_user(request)
     file_info, _path = _get_indexed_file(req.file_id)
+    mode = _download_mode(file_info['parent'], user)
+    if mode == 'deny':
+        raise HTTPException(403, '你没有此文件的下载权限，不能发起下载申请。')
     now = time.time()
     with db_session() as conn:
         existing = conn.execute(
@@ -3667,7 +3760,7 @@ def create_download_request(req: DownloadRequestCreate, request: Request) -> dic
         reason = req.reason.strip()
         if not reason:
             raise HTTPException(status_code=400, detail="请填写下载用途后再提交申请。")
-        is_admin = user["role"] in _ADMIN_ROLES
+        is_admin = mode == 'direct'
         status = "approved" if is_admin else "pending"
         ticket = (uuid.uuid4().hex + uuid.uuid4().hex) if is_admin else ""
         expires = now + DOWNLOAD_TICKET_TTL_HOURS * 3600 if is_admin else 0
@@ -3704,12 +3797,22 @@ def review_download_request(req_id: int, req: DownloadReviewAction, request: Req
     admin = _require_admin(request)
     now = time.time()
     with db_session() as conn:
-        row = conn.execute("SELECT id, status, demo_key, workflow_events FROM download_requests WHERE id = ?", (req_id,)).fetchone()
+        row = conn.execute("SELECT id, user_id, status, demo_key, workflow_events FROM download_requests WHERE id = ?", (req_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="申请不存在。")
         if row["status"] != "pending":
             raise HTTPException(status_code=400, detail="该申请已被处理过。")
         if req.action == "approve":
+            if row['user_id'] == admin['id'] and admin['role'] != 'super_admin':
+                raise HTTPException(403, '需要审批的下载不能自行批准，请由其他有权限的管理员处理。')
+            if DIRECTORY_ACL_ENABLED:
+                applicant = conn.execute('SELECT u.* FROM system_users u JOIN download_requests d ON d.user_id=u.id WHERE d.id=?', (req_id,)).fetchone()
+                target = conn.execute('SELECT file_path FROM download_requests WHERE id=?', (req_id,)).fetchone()
+                if not applicant or applicant['status'] != 'active':
+                    raise HTTPException(403, '申请人已停用或不存在，不能批准。')
+                applicant_policy = directory_access.load_policy(conn, dict(applicant), root_scope_key(), _catalog_root_path())
+                if applicant_policy.decision(str(Path(target['file_path']).parent), 'download') == 'deny':
+                    raise HTTPException(403, '申请人的阅读或下载权限已撤销，不能批准。')
             ticket = "" if row["demo_key"] else uuid.uuid4().hex + uuid.uuid4().hex
             conn.execute(
                 "UPDATE download_requests SET status='approved', ticket=?, reviewed_by=?, reviewed_at=?, expires_at=? WHERE id=?",
@@ -3747,11 +3850,24 @@ _limited_preview_cache=OrderedDict()
 _limited_preview_cache_lock=threading.Lock()
 
 
+@app.get('/api/file/{file_id}/preview-media')
+def preview_media(file_id: int, request: Request, page: int = Query(default=1, ge=1, le=100)):
+    if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:
+        _require_user(request)
+    info, path = _get_indexed_file(file_id)
+    data, asset = media_preview.render(path, DB_PATH.parent, page)
+    return FileResponse(asset, media_type='image/png', headers={'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff'})
+
+
 @app.get('/api/file/{file_id}/preview-data')
 def preview_data(file_id: int,request: Request,sheet: str=Query(default='',max_length=200),
                  page: int=Query(default=1,ge=1),page_size: int=Query(default=100,ge=1,le=200)):
     if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:_require_user(request)
     info,path=_get_indexed_file(file_id)
+    if path.suffix.lower() in media_preview.EXTENSIONS:
+        data, asset = media_preview.render(path, DB_PATH.parent, page)
+        return JSONResponse({**data, 'ok':True, 'name':info['name'], 'page':page,
+            'asset_url':f'/api/file/{file_id}/preview-media?page={page}'}, headers={'Cache-Control':'no-store'})
     start=(page-1)*page_size
     if start>=limited_preview.MAX_ROWS:raise HTTPException(422,'仅预览前 10,000 行，请使用已批准的下载获取完整文件')
     st=path.stat()
@@ -3835,7 +3951,7 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
 
     return {
         "ok": True,
-        "feishu_config": feishu_config,
+        "feishu_config": {"configured": feishu_integration.configured()},
         "users": users,
         "summary": {
             "total_users": len(users),
@@ -3915,65 +4031,183 @@ def delete_system_user(user_id: int, request: Request) -> dict[str, Any]:
 
 
 class DirectoryGrantRequest(BaseModel):
-    subject_type: Literal["user", "department"]
+    subject_type: Literal['user', 'department']
     subject_key: str = Field(min_length=1, max_length=200)
     target_path: str = Field(min_length=1, max_length=4096)
-    effect: Literal["allow", "deny"] = "allow"
+    effect: Literal['allow', 'deny'] = 'allow'
+    permissions: dict[str, str] | None = None
+
+    @field_validator('permissions')
+    @classmethod
+    def validate_permissions(cls, value):
+        if value is None:
+            return value
+        if not value:
+            raise ValueError('至少选择一项操作权限')
+        for action, mode in value.items():
+            choices = {'deny', 'approval', 'direct'} if action == 'download' else {'allow', 'deny'}
+            if action not in directory_access.OPERATIONS or mode not in choices:
+                raise ValueError('权限类型或规则无效')
+        return value
 
 
-@app.get("/api/auth/scopes")
+class DirectoryGrantBatch(BaseModel):
+    subject_type: Literal['user', 'department']
+    subject_keys: list[str] = Field(min_length=1, max_length=100)
+    target_paths: list[str] = Field(min_length=1, max_length=100)
+    permissions: dict[str, str]
+    mode: Literal['merge', 'replace', 'revoke'] = 'merge'
+    preview: bool = True
+    revision: str = ''
+
+    @field_validator('permissions')
+    @classmethod
+    def validate_permissions(cls, value):
+        return DirectoryGrantRequest.validate_permissions(value)
+
+
+def _validate_grant_target(conn, subject_type, subject, value):
+    if not subject or len(subject) > 200:
+        raise HTTPException(422, '请选择有效成员或部门。')
+    if subject_type == 'user':
+        exists = conn.execute('SELECT id FROM system_users WHERE CAST(id AS TEXT)=?', (subject,)).fetchone()
+    else:
+        exists = conn.execute("SELECT id FROM system_users WHERE department=? AND department<>''", (subject,)).fetchone()
+    if not exists:
+        raise HTTPException(422, '请选择系统已有的成员或部门。')
+    target = _resolve_catalog_path(value)
+    path = Path(target)
+    # Allow existing empty folders, but never authorize a symlink escape.
+    if not path.is_dir():
+        raise HTTPException(422, '目标文件夹不存在或无法访问。')
+    if not directory_access.within(directory_access.normalise(str(path.resolve())), _catalog_root_path()):
+        raise HTTPException(403, '目标文件夹不能指向文件根目录以外。')
+    return target
+
+
+def _grant_audit(conn, actor, action, data):
+    conn.execute('INSERT INTO directory_grant_audit(actor_id,action,grant_json,created_at) VALUES(?,?,?,?)',
+                 (actor, action, json.dumps(data, ensure_ascii=False), time.time()))
+
+
+def _write_grant(conn, actor, subject_type, subject, target, permissions, effect='allow'):
+    conn.execute('''INSERT INTO directory_grants
+        (root_key,subject_type,subject_key,target_path,effect,created_by,created_at,permissions)
+        VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(root_key,subject_type,subject_key,target_path)
+        DO UPDATE SET effect=excluded.effect,permissions=excluded.permissions,
+        created_by=excluded.created_by,created_at=excluded.created_at''',
+        (root_scope_key(), subject_type, subject, target, effect, actor, time.time(),
+         json.dumps(permissions, ensure_ascii=False) if permissions is not None else None))
+
+
+@app.get('/api/auth/scopes')
 def get_my_directory_scopes(request: Request) -> dict[str, Any]:
     _require_user(request)
     policy = directory_access.current.get()
-    return {"enabled": DIRECTORY_ACL_ENABLED, "unrestricted": not policy or policy.super_admin,
-            "grants": [{"path": path, "effect": effect} for path, effect in (policy.grants if policy else ())]}
+    return {'enabled': DIRECTORY_ACL_ENABLED, 'unrestricted': not policy or policy.super_admin,
+            'grants': [{'path': path, 'effect': effect} for path, effect in (policy.grants if policy else ())]}
 
 
-@app.get("/api/system/directory-grants")
+@app.get('/api/system/directory-grants')
 def list_directory_grants(request: Request) -> dict[str, Any]:
     _require_super_admin(request)
     with db_session() as conn:
-        rows = conn.execute("SELECT * FROM directory_grants WHERE root_key=? ORDER BY id DESC", (root_scope_key(),)).fetchall()
-        audit = conn.execute("SELECT * FROM directory_grant_audit ORDER BY id DESC LIMIT 30").fetchall()
-    return {"enabled": DIRECTORY_ACL_ENABLED, "grants": [dict(row) for row in rows],
-            "audit": [dict(row) for row in audit]}
+        rows = conn.execute('SELECT * FROM directory_grants WHERE root_key=? ORDER BY id DESC', (root_scope_key(),)).fetchall()
+        audit = conn.execute('SELECT * FROM directory_grant_audit ORDER BY id DESC LIMIT 30').fetchall()
+    return {'enabled': DIRECTORY_ACL_ENABLED,
+            'grants': [{**dict(row), 'permissions': directory_access.grant_permissions(row),
+                        'legacy': row['permissions'] is None} for row in rows],
+            'audit': [dict(row) for row in audit]}
 
 
-@app.post("/api/system/directory-grants")
+@app.post('/api/system/directory-grants')
 def save_directory_grant(req: DirectoryGrantRequest, request: Request) -> dict[str, Any]:
     admin = _require_super_admin(request)
-    target = _resolve_catalog_path(req.target_path)
     subject = req.subject_key.strip()
-    condition, parameters = _catalog_directory_condition(target)
     with db_session() as conn:
-        if req.subject_type == "user":
-            exists = conn.execute("SELECT id FROM system_users WHERE CAST(id AS TEXT)=?", (subject,)).fetchone()
-        else:
-            exists = conn.execute("SELECT id FROM system_users WHERE department=? AND department<>''", (subject,)).fetchone()
-        if not exists:
-            raise HTTPException(status_code=422, detail="请选择系统已有的成员或部门。")
-        if not conn.execute(f"SELECT 1 FROM files WHERE root_key=? AND {condition} LIMIT 1", [root_scope_key(), *parameters]).fetchone():
-            raise HTTPException(status_code=422, detail="该目录没有已索引文件，请先同步索引再授权。")
-        conn.execute("""INSERT INTO directory_grants(root_key,subject_type,subject_key,target_path,effect,created_by,created_at)
-            VALUES(?,?,?,?,?,?,?) ON CONFLICT(root_key,subject_type,subject_key,target_path)
-            DO UPDATE SET effect=excluded.effect,created_by=excluded.created_by,created_at=excluded.created_at""",
-            (root_scope_key(), req.subject_type, subject, target, req.effect, admin["id"], time.time()))
-        conn.execute("INSERT INTO directory_grant_audit(actor_id,action,grant_json,created_at) VALUES(?,?,?,?)",
-                     (admin["id"], "save", json.dumps({**req.model_dump(), "target_path": target}, ensure_ascii=False), time.time()))
-    return {"ok": True, "message": "授权已生效；子目录自动继承，拒绝规则优先。"}
+        target = _validate_grant_target(conn, req.subject_type, subject, req.target_path)
+        _write_grant(conn, admin['id'], req.subject_type, subject, target, req.permissions, req.effect)
+        _grant_audit(conn, admin['id'], 'save', {**req.model_dump(), 'target_path': target})
+    return {'ok': True, 'message': '授权已生效；子目录继承，每项操作分别校验，拒绝优先。'}
 
 
-@app.delete("/api/system/directory-grants/{grant_id}")
+@app.post('/api/system/directory-grants/batch')
+def batch_directory_grants(req: DirectoryGrantBatch, request: Request):
+    admin = _require_super_admin(request)
+    subjects = sorted(set(s.strip() for s in req.subject_keys))
+    paths = sorted(set(req.target_paths))
+    if len(subjects) * len(paths) > 500:
+        raise HTTPException(422, '单批最多处理 500 组人员或部门与目录组合，请分批设置。')
+    changes = []
+    with db_session() as conn:
+        # Serialize the comparison and mutation so a reviewed batch cannot overwrite newer grants.
+        conn.execute('BEGIN IMMEDIATE')
+        for subject in subjects:
+            for value in paths:
+                target = _validate_grant_target(conn, req.subject_type, subject, value)
+                row = conn.execute('''SELECT * FROM directory_grants WHERE root_key=? AND
+                    subject_type=? AND subject_key=? AND target_path=?''',
+                    (root_scope_key(), req.subject_type, subject, target)).fetchone()
+                before = directory_access.grant_permissions(row) if row else {}
+                after = {} if req.mode == 'replace' else dict(before)
+                if req.mode == 'revoke':
+                    for action in req.permissions:
+                        after.pop(action, None)
+                else:
+                    after.update(req.permissions)
+                changes.append({'subject_key': subject, 'target_path': target, 'before': before, 'after': after})
+        import hashlib
+        revision = hashlib.sha256(json.dumps([root_scope_key(), req.subject_type, changes], sort_keys=True).encode()).hexdigest()
+        if req.preview:
+            return {'ok': True, 'revision': revision, 'changes': changes, 'count': len(changes),
+                    'message': '撤销本级配置后可能继续继承上级或部门权限；明确禁止请设置为拒绝。'}
+        if req.revision != revision:
+            raise HTTPException(409, '授权配置已变化或尚未预览，请重新检查批量变更。')
+        batch_id = uuid.uuid4().hex
+        for change in changes:
+            if change['after']:
+                _write_grant(conn, admin['id'], req.subject_type, change['subject_key'], change['target_path'], change['after'])
+            else:
+                conn.execute('DELETE FROM directory_grants WHERE root_key=? AND subject_type=? AND subject_key=? AND target_path=?',
+                             (root_scope_key(), req.subject_type, change['subject_key'], change['target_path']))
+            _grant_audit(conn, admin['id'], 'batch_' + req.mode, {**change, 'subject_type': req.subject_type, 'batch_id': batch_id})
+    return {'ok': True, 'count': len(changes), 'message': f'已处理 {len(changes)} 组授权，后续请求按新权限校验。'}
+
+
+@app.get('/api/system/directory-grants/effective')
+def effective_directory_grants(request: Request, user_id: int, path: str):
+    _require_super_admin(request)
+    with db_session() as conn:
+        user = conn.execute('SELECT * FROM system_users WHERE id=?', (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(404, '成员不存在。')
+        target = _validate_grant_target(conn, 'user', str(user_id), path)
+        policy = directory_access.load_policy(conn, dict(user), root_scope_key(), _catalog_root_path())
+        rows = conn.execute('''SELECT * FROM directory_grants WHERE root_key=? AND
+            ((subject_type='user' AND subject_key=?) OR (subject_type='department' AND subject_key=? AND subject_key<>''))''',
+            (root_scope_key(), str(user_id), user['department'] or '')).fetchall()
+    permissions = {op: policy.decision(target, op) for op in directory_access.OPERATIONS}
+    if user['status'] != 'active':
+        permissions = dict.fromkeys(directory_access.OPERATIONS, 'deny')
+    return {'user_name': user['name'], 'permissions': permissions, 'super_admin': policy.super_admin,
+            'sources': [{**dict(r), 'permissions': directory_access.grant_permissions(r)} for r in rows
+                        if directory_access.within(target, r['target_path'])]}
+
+
+@app.delete('/api/system/directory-grants/{grant_id}')
 def delete_directory_grant(grant_id: int, request: Request) -> dict[str, Any]:
     admin = _require_super_admin(request)
     with db_session() as conn:
-        row = conn.execute("SELECT * FROM directory_grants WHERE id=? AND root_key=?", (grant_id, root_scope_key())).fetchone()
+        row = conn.execute('SELECT * FROM directory_grants WHERE id=? AND root_key=?', (grant_id, root_scope_key())).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="授权记录不存在。")
-        conn.execute("DELETE FROM directory_grants WHERE id=?", (grant_id,))
-        conn.execute("INSERT INTO directory_grant_audit(actor_id,action,grant_json,created_at) VALUES(?,?,?,?)",
-                     (admin["id"], "delete", json.dumps(dict(row), ensure_ascii=False), time.time()))
-    return {"ok": True, "message": "授权已撤销，后续请求立即按新权限校验。"}
+            raise HTTPException(404, '授权记录不存在。')
+        conn.execute('DELETE FROM directory_grants WHERE id=?', (grant_id,))
+        _grant_audit(conn, admin['id'], 'delete', dict(row))
+    return {'ok': True, 'message': '本级授权已撤销；上级或部门授权仍可能生效。'}
+
+
+file_management.register(sys.modules[__name__])
+feishu_integration.register(sys.modules[__name__])
 
 
 async def not_found_handler(request: Request, exc: Exception):

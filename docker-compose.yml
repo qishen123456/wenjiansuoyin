@@ -18,10 +18,17 @@ services:
     ports:
       - "${APP_BIND_ADDR:-127.0.0.1}:${HOST_PORT:-8080}:8080"
     environment:
+      FEISHU_APP_ID: "${FEISHU_APP_ID:-}"
+      FEISHU_APP_SECRET: "${FEISHU_APP_SECRET:-}"
+      FEISHU_REDIRECT_URI: "${FEISHU_REDIRECT_URI:-}"
+      FEISHU_NOTIFY_ENABLED: "${FEISHU_NOTIFY_ENABLED:-false}"
+      BACKUP_INTERVAL_HOURS: "${BACKUP_INTERVAL_HOURS:-24}"
+      BACKUP_KEEP_COUNT: "${BACKUP_KEEP_COUNT:-7}"
+      FILE_WRITES_ENABLED: "${FILE_WRITES_ENABLED:-false}"
       # 容器内看到的挂载点，与宿主机共享盘路径解耦
       FILE_ROOT: ${CONTAINER_SHARE_PATH:-/data/share}
       INDEX_DB_PATH: /app/data/file_index.db
-      ALLOWED_EXTENSIONS: ${ALLOWED_EXTENSIONS:-.xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods}
+      ALLOWED_EXTENSIONS: ${ALLOWED_EXTENSIONS:-.xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods,.ppt,.pptx,.png,.jpg,.jpeg,.webp}
       # 空令牌 = 无入口保护，仅适合只监听 127.0.0.1 的开发场景
       APP_ACCESS_TOKEN: ${APP_ACCESS_TOKEN:-}
       AI_BASE_URL: ${AI_BASE_URL:-}

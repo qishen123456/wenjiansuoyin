@@ -27,3 +27,31 @@ def test_candidate_limit_and_ai_cannot_escape_active_facets(foundation,monkeypat
     monkeypatch.setattr(application,'ai_guess_and_supplement',unexpected)
     result=client.get('/api/search',params={'q':'不存在','enable_ai':'true','content_state':'empty'}).json()
     assert result['results']==[] and not result['ai_used']
+
+
+def test_added_media_formats_filter_search_results(foundation, monkeypatch):
+    client, root, add = foundation
+    extensions = {'.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.webp'}
+    monkeypatch.setattr(application, 'ALLOWED_EXTENSIONS', extensions | {'.csv'})
+    for extension in extensions:
+        add('预览/素材示例' + extension)
+    add('预览/素材示例.csv')
+    for extension in extensions:
+        response = client.get('/api/search', params={'q': '素材示例', 'ext': extension})
+        assert response.status_code == 200
+        data = response.json()
+        assert data['results'], extension
+        assert all(item['ext'] == extension for item in data['results'])
+
+
+def test_blank_search_filters_counts_and_paginates_without_candidate_cap(foundation):
+    client, root, add = foundation
+    for i in range(505):
+        add(f'报表/{i:04}.csv')
+    first = client.get('/api/search', params={'q':'  ', 'ext':'.csv','page_size':100}).json()
+    assert first['total_candidates']==505 and len(first['results'])==100
+    last = client.get('/api/search', params={'q':'','ext':'.csv','page_size':100,'page':6}).json()
+    assert last['total_pages']==6 and len(last['results'])==5
+    assert not last['ai_used']
+    assert client.get('/api/search',params={'ext':'.ppt'}).json()['results']==[]
+    assert client.get('/api/search',params={'min_size':100,'max_size':1}).status_code==422

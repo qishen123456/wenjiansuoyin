@@ -8,6 +8,18 @@ import re
 import sqlite3
 
 
+OPERATIONS = ('read', 'upload', 'download', 'update')
+
+
+def grant_permissions(row):
+    """NULL is a legacy grant: keep its original visibility/download behavior."""
+    if row['permissions'] is not None:
+        return json.loads(row['permissions'])
+    if row['effect'] == 'deny':
+        return dict.fromkeys(OPERATIONS, 'deny')
+    return {'read': 'allow', 'download': 'legacy'}
+
+
 def normalise(path):
     return posixpath.normpath(str(path).replace('\\', '/')).rstrip('/') or '/'
 
@@ -35,6 +47,26 @@ class Policy:
     user_id: int
     super_admin: bool
     grants: tuple = ()
+    operations: tuple = ()
+    legacy_admin: bool = False
+
+    def decision(self, directory, operation):
+        directory = normalise(directory)
+        if operation not in OPERATIONS or not within(directory, self.root):
+            return 'deny'
+        if self.super_admin:
+            return 'direct' if operation == 'download' else 'allow'
+        values = [value for path, action, value in self.operations
+                  if action == operation and within(directory, path)]
+        if 'deny' in values:
+            return 'deny'
+        if operation == 'download':
+            if not self.visible(directory):
+                return 'deny'
+            if 'approval' in values or ('legacy' in values and not self.legacy_admin):
+                return 'approval'
+            return 'direct' if 'direct' in values or ('legacy' in values and self.legacy_admin) else 'deny'
+        return 'allow' if 'allow' in values else 'deny'
 
     def visible(self, directory):
         directory = normalise(directory)
@@ -54,7 +86,7 @@ class Policy:
 
     @property
     def cache_key(self):
-        return hashlib.sha256(json.dumps((self.root_key, self.user_id, self.super_admin, self.grants)).encode()).hexdigest()
+        return hashlib.sha256(json.dumps((self.root_key, self.user_id, self.super_admin, self.grants, self.operations)).encode()).hexdigest()
 
 
 current: ContextVar[Policy | None] = ContextVar('directory_policy', default=None)
@@ -75,16 +107,23 @@ def initialize(conn):
             grant_json TEXT NOT NULL, created_at REAL NOT NULL
         );
     ''')
+    columns = {r[1] for r in conn.execute('PRAGMA table_info(directory_grants)')}
+    if 'permissions' not in columns:
+        conn.execute('ALTER TABLE directory_grants ADD COLUMN permissions TEXT')
 
 
 def load_policy(conn, user, root_key, root):
     if user is None:
         return Policy(root_key, normalise(root), 0, False)
-    rows = conn.execute('''SELECT target_path,effect FROM directory_grants
+    rows = conn.execute('''SELECT target_path,effect,permissions FROM directory_grants
         WHERE root_key=? AND ((subject_type='user' AND subject_key=?)
         OR (subject_type='department' AND subject_key=? AND subject_key<>''))
         ORDER BY target_path,effect''', (root_key, str(user['id']), user.get('department') or '')).fetchall()
-    return Policy(root_key, normalise(root), user['id'], user['role'] == 'super_admin', tuple((r[0], r[1]) for r in rows))
+    operations = tuple((r['target_path'], action, value) for r in rows
+                       for action, value in grant_permissions(r).items())
+    grants = tuple((path, value) for path, action, value in operations if action == 'read')
+    return Policy(root_key, normalise(root), user['id'], user['role'] == 'super_admin',
+                  grants, operations, user['role'] == 'dept_admin')
 
 
 _TABLES = ('files', 'archive_rules', 'archive_tasks', 'saved_analyses', 'download_requests')

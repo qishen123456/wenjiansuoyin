@@ -7,3 +7,5 @@ openpyxl>=3.1,<4.0
 xlrd>=2.0,<3.0
 pyxlsb>=1.0,<2.0
 odfpy>=1.4,<2.0
+Pillow>=11,<13
+pypdfium2>=4.30,<6

@@ -2644,3 +2644,31 @@ button:disabled {
 @media(max-width:1200px) and (min-width:1001px){#catalogView .catalog-main-layout{grid-template-columns:285px minmax(0,1fr);gap:14px}}
 @media(max-width:1000px){#catalogView .catalog-main-layout{grid-template-columns:minmax(0,1fr)}#catalogView .catalog-panel:first-child{position:static}#catalogView .tree-scroll-container{min-height:200px;max-height:315px}}
 @media(max-width:720px){.portal-demo-banner{padding:9px 11px;font-size:11px;margin-bottom:15px}.portal-demo-banner small{display:none}.portal-demo-banner time{font-size:10px}#catalogView .catalog-child-folders{grid-template-columns:minmax(0,1fr)}#catalogView .catalog-table,#catalogView .catalog-table tbody{display:block}#catalogView .catalog-table thead{display:none}#catalogView .catalog-table tbody tr{display:grid;grid-template-columns:1fr 1fr;padding:12px;border-bottom:1px solid #edf0f4;gap:5px}#catalogView .catalog-table td{display:block;padding:0;border:0}#catalogView .catalog-table td:first-child,#catalogView .catalog-table td:last-child{grid-column:1/-1}#catalogView .catalog-table td:nth-child(2){display:none}#catalogView .catalog-table td:nth-child(4){text-align:right}#catalogView .catalog-table td:last-child{margin-top:6px}#catalogView .catalog-table td[colspan]{grid-column:1/-1}#catalogView .table-action-btns{justify-content:flex-start!important}#catalogView .file-name-text{font-size:12px}#catalogView .catalog-detail-banner{padding:14px}#catalogView .catalog-filter-bar>div{max-width:100%}}
+
+/* Operation-specific, batch directory permissions. */
+.grant-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.grant-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:16px 0;font-size:12px}
+.grant-toolbar select,.grant-actions-grid select,.grant-pickers input:not([type=checkbox]){border:1px solid #dce2ed;border-radius:7px;background:white;color:#33435d;padding:9px;font:inherit;max-width:100%}
+.grant-pickers{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.grant-pickers section{min-width:0;border:1px solid #e3e8f0;border-radius:10px;padding:14px}
+.grant-pickers h4,.grant-actions-grid label{font-size:13px;color:#33435d;margin:0 0 10px}
+.grant-pickers input:not([type=checkbox]){width:100%;font-size:12px}
+.grant-choices{height:200px;overflow:auto;margin-top:8px}
+.grant-choice{display:flex;align-items:flex-start;gap:8px;padding:8px 4px;font-size:12px;cursor:pointer;overflow-wrap:anywhere}
+.grant-choice input{accent-color:#345bd4;margin-top:2px;flex-shrink:0}
+.grant-choice:has(input:checked){background:#eef3ff;border-radius:5px;color:#244dbe}
+.grant-empty-folder{display:flex;gap:8px;margin-top:10px}.grant-empty-folder button{flex-shrink:0}
+.grant-actions-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:18px 0}
+.grant-actions-grid label{display:grid;gap:8px;margin:0}.grant-actions-grid select{width:100%;min-width:0;font-size:12px}
+.grant-selection-count,#directoryGrantStatus{font-size:12px;margin-top:12px;color:#40577c;line-height:1.7}
+.grant-change-list{max-height:300px;overflow:auto;border:1px solid #dce2ed;border-radius:8px}
+.grant-change-list>div,.grant-audit>div{padding:12px;border-bottom:1px solid #edf0f5;font-size:12px;overflow-wrap:anywhere}
+.grant-change-list p{margin:5px 0}.grant-change-list small,#grantEffectiveResult small,.grant-audit small{display:block;overflow-wrap:anywhere;color:#738198;font-size:11px;margin-top:5px}
+.grant-audit{max-height:260px;overflow:auto}.grant-existing{margin-top:18px;font-size:13px}.grant-existing summary{cursor:pointer;color:#33435d}
+#grantEffectiveResult{margin-top:15px;font-size:13px;overflow-wrap:anywhere}#grantEffectiveResult li{margin-bottom:8px}
+.directory-grant-panel .grant-warning{color:#9c4c20;background:#fff5eb;padding:12px;border-radius:8px}
+#applyGrantBatch:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:800px){.grant-pickers{grid-template-columns:1fr}.grant-actions-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.operation-input{display:block;width:100%;box-sizing:border-box;margin:10px 0 18px;border:1px solid #dce2ed;border-radius:8px;padding:12px;background:white;color:#33435d;font:inherit}
+#systemBackupPanel p{font-size:12px;line-height:1.8;color:#738198}#systemBackupPanel .grant-audit button{float:right}

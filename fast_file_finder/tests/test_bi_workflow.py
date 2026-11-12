@@ -266,7 +266,8 @@ def test_empty_search_does_not_scan_or_crash(client_and_sample):
     client, _ = client_and_sample
     response = client.get("/api/search", params={"q": "   "})
     assert response.status_code == 200
-    assert response.json()["count"] == 0
+    assert response.json()["count"] >= 1
+    assert not response.json()["ai_used"]
 
 
 

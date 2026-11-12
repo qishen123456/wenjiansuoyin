@@ -32,11 +32,18 @@ services:
     ports:
       - "${HOST_PORT:-8080}:8080"
     environment:
+      FEISHU_APP_ID: "${FEISHU_APP_ID:-}"
+      FEISHU_APP_SECRET: "${FEISHU_APP_SECRET:-}"
+      FEISHU_REDIRECT_URI: "${FEISHU_REDIRECT_URI:-}"
+      FEISHU_NOTIFY_ENABLED: "${FEISHU_NOTIFY_ENABLED:-false}"
+      BACKUP_INTERVAL_HOURS: "${BACKUP_INTERVAL_HOURS:-24}"
+      BACKUP_KEEP_COUNT: "${BACKUP_KEEP_COUNT:-7}"
+      FILE_WRITES_ENABLED: "${FILE_WRITES_ENABLED:-false}"
       # 必须与宿主机路径完全一致：索引库按 FILE_ROOT 字符串计算 root_key，
       # 且索引里存的是文件绝对路径；容器内换路径会查不到已有索引、预览也找不到文件。
       FILE_ROOT: /opt/wenjiansuoyin/网盘模拟数据
       INDEX_DB_PATH: /app/data/file_index.db
-      ALLOWED_EXTENSIONS: ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods"
+      ALLOWED_EXTENSIONS: ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods,.ppt,.pptx,.png,.jpg,.jpeg,.webp"
       APP_ACCESS_TOKEN: ""
       AUTH_REQUIRED: "true"
       DIRECTORY_ACL_ENABLED: "true"

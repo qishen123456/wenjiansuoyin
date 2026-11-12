@@ -109,6 +109,8 @@ def linked_search(conn, root_key: str, search_id: int | None, session_id: str,
 
 def persist_scan(conn, scan_id: str, root_key: str, state: dict[str, Any]) -> None:
     counts = {key: state.get(key, 0) for key in ("discovered", "seen", "indexed", "updated", "deleted", "unchanged", "excluded", "errors", "directory_errors", "excluded_directories")}
+    counts["mode"] = state.get("mode","full")
+    counts["target_path"] = state.get("target_path","")
     counts["exclusion_reasons"] = state.get("exclusion_reasons", {})
     counts["reconciled"] = counts["discovered"] == counts["seen"] + counts["excluded"] + counts["errors"]
     conn.execute("""INSERT OR REPLACE INTO index_scan_runs
