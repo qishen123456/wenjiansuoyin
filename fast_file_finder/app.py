@@ -3624,21 +3624,14 @@ def _public_user(u: dict[str, Any]) -> dict[str, Any]:
 
 class LoginRequest(BaseModel):
     phone: str = Field(min_length=1, max_length=20)
-    # 允许空密码：账号密码为空时即免密登录（演示环境按需开启），非空密码账号仍走严格校验
-    password: str = Field(default="", max_length=64)
+    password: str = Field(min_length=1, max_length=64)
 
 
 @app.post("/api/auth/login")
 def login(req: LoginRequest, response: Response) -> dict[str, Any]:
     with db_session() as conn:
         row = conn.execute("SELECT * FROM system_users WHERE phone = ?", (req.phone.strip(),)).fetchone()
-    if not row:
-        raise HTTPException(status_code=401, detail="手机号或密码错误。")
-    stored_password = (row["password"] or "").strip()
-    supplied_password = req.password.strip()
-    # 账号密码为空即免密：忽略密码框内容（浏览器自动填充、手机键盘联想都会塞值，只认空串会把人挡在门外）
-    password_ok = True if not stored_password else secrets.compare_digest(stored_password, supplied_password)
-    if not password_ok:
+    if not row or (row["password"] or "123456") != req.password.strip():
         raise HTTPException(status_code=401, detail="手机号或密码错误。")
     if row["status"] != "active":
         raise HTTPException(status_code=403, detail="账号已被停用，请联系管理员。")

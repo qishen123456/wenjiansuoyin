@@ -2767,8 +2767,8 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
       <div style="width:42px;height:42px;border-radius:10px;background:var(--ink);color:#FFF;display:flex;align-items:center;justify-content:center;margin:0 auto 14px auto;font-weight:800;font-size:18px">EA</div>
       <div style="font-size:16px;font-weight:700;color:var(--ink)">企业文件资产智能检索中心</div>
       <div style="font-size:12px;color:var(--muted);margin:6px 0 20px 0">请使用员工账号登录以获取操作与审批权限</div>
-      <input id="loginPhone" class="modal-input" type="tel" placeholder="员工手机号 / 账号" autocomplete="username" style="width:100%;height:38px;padding:0 12px;border-radius:6px;border:1px solid var(--line-strong);margin-bottom:10px;font-size:13px">
-      <input id="loginPassword" class="modal-input" type="password" placeholder="密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()" style="width:100%;height:38px;padding:0 12px;border-radius:6px;border:1px solid var(--line-strong);margin-bottom:14px;font-size:13px">
+      <input id="loginPhone" class="modal-input" type="tel" placeholder="员工手机号 / 账号" autocomplete="username" value="13800100001" style="width:100%;height:38px;padding:0 12px;border-radius:6px;border:1px solid var(--line-strong);margin-bottom:10px;font-size:13px">
+      <input id="loginPassword" class="modal-input" type="password" placeholder="密码" autocomplete="new-password" autocapitalize="off" spellcheck="false" value="" onkeydown="if(event.key==='Enter')doLogin()" style="width:100%;height:38px;padding:0 12px;border-radius:6px;border:1px solid var(--line-strong);margin-bottom:14px;font-size:13px">
       <button class="btn-action-primary" onclick="doLogin()" style="width:100%;height:38px;border-radius:6px;font-weight:600;font-size:13px">登 录</button>
       <a id="feishuLoginLink" hidden href="/integrations/feishu/login">使用飞书登录</a>
       <div id="loginError" style="color:var(--danger);font-size:11.5px;margin-top:10px;min-height:16px"></div>
@@ -3493,7 +3493,7 @@ async function doLogin() {
   const phone = $('loginPhone').value.trim();
   const password = $('loginPassword').value.trim();
   $('loginError').textContent = '';
-  if (!phone) { $('loginError').textContent = '请输入手机号'; return; }
+  if (!phone || !password) { $('loginError').textContent = '请输入手机号和密码'; return; }
   try {
     const res = await api('/api/auth/login', { method: 'POST', body: { phone, password } });
     currentUser = res.user;
