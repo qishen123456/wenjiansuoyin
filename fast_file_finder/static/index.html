@@ -3493,7 +3493,7 @@ async function doLogin() {
   const phone = $('loginPhone').value.trim();
   const password = $('loginPassword').value.trim();
   $('loginError').textContent = '';
-  if (!phone || !password) { $('loginError').textContent = '请输入手机号和密码'; return; }
+  if (!phone) { $('loginError').textContent = '请输入手机号'; return; }
   try {
     const res = await api('/api/auth/login', { method: 'POST', body: { phone, password } });
     currentUser = res.user;
