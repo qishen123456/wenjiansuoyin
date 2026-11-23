@@ -406,7 +406,7 @@ function changePortalArchivePage(delta) {
 
 async function refreshPortalSync() {
   if (typeof loadBackupPanel === 'function') loadBackupPanel();
-  await Promise.allSettled([loadStatus(), loadArchiveOverview(), loadRecent(), loadPortalGovernance()]);
+  await Promise.allSettled([loadStatus(), loadRecent(), loadPortalGovernance()]);
 }
 
 async function checkPortalFile() {
