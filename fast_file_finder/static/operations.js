@@ -145,10 +145,6 @@ async function loadBackupPanel(){const panel=$('systemBackupPanel');if(!panel ||
   }catch(e){panel.textContent='备份信息读取失败：'+e.message;}
 }
 
-fetch('/integrations/feishu/status').then(r=>r.json()).then(s=>{
-  if(s.configured) $('feishuLoginLink').hidden=false;
-}).catch(()=>{});
-
 function feishuDailyDetails(daily) {
   if (!daily) return '';
   const report = daily.chat_configured
@@ -188,7 +184,7 @@ function loadFeishuPanel() {
   const pending = members.filter(member => member.active && member.match_status === 'no_phone').length;
   panel.innerHTML = `<div class="grant-heading">
     <div><h3>飞书通讯录</h3><p>${directory.last_sync ? `最近同步 ${esc(portalMonitorTime(directory.last_sync))}` : '尚未同步'}
-      · 显示当前飞书应用授权范围内的人员</p></div>
+      · ${directory.coverage === 'specified' ? '按飞书指定的成员或部门同步' : '显示当前飞书应用授权范围内的人员'}</p></div>
     <button id="syncFeishu" type="button" class="btn-archive-primary">同步飞书</button>
   </div>
   <div class="permission-roster-metrics">

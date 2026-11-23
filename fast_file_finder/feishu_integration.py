@@ -152,6 +152,7 @@ def directory_snapshot(conn, *, include_stored=False):
     enabled = app_credentials_configured()
     members = []
     last_sync = 0.0
+    coverage = ''
     departments = 0
     if enabled or include_stored:
         members = [dict(row) for row in conn.execute("""SELECT m.*, p.phone_tail, p.job_title, p.local_user_id,
@@ -161,10 +162,13 @@ def directory_snapshot(conn, *, include_stored=False):
             ORDER BY m.department,m.name,m.open_id""")]
         stamp = conn.execute("SELECT value FROM app_meta WHERE key='feishu_last_sync'").fetchone()
         last_sync = float(stamp[0]) if stamp else 0.0
+        scope = conn.execute("SELECT value FROM app_meta WHERE key='feishu_sync_scope'").fetchone()
+        coverage = scope[0] if scope else ''
         departments = conn.execute('SELECT count(*) FROM feishu_departments').fetchone()[0]
     return {
         'source': 'feishu' if enabled else 'local',
         'last_sync': last_sync,
+        'coverage': coverage,
         'members': members,
         'summary': {
             'total': len(members),
@@ -196,12 +200,14 @@ def sync_directory(app):
 def _sync_directory(app):
     token = tenant_token()
     departments = {}
+    coverage = 'root'
     try:
         members = _walk_departments(token, departments, deque([('0', '')]))
     except FeishuAPIError as exc:
         if exc.code != 40004:
             raise
         departments, members = _authorized_directory(token)
+        coverage = 'specified'
     with app.db_session() as conn:
         conn.execute('BEGIN IMMEDIATE')
         matched = feishu_identity.reconcile(conn, members, departments, demo=app.DEMO_MODE)
@@ -216,6 +222,7 @@ def _sync_directory(app):
             SELECT id FROM system_users WHERE feishu_id<>'' AND feishu_id NOT IN
             (SELECT open_id FROM feishu_members WHERE active=1))""")
         conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_last_sync',?)",(str(time.time()),))
+        conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_sync_scope',?)", (coverage,))
     return {'users': len(members), 'departments': len(departments), 'matched': matched}
 
 

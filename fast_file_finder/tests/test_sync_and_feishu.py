@@ -145,6 +145,7 @@ def test_personnel_directory_prefers_real_contacts_and_keeps_platform_accounts_s
     assert response['feishu_config']['configured'] is False
     assert client.post('/api/system/feishu/sync').json()['users'] == 1
     response = client.get('/api/system/permissions').json()
+    assert response['directory']['coverage'] == 'specified'
     person, = response['directory']['members']
     assert person['name'] == '飞书真实成员'
     assert person['department'] == '根组织' and not person['job_title']
@@ -157,3 +158,18 @@ def test_personnel_directory_prefers_real_contacts_and_keeps_platform_accounts_s
     response = client.get('/api/system/permissions').json()
     assert response['directory']['source'] == 'local' and response['directory']['members'] == []
     assert len(response['users']) == 5
+
+
+def test_login_page_renders_feishu_option_when_configured(foundation, monkeypatch):
+    client, _, _ = foundation
+    monkeypatch.setenv('FEISHU_APP_ID', 'cli_fixture')
+    monkeypatch.setenv('FEISHU_APP_SECRET', 'synthetic-secret')
+    monkeypatch.delenv('FEISHU_REDIRECT_URI', raising=False)
+    assert 'data-feishu-login hidden' in client.get('/').text
+
+    monkeypatch.setenv('FEISHU_REDIRECT_URI', 'http://testserver/integrations/feishu/callback')
+    for path in ('/', '/index.html'):
+        page = client.get(path).text
+        assert 'data-feishu-login>' in page
+        assert 'href="/integrations/feishu/login">飞书登录</a>' in page
+        assert 'type="submit">使用账号密码登录</button>' in page

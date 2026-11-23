@@ -1061,7 +1061,10 @@ def _read_static_html(filename: str) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
-    return _read_static_html("index.html")
+    page = _read_static_html("index.html")
+    if feishu_integration.configured():
+        return page.replace('data-feishu-login hidden', 'data-feishu-login', 1)
+    return page
 
 
 @app.get("/workbench", response_class=HTMLResponse)
@@ -1071,7 +1074,7 @@ def workbench() -> str:
 
 @app.get("/index.html", response_class=HTMLResponse, include_in_schema=False)
 def home_html_alias() -> str:
-    return _read_static_html("index.html")
+    return home()
 
 
 @app.get("/bi_workbench.html", response_class=HTMLResponse, include_in_schema=False)

@@ -2708,3 +2708,17 @@ button:disabled {
 .account-profile-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
 .account-profile-grid label{display:grid;gap:6px;font-size:13px;color:#33435d}
 .account-local-job{display:block;color:#68758a;margin-top:3px}
+
+#loginOverlay{padding:16px;overflow:auto}
+#loginOverlay .login-card{width:min(100%,420px);max-height:calc(100dvh - 32px);overflow:auto;padding:28px;box-sizing:border-box}
+.login-card h1{font-size:22px;font-weight:650;line-height:1.35;margin:0 0 20px;color:var(--ink)}
+.login-feishu-method[hidden]{display:none}
+.login-feishu-button{display:flex;align-items:center;justify-content:center;min-height:44px;border-radius:8px;background:#2356d2;border:1px solid #2356d2;color:#fff;font-size:14px;font-weight:650;text-decoration:none}
+.login-feishu-button:hover{background:#1947b7;color:#fff}
+.login-divider{display:flex;align-items:center;gap:10px;margin:15px 0;color:#627187;font-size:12px;white-space:nowrap}
+.login-divider::before,.login-divider::after{content:"";height:1px;flex:1;background:#e4e8f1}
+.login-password-form{display:grid;gap:7px;text-align:left}
+.login-password-form label{font-weight:600;font-size:12px;color:#3b4c65}
+.login-password-form .modal-input{height:41px;min-width:0;margin:0 0 4px;border-radius:7px;padding:0 11px;font-size:13px;border:1px solid var(--line-strong)}
+.login-password-form button{width:100%;min-height:41px;margin-top:3px;border-radius:7px;font-size:13px}
+.login-error{color:var(--danger);font-size:12px;margin-top:9px;min-height:16px}
