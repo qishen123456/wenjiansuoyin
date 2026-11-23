@@ -190,5 +190,6 @@ def test_login_page_renders_feishu_option_when_configured(foundation, monkeypatc
     for path in ('/', '/index.html'):
         page = client.get(path).text
         assert 'data-feishu-login>' in page
-        assert 'href="/integrations/feishu/login">飞书登录</a>' in page
-        assert 'type="submit">使用账号密码登录</button>' in page
+        assert 'href="/integrations/feishu/login"' in page
+        assert '<span>使用飞书登录</span>' in page
+        assert 'type="submit">账号密码登录</button>' in page

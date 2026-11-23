@@ -1563,8 +1563,8 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 }
 
 </style>
-<link rel="stylesheet" href="/static/portal.css?v=20261123-notification-manual-send">
-<link rel="stylesheet" href="/static/ui.css?v=20261108-robot">
+<link rel="stylesheet" href="/static/portal.css?v=20261124-sign-in">
+<link rel="stylesheet" href="/static/ui.css?v=20261124-sign-in">
 </head>
 <body>
 
@@ -1607,6 +1607,43 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
   <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></symbol>
 </svg>
+
+<div id="loginOverlay" class="login-page" role="dialog" aria-modal="true" aria-labelledby="loginTitle" hidden>
+  <section class="login-visual" aria-label="文件资产中心">
+    <div class="login-brand">
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/><path d="M3 11h18"/></svg></span>
+      文件资产中心
+    </div>
+    <div class="login-visual-copy">
+      <p>找到所需文件</p>
+      <p>查找企业报表、浏览部门目录、预览文件。</p>
+    </div>
+  </section>
+  <section class="login-content" aria-labelledby="loginTitle">
+    <div class="login-panel">
+      <h1 id="loginTitle" tabindex="-1">登录工作台</h1>
+      <div class="login-feishu-method" data-feishu-login hidden>
+        <a id="feishuLoginLink" class="login-feishu-button" href="/integrations/feishu/login">
+          <span>使用飞书登录</span><span aria-hidden="true">→</span>
+        </a>
+        <p class="login-method-note">已获授权的飞书成员首次登录自动开通。</p>
+        <div class="login-divider">或使用平台账号</div>
+      </div>
+      <form class="login-password-form" onsubmit="event.preventDefault();doLogin()">
+        <div class="login-field">
+          <label for="loginPhone">手机号</label>
+          <input id="loginPhone" type="tel" placeholder="请输入手机号" autocomplete="username" inputmode="tel">
+        </div>
+        <div class="login-field">
+          <label for="loginPassword">密码</label>
+          <input id="loginPassword" type="password" placeholder="请输入密码" autocomplete="current-password" autocapitalize="off" spellcheck="false">
+        </div>
+        <div id="loginError" class="login-error" role="status" aria-live="polite"></div>
+        <button id="loginSubmit" class="login-password-button" type="submit">账号密码登录</button>
+      </form>
+    </div>
+  </section>
+</div>
 
 <div class="app-root">
   <!-- 1. 全局唯一定制顶栏 (彻底告别双重导航与右上角遮挡) -->
@@ -2786,25 +2823,6 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
   <!-- Toast 全局浮层 -->
   <div class="toast-container" id="toastContainer" role="status" aria-live="polite"></div>
 
-  <!-- 登录遮罩与下载弹窗 -->
-  <div id="loginOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="loginTitle" style="display:none">
-    <section class="modal-card login-card">
-      <h1 id="loginTitle">登录文件资产中心</h1>
-      <div class="login-feishu-method" data-feishu-login hidden>
-        <a id="feishuLoginLink" class="login-feishu-button" href="/integrations/feishu/login">飞书登录</a>
-        <div class="login-divider">或使用账号密码</div>
-      </div>
-      <form class="login-password-form" onsubmit="event.preventDefault();doLogin()">
-        <label for="loginPhone">手机号</label>
-        <input id="loginPhone" class="modal-input" type="tel" placeholder="员工手机号" autocomplete="username" value="13800100001">
-        <label for="loginPassword">密码</label>
-        <input id="loginPassword" class="modal-input" type="password" placeholder="请输入密码" autocomplete="new-password" autocapitalize="off" spellcheck="false" value="">
-        <button class="btn-action-primary" type="submit">使用账号密码登录</button>
-      </form>
-      <div id="loginError" class="login-error" role="status" aria-live="polite"></div>
-    </section>
-  </div>
-
   <div id="downloadModal" class="modal-overlay" style="display:none" onclick="if(event.target===this)this.style.display='none'">
     <div class="modal-card" style="max-width:480px">
       <div class="modal-title">申请下载受控数据资产</div>
@@ -3484,12 +3502,17 @@ function isAdminUser() {
 }
 
 function showLoginOverlay() {
-  const el = $('loginOverlay');
-  if (el) el.style.display = 'flex';
+  const page = $('loginOverlay');
+  if (!page.hidden) return;
+  page.hidden = false;
+  document.body.classList.add('login-active');
+  document.querySelector('.app-root').inert = true;
+  $('loginTitle').focus();
 }
 function hideLoginOverlay() {
-  const el = $('loginOverlay');
-  if (el) el.style.display = 'none';
+  $('loginOverlay').hidden = true;
+  document.body.classList.remove('login-active');
+  document.querySelector('.app-root').inert = false;
 }
 
 async function checkAuth() {
@@ -3550,10 +3573,14 @@ function openDailyUpdateDetails() {
 }
 
 async function doLogin() {
+  const button = $('loginSubmit');
+  if (button.disabled) return;
   const phone = $('loginPhone').value.trim();
   const password = $('loginPassword').value.trim();
   $('loginError').textContent = '';
   if (!phone || !password) { $('loginError').textContent = '请输入手机号和密码'; return; }
+  button.disabled = true;
+  button.textContent = '正在登录…';
   try {
     const res = await api('/api/auth/login', { method: 'POST', body: { phone, password } });
     currentUser = res.user;
@@ -3569,6 +3596,9 @@ async function doLogin() {
     if (managementRoutes.has(tab)) switchNavMode(tab);
   } catch (e) {
     $('loginError').textContent = e.message || '登录失败';
+  } finally {
+    button.disabled = false;
+    button.textContent = '账号密码登录';
   }
 }
 
