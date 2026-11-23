@@ -2,6 +2,7 @@ import pytest
 
 from test_product_foundation import foundation, login
 import app
+import feishu_identity
 import feishu_integration as feishu
 
 
@@ -68,6 +69,97 @@ def test_first_feishu_login_matches_existing_account_and_uses_directory_identity
     client.cookies.clear()
     assert oauth(client, 'ou_first').status_code == 307
     assert calls.count(('POST', '/auth/v3/tenant_access_token/internal')) == 1
+
+
+def test_first_feishu_logins_create_ordinary_accounts_only_for_members_who_sign_in(foundation, monkeypatch):
+    client, _, add = foundation
+    ungranted = add('受限文件/内部.csv')
+    setup_feishu(monkeypatch, [
+        {'open_id': 'ou_new_one', 'name': '新财务同事', 'mobile': '+86 (139) 0010-0011',
+         'department_ids': ['od_ledger'], 'job_title': '成本会计'},
+        {'open_id': 'ou_new_two', 'name': '另一位同事', 'mobile': '13900100012', 'department_ids': ['0']},
+        {'open_id': 'ou_not_signed_in', 'name': '尚未登录的同事', 'mobile': '13900100013', 'department_ids': ['0']},
+    ])
+
+    login(client)
+    client.post('/api/system/feishu/sync').raise_for_status()
+    with app.db_session() as conn:
+        assert conn.execute("SELECT count(*) FROM system_users WHERE feishu_id<>''").fetchone()[0] == 0
+    client.cookies.clear()
+
+    response = oauth(client, 'ou_new_one')
+    assert response.status_code == 307 and response.headers['location'] == '/'
+    first = client.get('/api/auth/me').json()['user']
+    assert first['role'] == 'user' and first['identity_source'] == 'feishu'
+    assert first['name'] == '新财务同事' and first['department'] == '飞书财务部 / 利润组'
+    assert first['job_title'] == '成本会计'
+    assert feishu_identity.normalize_phone(first['phone']) == '+8613900100011'
+    assert client.get(f'/api/file/{ungranted}/preview-data').status_code == 404
+    assert client.get('/api/system/feishu').status_code == 403
+    client.cookies.clear()
+    assert client.post('/api/auth/login', json={'phone': first['phone'], 'password': '123456'}).status_code == 401
+
+    assert oauth(client, 'ou_new_two').status_code == 307
+    second = client.get('/api/auth/me').json()['user']
+    assert second['id'] != first['id'] and second['role'] == 'user'
+    client.cookies.clear()
+    assert oauth(client, 'ou_new_one').status_code == 307
+    assert client.get('/api/auth/me').json()['user']['id'] == first['id']
+    with app.db_session() as conn:
+        rows = conn.execute("SELECT feishu_id FROM system_users WHERE feishu_id<>''")
+        assert sorted(row[0] for row in rows) == ['ou_new_one', 'ou_new_two']
+
+
+def test_provisioning_rejects_unverified_numbers_and_members_outside_directory(foundation, monkeypatch):
+    client, _, _ = foundation
+    setup_feishu(monkeypatch, [
+        {'open_id': 'ou_no_phone', 'department_ids': ['0']},
+        {'open_id': 'ou_duplicate_1', 'mobile': '13900100021', 'department_ids': ['0']},
+        {'open_id': 'ou_duplicate_2', 'mobile': '+86 13900100021', 'department_ids': ['od_ledger']},
+        {'open_id': 'ou_resigned', 'mobile': '13900100022', 'department_ids': ['0'],
+         'status': {'is_resigned': True}},
+    ])
+
+    for identity in ('ou_no_phone', 'ou_duplicate_1', 'ou_duplicate_2', 'ou_resigned', 'ou_outside'):
+        assert oauth(client, identity).status_code == 403
+        assert 'ff_session' not in client.cookies
+    with app.db_session() as conn:
+        assert conn.execute("SELECT count(*) FROM system_users WHERE feishu_id<>''").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('action', ['disable', 'unlink', 'delete'])
+def test_removed_feishu_access_cannot_be_reopened_by_signing_in(foundation, monkeypatch, action):
+    client, _, _ = foundation
+    identity = 'ou_previously_signed_in'
+    phone = '13900100031'
+    setup_feishu(monkeypatch, [{'open_id': identity, 'mobile': phone, 'department_ids': ['0']}])
+    assert oauth(client, identity).status_code == 307
+    user_id = client.get('/api/auth/me').json()['user']['id']
+    old_session = client.cookies['ff_session']
+
+    login(client)
+    if action == 'disable':
+        client.put(f'/api/system/permissions/users/{user_id}/status').raise_for_status()
+    elif action == 'unlink':
+        client.post('/api/system/feishu/bind', json={'user_id': user_id, 'open_id': ''}).raise_for_status()
+    else:
+        client.delete(f'/api/system/permissions/users/{user_id}').raise_for_status()
+    client.post('/api/system/feishu/sync').raise_for_status()
+
+    client.cookies.clear()
+    client.cookies.set('ff_session', old_session)
+    assert client.get('/api/auth/me').status_code == 401
+    client.cookies.clear()
+    assert oauth(client, identity).status_code == 403
+    assert 'ff_session' not in client.cookies
+    with app.db_session() as conn:
+        rows = conn.execute("SELECT id,status,phone FROM system_users")
+        matching = [row for row in rows if feishu_identity.normalize_phone(row['phone']) == '+86' + phone]
+        if action == 'delete':
+            assert not matching
+        else:
+            assert len(matching) == 1 and matching[0]['id'] == user_id
+            assert matching[0]['status'] == ('disabled' if action == 'disable' else 'active')
 
 
 def test_first_feishu_login_prepares_review_for_administrator_without_a_session(foundation, monkeypatch):

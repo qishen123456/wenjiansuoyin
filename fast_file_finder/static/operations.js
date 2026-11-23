@@ -403,7 +403,7 @@ const memberRoles = {super_admin:'超级管理员', dept_admin:'部门管理员'
 const memberSources = {linked:'飞书 + 平台', feishu:'仅飞书', local:'仅平台'};
 const memberMatchLabels = {
   review:'待确认关联', conflict:'关联冲突', resync:'待重新同步', no_phone:'手机号不可见',
-  no_account:'待开通', disabled:'账号已停用', inactive:'已离职',
+  no_account:'首次飞书登录自动开通', blocked:'关联已失效或移除', disabled:'账号已停用', inactive:'已离职',
 };
 
 function unifiedMembers(users, members) {
@@ -484,7 +484,6 @@ function renderMemberPanel() {
         <td>${status}${extra && status !== extra ? `<small>${esc(extra)}</small>` : ''}${candidate ? `<small>候选账号 · ${esc(candidate.name)}</small>` : ''}</td>
         <td><div class="permission-roster-actions">${u ? '<button type="button" class="tree-tool-btn" data-action="edit">编辑资料</button>' : ''}
           ${candidate ? '<button type="button" class="tree-tool-btn" data-action="bind">确认关联</button>' : ''}
-          ${!u && m?.active && m.match_status === 'no_account' ? '<button type="button" class="tree-tool-btn" data-action="create">开通账号</button>' : ''}
           ${actions.length ? `<select data-more aria-label="更多账号操作"><option value="">更多操作</option>${actions.map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select>` : ''}
         </div></td></tr>`;
     }).join('') || '<tr><td colspan="6" class="permission-roster-empty">没有符合条件的成员</td></tr>';
@@ -497,7 +496,6 @@ function renderMemberPanel() {
   async function act(control, action) {
     const {member, account} = visible[Number(control.closest('tr').dataset.row)];
     if (action === 'edit') return openEditAccountProfile(account.id);
-    if (action === 'create') return openCreateUserModal(member);
     if (action === 'reset') return openResetPasswordModal(account.id);
     if (action === 'delete') return deleteUser(account.id);
     if (action === 'status') return toggleUserStatus(account.id);

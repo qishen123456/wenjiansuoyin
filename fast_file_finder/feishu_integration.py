@@ -21,6 +21,8 @@ BASE = 'https://open.feishu.cn/open-apis'
 logger = logging.getLogger(__name__)
 _sync_lock = threading.Lock()
 _LOGIN_SYNC_INTERVAL = 60
+# Allow several first logins to share a recent directory check without storing phones for unused accounts.
+_login_candidates = None
 
 
 def app_credentials_configured():
@@ -241,6 +243,7 @@ def sync_directory(app):
 
 
 def _sync_directory(app):
+    global _login_candidates
     token = tenant_token()
     departments = {}
     coverage = 'root'
@@ -264,14 +267,18 @@ def _sync_directory(app):
         conn.execute("""DELETE FROM login_sessions WHERE user_id IN (
             SELECT id FROM system_users WHERE feishu_id<>'' AND feishu_id NOT IN
             (SELECT open_id FROM feishu_members WHERE active=1))""")
-        conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_last_sync',?)",(str(time.time()),))
+        stamp = str(time.time())
+        conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_last_sync',?)", (stamp,))
         conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_sync_scope',?)", (coverage,))
+        candidates = {row[0]: members[row[0]].phone for row in conn.execute(
+            "SELECT open_id FROM feishu_member_profiles WHERE match_status='no_account'")}
+    _login_candidates = (app.DB_PATH, os.getenv('FEISHU_APP_ID'), stamp, time.monotonic(), candidates)
     return {'users': len(members), 'departments': len(departments), 'matched': matched}
 
 
 def _refresh_directory_for_login(app):
     # A valid OAuth identity may trigger a refresh, but concurrent logins share one attempt.
-    if not _sync_lock.acquire(blocking=False):
+    if not _sync_lock.acquire(timeout=10):
         return
     try:
         with app.db_session() as conn:
@@ -290,15 +297,31 @@ def _refresh_directory_for_login(app):
         _sync_lock.release()
 
 
+def _provisioning_phone(app, conn, identity):
+    snapshot = _login_candidates
+    if not snapshot:
+        return ''
+    db_path, app_id, stamp, cached_at, candidates = snapshot
+    if (db_path, app_id) != (app.DB_PATH, os.getenv('FEISHU_APP_ID')) or time.monotonic() - cached_at >= _LOGIN_SYNC_INTERVAL:
+        return ''
+    phone = candidates.get(identity)
+    if not phone:
+        return ''
+    # An administrator or another process may have synchronized a newer directory in the meantime.
+    current = conn.execute("SELECT value FROM app_meta WHERE key='feishu_last_sync'").fetchone()
+    return phone if current and current[0] == stamp else ''
+
+
 def _unmatched_login(conn, identity):
     profile = conn.execute('SELECT match_status FROM feishu_member_profiles WHERE open_id=?', (identity,)).fetchone()
     message = {
         'review': '平台已找到候选账号。请让超级管理员在「成员管理」核对候选账号并点击「确认关联」。',
-        'no_account': '请联系平台管理员，在「成员管理」为你的平台账号填写与飞书通讯录一致的手机号。',
+        'no_account': '平台暂未完成账号开通，请稍后重新发起飞书登录。',
         'no_phone': '飞书通讯录未返回你的手机号。请联系平台管理员检查应用的通讯录权限。',
         'conflict': '身份对应了多个候选记录。请联系平台管理员核对手机号和已有账号关联。',
         'disabled': '匹配到的平台账号已停用。请联系平台管理员。',
         'inactive': '当前飞书成员不可用。请联系平台管理员核对通讯录。',
+        'blocked': '你的账号关联已失效或已被移除。请联系平台管理员核对登录资格。',
     }.get(profile[0] if profile else '', '请稍后重新登录，或请平台管理员检查通讯录授权范围和平台账号手机号。')
     response = HTMLResponse(
         '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
@@ -437,19 +460,22 @@ def register(app):
         identity = (call('GET', '/authen/v1/user_info', token=user_token).get('data') or {}).get('open_id')
         if not isinstance(identity, str) or not identity:
             raise HTTPException(502, '无法读取飞书身份，请检查应用授权。')
+        # Server configuration should also match a legacy demo identity without relying on demo mode.
+        admin = feishu_identity.configured_super_admin()
+        legacy_demo = app.DEMO_MODE and (not admin or admin[1] != identity)
         with app.db_session() as conn:
-            # Server configuration should also match a legacy demo identity without relying on demo mode.
-            admin = feishu_identity.configured_super_admin()
-            legacy_demo = app.DEMO_MODE and (not admin or admin[1] != identity)
             recognized = linked_identities(conn, demo=legacy_demo, open_id=identity)
-        if not recognized:
+            eligible_phone = _provisioning_phone(app, conn, identity) if not recognized else ''
+        if not recognized and not eligible_phone:
             _refresh_directory_for_login(app)
         with app.db_session() as conn:
             conn.execute('BEGIN IMMEDIATE')
             matches = linked_identities(conn, demo=legacy_demo, open_id=identity)
-            if len(matches) != 1:
+            user_id = next(iter(matches)) if len(matches) == 1 else None
+            if not matches:
+                user_id = feishu_identity.provision_member(conn, identity, _provisioning_phone(app, conn, identity), time.time())
+            if user_id is None:
                 return _unmatched_login(conn, identity)
-            user_id = next(iter(matches))
             session=secrets.token_urlsafe(48)
             ttl=int(app.SESSION_TTL_HOURS*3600)
             conn.execute("INSERT INTO login_sessions(token,user_id,created_at,expires_at,auth_source) VALUES(?,?,?,?,'feishu')",

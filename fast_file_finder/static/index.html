@@ -5251,17 +5251,11 @@ async function deleteUser(userId) {
   }
 }
 
-let creatingFromFeishu = false;
-
-function openCreateUserModal(member) {
-  creatingFromFeishu = Boolean(member);
-  $('newUserName').value = member?.name || '';
+function openCreateUserModal() {
+  $('newUserName').value = '';
   $('newUserPhone').value = '';
-  $('newUserPhone').placeholder = member?.phone_tail
-    ? '填写飞书手机号，尾号 ' + member.phone_tail : '例如 13800100008';
-  $('newUserPassword').value = creatingFromFeishu ? '' : '123456';
-  $('newUserPassword').placeholder = creatingFromFeishu ? '请设置独立初始密码' : '默认 123456';
-  $('newUserDept').value = member ? '' : '电商运营部';
+  $('newUserPassword').value = '123456';
+  $('newUserDept').value = '电商运营部';
   $('newUserJob').value = '';
   $('newUserRole').value = 'user';
   $('createUserModal').classList.remove('hidden');
@@ -5275,7 +5269,7 @@ function closeCreateUserModal() {
 async function confirmCreateUser() {
   const name = $('newUserName').value.trim();
   const phone = $('newUserPhone').value.trim();
-  const password = $('newUserPassword').value.trim() || (creatingFromFeishu ? '' : '123456');
+  const password = $('newUserPassword').value.trim() || '123456';
   const department = $('newUserDept').value.trim();
   const job_title = $('newUserJob').value.trim();
   const role = $('newUserRole').value;
@@ -5286,11 +5280,6 @@ async function confirmCreateUser() {
   }
   if (!phone) {
     toast('请填写登录电话号码 (手机号)');
-    return;
-  }
-
-  if (creatingFromFeishu && password.length < 8) {
-    toast('请设置至少 8 位的独立初始密码');
     return;
   }
 
@@ -6114,7 +6103,7 @@ document.addEventListener('keydown', (e) => {
 
 </script>
 <script src="/static/portal.js?v=20261123-notification-tasks"></script>
-<script src="/static/operations.js?v=20261123-notification-manual-send"></script>
+<script src="/static/operations.js?v=20261123-feishu-auto-provision"></script>
 <script src="/static/robot-drag.js?v=20261108"></script>
 </body>
 </html>

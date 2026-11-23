@@ -52,9 +52,18 @@ def initialize(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS feishu_member_departments (
         open_id TEXT NOT NULL, department_id TEXT NOT NULL, PRIMARY KEY (open_id, department_id)
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS feishu_provisioning_exclusions (
+        open_id TEXT PRIMARY KEY
+    )""")
+
+
+def remember_previous_link(conn, user_id):
+    conn.execute("""INSERT OR IGNORE INTO feishu_provisioning_exclusions(open_id)
+        SELECT feishu_id FROM system_users WHERE id=? AND coalesce(feishu_id,'')<>''""", (user_id,))
 
 
 def clear_user_link(conn, user_id, *, block=False, feishu_only=False):
+    remember_previous_link(conn, user_id)
     conn.execute("UPDATE system_users SET feishu_id='', feishu_binding_source=? WHERE id=?",
                  ('blocked' if block else '', user_id))
     conn.execute("UPDATE feishu_member_profiles SET local_user_id=NULL, match_status='resync' WHERE local_user_id=?", (user_id,))
@@ -116,6 +125,7 @@ def reconcile(conn, members, departments, *, demo):
     for user in users.values():
         if user['feishu_id']:
             owners[user['feishu_id']].append(user['id'])
+    previous_links = {row[0] for row in conn.execute('SELECT open_id FROM feishu_provisioning_exclusions')}
 
     profiles = []
     revoked = set()
@@ -133,7 +143,7 @@ def reconcile(conn, members, departments, *, demo):
         elif len(matches) > 1 or len(remote_phones[member.phone]) > 1:
             state = 'conflict'
         elif not user:
-            state = 'no_account'
+            state = 'blocked' if linked or member.open_id in previous_links else 'no_account'
         elif user['status'] != 'active':
             state = 'disabled'
         elif (linked and linked != [user['id']]) or user['feishu_id'] not in (None, '', member.open_id):
@@ -174,3 +184,25 @@ def reconcile(conn, members, departments, *, demo):
             SELECT local_user_id FROM feishu_member_profiles WHERE match_status='matched' AND local_user_id IS NOT NULL
         )""")
     return sum(row[-1] == 'matched' for row in profiles)
+
+
+def provision_member(conn, open_id, phone, now):
+    configured_admin = configured_super_admin()
+    if not phone or (configured_admin and configured_admin[1] == open_id):
+        return None
+    member = conn.execute("""SELECT m.name FROM feishu_members m
+        JOIN feishu_member_profiles p ON p.open_id=m.open_id
+        WHERE m.open_id=? AND m.active=1 AND p.match_status='no_account'
+          AND NOT EXISTS (SELECT 1 FROM feishu_provisioning_exclusions WHERE open_id=m.open_id)""", (open_id,)).fetchone()
+    if not member:
+        return None
+    for account in conn.execute('SELECT feishu_id,phone FROM system_users'):
+        if account['feishu_id'] == open_id or normalize_phone(account['phone']) == phone:
+            return None
+    user_id = conn.execute("""INSERT INTO system_users
+        (name,phone,password,role,status,avatar,feishu_id,feishu_binding_source,created_at,updated_at)
+        VALUES (?, ?, NULL, 'user', 'active', ?, ?, 'phone', ?, ?)""",
+        (member['name'], phone, member['name'][:2], open_id, now, now)).lastrowid
+    conn.execute("""UPDATE feishu_member_profiles SET local_user_id=?,match_status='matched'
+        WHERE open_id=?""", (user_id, open_id))
+    return user_id

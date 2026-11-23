@@ -3728,7 +3728,7 @@ class LoginRequest(BaseModel):
 def login(req: LoginRequest, response: Response) -> dict[str, Any]:
     with db_session() as conn:
         row = conn.execute("SELECT * FROM system_users WHERE phone = ?", (req.phone.strip(),)).fetchone()
-    if not row or (row["password"] or "123456") != req.password.strip():
+    if not row or not row["password"] or row["password"] != req.password.strip():
         raise HTTPException(status_code=401, detail="手机号或密码错误。")
     if row["status"] != "active":
         raise HTTPException(status_code=403, detail="账号已被停用，请联系管理员。")
@@ -4151,9 +4151,11 @@ def toggle_user_status(user_id: int, request: Request) -> dict[str, Any]:
 def delete_system_user(user_id: int, request: Request) -> dict[str, Any]:
     _require_super_admin(request)
     with db_session() as conn:
+        feishu_identity.remember_previous_link(conn, user_id)
         cur = conn.execute("DELETE FROM system_users WHERE id = ?", (user_id,))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="成员不存在")
+        conn.execute('DELETE FROM login_sessions WHERE user_id=?', (user_id,))
     return {"ok": True, "message": "成员授权已移除"}
 
 
