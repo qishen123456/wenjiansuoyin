@@ -588,9 +588,11 @@ function updateGrantSelectionCount() {
   $('grantSelectionCount').textContent=`已选 ${grantSelectedSubjects.size} 个成员／部门、${grantSelectedPaths.size} 个文件夹；共 ${grantSelectedSubjects.size*grantSelectedPaths.size} 组（每批最多 500 组）`;
 }
 let grantFeishuSubjects = {};
+let grantFeishuMembersByUser = new Map();
 
 function grantSubjectLabel(type, key) {
-  if (type === 'user') return permState.users.find(user => String(user.id) === key)?.name || `成员 #${key}`;
+  if (type === 'user') return grantFeishuMembersByUser.get(Number(key))?.name
+    || permState.users.find(user => String(user.id) === key)?.name || `成员 #${key}`;
   if (type === 'department') return key + '（自定义部门）';
   return grantFeishuSubjects[type]?.find(subject => subject.key === key)?.label || `已变更的飞书授权对象 · ${key}`;
 }
@@ -603,6 +605,9 @@ async function loadDirectoryGrantPanel() {
     const [permissions,tree]=await Promise.all([api('/api/system/directory-grants'),api('/api/catalog/tree')]);
     directoryGrantData=permissions.grants || [];
     grantFeishuSubjects=permissions.feishu_subjects || {};
+    grantFeishuMembersByUser = new Map((permState.directory?.members || [])
+      .filter(member => member.match_status === 'matched' && member.bound_user_id)
+      .map(member => [member.bound_user_id, member]));
     grantFolderOptions=[];grantSelectedPaths=new Set();grantSelectedSubjects=new Set();grantBatchRevision='';
     const collect=node=>{if(!node)return;grantFolderOptions.push([node.path,node.path===tree.tree?.path?'整个文件根目录':node.path.replace(tree.tree?.path || '', '').replace(/^\//,'')]);(node.children || []).forEach(collect);};
     collect(tree.tree || tree);
@@ -624,9 +629,10 @@ async function loadDirectoryGrantPanel() {
       if (type === 'department') {
         grantSubjectOptions = [...new Set(permState.users.map(user => user.department).filter(Boolean))].map(dept => [dept, dept]);
       } else if (type === 'user') {
-        grantSubjectOptions = permState.users.filter(user => user.role !== 'super_admin').map(user => [
-          String(user.id), `${user.name} · ${user.department || '未填部门'}`
-        ]);
+        grantSubjectOptions = permState.users.filter(user => user.role !== 'super_admin').map(user => {
+          const member = grantFeishuMembersByUser.get(user.id);
+          return [String(user.id), `${member?.name || user.name} · ${member?.department || user.department || '未填部门'}`];
+        });
       } else {
         grantSubjectOptions = (grantFeishuSubjects[type] || []).map(subject => [subject.key, subject.label]);
       }
@@ -676,7 +682,7 @@ async function submitGrantBatch(preview){
 }
 async function checkEffectiveGrant(){
   if($('grantSubjectType').value!=='user'||grantSelectedSubjects.size!==1||grantSelectedPaths.size!==1){$('directoryGrantStatus').textContent='请只选择一名成员和一个文件夹。';return;}
-  try{const data=await api('/api/system/directory-grants/effective?'+new URLSearchParams({user_id:[...grantSelectedSubjects][0],path:[...grantSelectedPaths][0]}));$('grantEffectiveResult').innerHTML=`<h4>${esc(data.user_name)}的最终权限</h4><p>${esc(grantSummary(data.permissions))}</p><ul>${data.sources.map(s=>`<li>${esc(grantSubjectLabel(s.subject_type, s.subject_key))} · ${esc(s.target_path)}<small>${esc(grantSummary(s.permissions))}</small></li>`).join('')||'<li>没有匹配的授权来源，默认禁止</li>'}</ul>`;}
+  try{const data=await api('/api/system/directory-grants/effective?'+new URLSearchParams({user_id:[...grantSelectedSubjects][0],path:[...grantSelectedPaths][0]}));$('grantEffectiveResult').innerHTML=`<h4>${esc(grantSubjectLabel('user', [...grantSelectedSubjects][0]))}的最终权限</h4><p>${esc(grantSummary(data.permissions))}</p><ul>${data.sources.map(s=>`<li>${esc(grantSubjectLabel(s.subject_type, s.subject_key))} · ${esc(s.target_path)}<small>${esc(grantSummary(s.permissions))}</small></li>`).join('')||'<li>没有匹配的授权来源，默认禁止</li>'}</ul>`;}
   catch(error){$('directoryGrantStatus').textContent=error.message;}
 }
 

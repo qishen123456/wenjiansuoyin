@@ -148,6 +148,42 @@ def _authorized_directory(token):
     return departments, members
 
 
+def directory_snapshot(conn, *, include_stored=False):
+    enabled = app_credentials_configured()
+    members = []
+    last_sync = 0.0
+    departments = 0
+    if enabled or include_stored:
+        members = [dict(row) for row in conn.execute("""SELECT m.*, p.phone_tail, p.job_title, p.local_user_id,
+            p.match_status, u.id AS bound_user_id, u.feishu_binding_source AS binding_source
+            FROM feishu_members m LEFT JOIN feishu_member_profiles p ON p.open_id=m.open_id
+            LEFT JOIN system_users u ON u.feishu_id=m.open_id AND u.status='active'
+            ORDER BY m.department,m.name,m.open_id""")]
+        stamp = conn.execute("SELECT value FROM app_meta WHERE key='feishu_last_sync'").fetchone()
+        last_sync = float(stamp[0]) if stamp else 0.0
+        departments = conn.execute('SELECT count(*) FROM feishu_departments').fetchone()[0]
+    return {
+        'source': 'feishu' if enabled else 'local',
+        'last_sync': last_sync,
+        'members': members,
+        'summary': {
+            'total': len(members),
+            'active': sum(bool(m['active']) for m in members),
+            'matched': sum(m['match_status'] == 'matched' and m['bound_user_id'] is not None for m in members),
+            'departments': departments,
+        },
+    }
+
+
+def _department_display(member, departments):
+    names = [departments[key][1] for key in sorted(member.departments & departments.keys())]
+    if names:
+        return '、'.join(names)
+    if '0' in member.departments:
+        return '根组织'
+    return ''
+
+
 def sync_directory(app):
     if not _sync_lock.acquire(blocking=False):
         raise HTTPException(409, '通讯录正在同步，请稍后查看结果。')
@@ -172,7 +208,7 @@ def _sync_directory(app):
         conn.execute('DELETE FROM feishu_members')
         conn.execute('DELETE FROM feishu_departments')
         conn.executemany('INSERT INTO feishu_members VALUES (?,?,?,?)', (
-            (m.open_id, m.name, '、'.join(departments[key][1] for key in sorted(m.departments & departments.keys())), int(m.active))
+            (m.open_id, m.name, _department_display(m, departments), int(m.active))
             for m in members.values()
         ))
         conn.executemany('INSERT INTO feishu_departments VALUES (?,?,?)', departments.values())
@@ -303,14 +339,8 @@ def register(app):
     def status(request: Request):
         app._require_super_admin(request)
         with app.db_session() as conn:
-            rows = conn.execute("""SELECT m.*, p.phone_tail, p.job_title, p.local_user_id, p.match_status,
-                u.id AS bound_user_id, u.feishu_binding_source AS binding_source
-                FROM feishu_members m LEFT JOIN feishu_member_profiles p ON p.open_id=m.open_id
-                LEFT JOIN system_users u ON u.feishu_id=m.open_id AND u.status='active'
-                ORDER BY m.department,m.name""").fetchall()
-            stamp=conn.execute("SELECT value FROM app_meta WHERE key='feishu_last_sync'").fetchone()
-        return {'configured': configured(), 'members': [dict(r) for r in rows],
-                'last_sync': float(stamp[0]) if stamp else 0, 'demo_mode': app.DEMO_MODE,
+            snapshot = directory_snapshot(conn, include_stored=True)
+        return {**snapshot, 'configured': configured(), 'demo_mode': app.DEMO_MODE,
                 'daily': app.feishu_daily.status(app)}
 
     @app.app.post('/api/system/feishu/sync')

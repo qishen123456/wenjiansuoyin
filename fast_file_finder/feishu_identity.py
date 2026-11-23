@@ -33,8 +33,8 @@ class Member:
 def member_profile(member, key, department_id=''):
     state = member.get('status') or {}
     active = not any(state.get(flag) for flag in ('is_resigned', 'is_frozen', 'is_exited', 'is_unjoin'))
-    departments = {value for value in member.get('department_ids') or [] if isinstance(value, str) and value != '0'}
-    if department_id and department_id != '0':
+    departments = {value for value in member.get('department_ids') or [] if isinstance(value, str) and value}
+    if department_id:
         departments.add(department_id)
     title = str(member.get('job_title') or '').strip()[:80]
     title_id = str(member.get('job_title_id') or '').strip()[:80]

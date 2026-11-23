@@ -2686,21 +2686,25 @@ button:disabled {
 .feishu-daily pre{font:inherit;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0}
 .feishu-daily .feishu-daily-error{color:#963a2b}
 
-.feishu-directory{margin-top:16px}
-.feishu-directory h4{font-size:14px;margin:0 0 4px}
-.feishu-directory p,.feishu-match-row small{font-size:12px;color:#5f6d84}
-.feishu-directory .feishu-daily-error{color:#963a2b}
-.feishu-directory-search{display:grid;gap:5px;width:min(100%,360px);font-size:12px;color:#536583;margin:12px 0}
-.feishu-directory-search input,.account-profile-grid input{border:1px solid #dce2ed;border-radius:7px;background:white;color:#263755;padding:9px;font:inherit;min-width:0}
-.feishu-match-rows{border:1px solid #e1e7ef;border-radius:10px;max-height:370px;overflow:auto}
-.feishu-match-rows>p{padding:10px 12px;margin:0}
-.feishu-match-row{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) auto;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid #eaedf3;font-size:13px}
-.feishu-match-row:last-child{border-bottom:0}
-.feishu-match-row strong,.feishu-match-row small{display:block;overflow-wrap:anywhere}
-.feishu-match-row small{padding-top:3px}
+.permission-roster-tabs{display:flex;gap:8px;margin:0 0 12px;flex-wrap:wrap}
+.permission-roster-tabs button{border:1px solid #dce3ef;border-radius:8px;background:#fff;padding:8px 14px;color:#52647d;font:inherit;font-size:13px;cursor:pointer}
+.permission-roster-tabs button[aria-pressed=true]{color:#204694;border-color:#b7c9ed;background:#eef3ff;font-weight:600}
+#feishuPanel[hidden],#platformAccountsPanel[hidden]{display:none}
+.permission-roster-metrics{display:flex;gap:8px 22px;flex-wrap:wrap;border-block:1px solid #e8edf4;padding:11px 0;margin:12px 0;font-size:12px;color:#576982}
+.permission-roster-metrics strong{font-size:16px;color:#243d64;font-variant-numeric:tabular-nums}
+.permission-roster-filters{display:flex;gap:12px;align-items:end;margin:0 0 12px;flex-wrap:wrap}
+.permission-roster-filters label{display:grid;gap:5px;min-width:155px;font-size:12px;color:#536583}
+.permission-roster-filters label:first-child{flex:0 1 260px}
+.permission-roster-filters input,.permission-roster-filters select,.account-profile-grid input{border:1px solid #dce2ed;border-radius:7px;background:white;color:#263755;padding:9px;font:inherit;min-width:0;width:100%;max-width:290px}
+.permission-roster-scroll{overflow:auto;border:1px solid #e8edf4;border-radius:10px}
+.permission-feishu-table{min-width:680px}
+.permission-feishu-table strong{font-size:13px}
+.permission-feishu-table small{display:block;color:#62748e;padding-top:4px;overflow-wrap:anywhere}
+.permission-feishu-table .permission-roster-empty{text-align:center;padding:22px;color:#62748e}
+.permission-roster-actions{display:flex;gap:5px;flex-wrap:wrap}
+.permission-roster-count{font-size:12px;color:#62748e;margin:8px 0 0}
 .feishu-match-status{display:inline-block;border-radius:6px;background:#f1f3f8;color:#536583;padding:2px 6px;font-size:11px}
 .feishu-match-status.matched{color:#245943;background:#eaf5ef}
 .account-profile-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
 .account-profile-grid label{display:grid;gap:6px;font-size:13px;color:#33435d}
 .account-local-job{display:block;color:#68758a;margin-top:3px}
-@media(max-width:540px){.feishu-match-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.feishu-match-row>div:last-child:empty{display:none}}

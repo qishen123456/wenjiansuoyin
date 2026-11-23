@@ -2211,57 +2211,25 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
       </div>
     </section>
 
-    <!-- 视图 5：人员与账号权限中心 (完整保留) -->
-    <section id="permissionView" class="hidden archive-shell"><section id="feishuPanel" class="directory-grant-panel"></section>
-      <div id="directoryGrantPanel" class="directory-grant-panel"></div>
-      <!-- 4 大指标卡片 -->
-      <div class="catalog-overview-grid" style="grid-template-columns: repeat(4, 1fr);">
-        <div class="catalog-kpi-card">
-          <div class="kpi-icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg></div>
-          <div class="kpi-meta-wrap">
-            <div class="kpi-label-text">受控企业人员总数</div>
-            <div class="kpi-value-text" id="permTotalUsers">--</div>
-            <div class="kpi-sub-text">企业手机号实名账号</div>
-          </div>
-        </div>
-        <div class="catalog-kpi-card">
-          <div class="kpi-icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--warning)"><use href="#i-shield"/></svg></div>
-          <div class="kpi-meta-wrap">
-            <div class="kpi-label-text">系统超级管理员</div>
-            <div class="kpi-value-text" id="permSuperAdmins">--</div>
-            <div class="kpi-sub-text">全系统配置与人员角色权限</div>
-          </div>
-        </div>
-        <div class="catalog-kpi-card">
-          <div class="kpi-icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--success)"><use href="#i-shield-check"/></svg></div>
-          <div class="kpi-meta-wrap">
-            <div class="kpi-label-text">部门权限管理员</div>
-            <div class="kpi-value-text" id="permDeptAdmins">--</div>
-            <div class="kpi-sub-text">维护归档规则与审批工单</div>
-          </div>
-        </div>
-        <div class="catalog-kpi-card">
-          <div class="kpi-icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-zap"/></svg></div>
-          <div class="kpi-meta-wrap">
-            <div class="kpi-label-text">内网运行模式</div>
-            <div class="kpi-value-text" style="font-size:14px;color:var(--success);font-weight:600">纯内网免映射</div>
-            <div class="kpi-sub-text">使用手机号与密码登录</div>
-          </div>
-        </div>
+    <section id="permissionView" class="hidden archive-shell">
+      <div class="permission-roster-tabs" aria-label="人员名单来源">
+        <button id="showFeishuRoster" type="button" aria-pressed="false" aria-controls="feishuPanel">飞书通讯录</button>
+        <button id="showPlatformAccounts" type="button" aria-pressed="false" aria-controls="platformAccountsPanel">平台账号</button>
       </div>
-
-      <!-- 企业内网独立账号管理安全策略面板 -->
+      <section id="feishuPanel" class="directory-grant-panel" hidden></section>
+      <section id="platformAccountsPanel" hidden>
+      <!-- 平台账号维护 -->
       <div class="panel" style="margin-top:16px;padding:20px;border-radius:14px;background:#ffffff;border:1px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.02)">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
           <div style="display:flex;align-items:center;gap:10px">
             <div style="width:34px;height:34px;border-radius:10px;background:var(--ink);display:flex;align-items:center;justify-content:center;color:#ffffff;box-shadow:var(--shadow-sm)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg></div>
             <div>
-              <div style="font-size:14px;font-weight:700;color:#18181B">成员与访问权限</div>
-              <div style="font-size:11.5px;color:#71717A">管理成员账号、系统角色与可访问的文件目录。</div>
+              <div style="font-size:14px;font-weight:700;color:#18181B">平台账号</div>
+              <div style="font-size:11.5px;color:#71717A">管理登录账号、系统角色与自定义部门。</div>
             </div>
           </div>
           <button class="btn-archive-primary" onclick="openCreateUserModal()" style="font-weight:600;padding:0 14px;height:34px">
-            <span>+ 新增成员</span>
+            <span>+ 新建平台账号</span>
           </button>
         </div>
       </div>
@@ -2270,7 +2238,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
       <div class="panel" style="margin-top:16px;padding:0;overflow:hidden;border-radius:14px;background:#ffffff;border:1px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.02)">
         <div style="padding:14px 20px;border-bottom:1px solid #F4F4F5;display:flex;justify-content:space-between;align-items:center;background:#fcfcfd">
           <div>
-            <div style="font-size:13.5px;font-weight:700;color:#18181B">成员列表</div>
+            <div style="font-size:13.5px;font-weight:700;color:#18181B">平台账号列表</div>
             <div style="font-size:11px;color:#71717A;margin-top:2px">在这里管理成员角色、账号状态和登录凭据。</div>
           </div>
           <span style="font-size:11.5px;color:#71717A">仅超级管理员可管理成员</span>
@@ -2292,6 +2260,8 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
           </tbody>
         </table>
       </div>
+      </section>
+      <section id="directoryGrantPanel" class="directory-grant-panel"></section>
     </section>
 
     <section id="syncView" class="hidden">
@@ -4910,14 +4880,19 @@ function closeImagePreview() {
 /* -----------------------------------------------------------
  * 人员权限维护与飞书打通控制器 (Permission & Feishu Integration)
  * ----------------------------------------------------------- */
-let permState = {
-  users: [],
-  feishuConfig: {},
-  summary: {}
-};
+let permState = { users: [], directory: null, rosterTab: null, daily: null };
 
 async function initPermissionDashboard() {
   await loadPermissionOverview();
+}
+
+function showPermissionRoster(source) {
+  permState.rosterTab = source;
+  const showFeishu = source === 'feishu';
+  $('showFeishuRoster').setAttribute('aria-pressed', String(showFeishu));
+  $('showPlatformAccounts').setAttribute('aria-pressed', String(!showFeishu));
+  $('feishuPanel').hidden = !showFeishu;
+  $('platformAccountsPanel').hidden = showFeishu;
 }
 
 async function loadPermissionOverview() {
@@ -4925,30 +4900,14 @@ async function loadPermissionOverview() {
     const res = await api('/api/system/permissions');
     if (!res.ok) return;
     permState.users = res.users || [];
-    permState.feishuConfig = res.feishu_config || {};
-    permState.summary = res.summary || {};
-
-    // 1. KPI 统计卡片渲染
-    if ($('permTotalUsers')) $('permTotalUsers').textContent = permState.summary.total_users || 0;
-    if ($('permSuperAdmins')) $('permSuperAdmins').textContent = permState.summary.super_admins || 0;
-    if ($('permDeptAdmins')) $('permDeptAdmins').textContent = permState.summary.dept_admins || 0;
-
-    const cfg = permState.feishuConfig;
-    const isBound = Boolean(cfg.app_id);
-    if ($('permFeishuStatus')) $('permFeishuStatus').innerHTML = isBound ? '已打通' : '待配置';
-    const lastSyncDisplay = cfg.last_synced_at ? `${new Date(cfg.last_synced_at * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 完成同步` : '尚未执行同步';
-    if ($('permFeishuSyncTip')) $('permFeishuSyncTip').textContent = `通讯录：${lastSyncDisplay}`;
-
-    // 2. 飞书配置表单回显
-    if ($('cfgFeishuAppId')) $('cfgFeishuAppId').value = cfg.app_id || '';
-    if ($('cfgFeishuAppSecret')) $('cfgFeishuAppSecret').value = cfg.app_secret || '';
-    if ($('cfgFeishuWebhook')) $('cfgFeishuWebhook').value = cfg.webhook_url || '';
-    if ($('cfgFeishuNotifyCheck')) $('cfgFeishuNotifyCheck').checked = cfg.notify_enabled !== false;
-
-    // 3. 人员表格渲染
+    permState.directory = res.directory || {source:'local', members:[], summary:{}};
+    permState.daily = res.feishu_daily;
+    $('showFeishuRoster').onclick = () => showPermissionRoster('feishu');
+    $('showPlatformAccounts').onclick = () => showPermissionRoster('local');
     renderPermissionUsersTable();
+    loadFeishuPanel();
+    showPermissionRoster(permState.rosterTab || permState.directory.source);
     await loadDirectoryGrantPanel();
-    await loadFeishuPanel();
   } catch (e) {
     console.error('loadPermissionOverview error:', e);
   }
@@ -5089,11 +5048,17 @@ async function deleteUser(userId) {
   }
 }
 
-function openCreateUserModal() {
-  $('newUserName').value = '';
+let creatingFromFeishu = false;
+
+function openCreateUserModal(member) {
+  creatingFromFeishu = Boolean(member);
+  $('newUserName').value = member?.name || '';
   $('newUserPhone').value = '';
-  $('newUserPassword').value = '123456';
-  $('newUserDept').value = '电商运营部';
+  $('newUserPhone').placeholder = member?.phone_tail
+    ? '填写飞书手机号，尾号 ' + member.phone_tail : '例如 13800100008';
+  $('newUserPassword').value = creatingFromFeishu ? '' : '123456';
+  $('newUserPassword').placeholder = creatingFromFeishu ? '请设置独立初始密码' : '默认 123456';
+  $('newUserDept').value = member ? '' : '电商运营部';
   $('newUserJob').value = '';
   $('newUserRole').value = 'user';
   $('createUserModal').classList.remove('hidden');
@@ -5107,7 +5072,7 @@ function closeCreateUserModal() {
 async function confirmCreateUser() {
   const name = $('newUserName').value.trim();
   const phone = $('newUserPhone').value.trim();
-  const password = $('newUserPassword').value.trim() || '123456';
+  const password = $('newUserPassword').value.trim() || (creatingFromFeishu ? '' : '123456');
   const department = $('newUserDept').value.trim();
   const job_title = $('newUserJob').value.trim();
   const role = $('newUserRole').value;
@@ -5118,6 +5083,11 @@ async function confirmCreateUser() {
   }
   if (!phone) {
     toast('请填写登录电话号码 (手机号)');
+    return;
+  }
+
+  if (creatingFromFeishu && password.length < 8) {
+    toast('请设置至少 8 位的独立初始密码');
     return;
   }
 

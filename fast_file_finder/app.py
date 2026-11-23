@@ -3961,18 +3961,7 @@ def preview_data(file_id: int,request: Request,sheet: str=Query(default='',max_l
 def get_system_permissions(request: Request) -> dict[str, Any]:
     _require_super_admin(request)
     with db_session() as conn:
-        feishu_raw = conn.execute("SELECT value FROM app_meta WHERE key = 'feishu_config'").fetchone()
-        feishu_config = json.loads(feishu_raw[0]) if feishu_raw else {
-            "app_id": "",
-            "app_secret": "",
-            "webhook_url": "",
-            "notify_enabled": True,
-            "sync_enabled": False,
-            "last_synced_at": 0,
-            "synced_users_count": 0,
-            "synced_depts_count": 0
-        }
-        
+        directory = feishu_integration.directory_snapshot(conn)
         users_rows = conn.execute("""
             SELECT id, name, phone, feishu_id, email, department, job_title, role, status, avatar, created_at, updated_at
             FROM system_users
@@ -4009,6 +3998,8 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
     return {
         "ok": True,
         "feishu_config": {"configured": feishu_integration.configured()},
+        "directory": directory,
+        "feishu_daily": feishu_daily.status(sys.modules[__name__]) if directory['source'] == 'feishu' else None,
         "users": users,
         "summary": {
             "total_users": len(users),

@@ -115,3 +115,45 @@ def test_sync_uses_explicit_contacts_when_root_not_authorized(foundation, monkey
     assert entries['ou_direct']['name'] == '飞书成员（direct）'
     assert entries['ou_pilot']['department'] == '试点部门'
     assert all(params.get('department_id') != '0' for path, params in calls if path.endswith('find_by_department'))
+
+
+def test_personnel_directory_prefers_real_contacts_and_keeps_platform_accounts_separate(foundation, monkeypatch):
+    client, _, _ = foundation
+    monkeypatch.setenv('FEISHU_APP_ID', 'cli_fixture')
+    monkeypatch.setenv('FEISHU_APP_SECRET', 'test-secret')
+    monkeypatch.delenv('FEISHU_REDIRECT_URI', raising=False)
+
+    def request(method, path, **kwargs):
+        if path.endswith('tenant_access_token/internal'):
+            return {'tenant_access_token': 'test'}
+        if path.endswith('/0/children'):
+            raise feishu.FeishuAPIError(40004)
+        if path.endswith('/scopes'):
+            return {'data': {'user_ids': ['ou_real']}}
+        if path.endswith('/users/ou_real'):
+            return {'data': {'user': {
+                'open_id': 'ou_real', 'name': '飞书真实成员',
+                'mobile': '13912345678', 'department_ids': ['0'],
+            }}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(feishu, 'call', request)
+    login(client)
+    response = client.get('/api/system/permissions').json()
+    assert response['directory']['source'] == 'feishu'
+    assert response['directory']['members'] == []
+    assert response['feishu_config']['configured'] is False
+    assert client.post('/api/system/feishu/sync').json()['users'] == 1
+    response = client.get('/api/system/permissions').json()
+    person, = response['directory']['members']
+    assert person['name'] == '飞书真实成员'
+    assert person['department'] == '根组织' and not person['job_title']
+    assert person['match_status'] == 'no_account' and person['phone_tail'] == '5678'
+    assert response['directory']['summary'] == {'total':1, 'active':1, 'matched':0, 'departments':0}
+    assert len(response['users']) == 5
+    assert all(account['name'] != person['name'] for account in response['users'])
+
+    monkeypatch.delenv('FEISHU_APP_ID')
+    response = client.get('/api/system/permissions').json()
+    assert response['directory']['source'] == 'local' and response['directory']['members'] == []
+    assert len(response['users']) == 5
