@@ -85,14 +85,21 @@ def initialize(conn):
         backup_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL)''')
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        while block := stream.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def keep_previous(app, path, actor):
     backup_id = uuid.uuid4().hex
     folder = storage_dir(app, 'file_versions')
     blob = folder / (backup_id + '.bin')
     shutil.copyfile(path, blob)
     os.chmod(blob, 0o600)
-    with blob.open('rb') as stream:
-        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+    digest = _file_sha256(blob)
     metadata = {'id':backup_id, 'path':str(path), 'root_key':app.root_scope_key(), 'actor_id':actor,
                 'created_at':time.time(), 'size':blob.stat().st_size, 'sha256':digest, 'name':path.name}
     (folder / (backup_id+'.json')).write_text(json.dumps(metadata, ensure_ascii=False), encoding='utf-8')
@@ -287,8 +294,8 @@ def register(app):
         if not metadata.is_file() or not blob.is_file():raise HTTPException(404,'恢复副本不存在。')
         item=json.loads(metadata.read_text(encoding='utf-8'))
         if item['path']!=str(path) or item['root_key']!=app.root_scope_key():raise HTTPException(403,'恢复副本不属于此文件。')
-        with blob.open('rb') as stream:
-            if hashlib.file_digest(stream,'sha256').hexdigest()!=item['sha256']:raise HTTPException(422,'副本校验失败。')
+        if _file_sha256(blob) != item['sha256']:
+            raise HTTPException(422, '副本校验失败。')
         if not app._scan_lock.acquire(blocking=False):raise HTTPException(409,'文件任务运行中，请稍后重试。')
         staged=None
         try:

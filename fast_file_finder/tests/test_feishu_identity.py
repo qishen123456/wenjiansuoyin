@@ -319,7 +319,10 @@ def test_phone_matching_drives_department_and_job_access_then_revokes_on_change(
     person['job_title'] = '出纳'
     login(client)
     client.post('/api/system/feishu/sync').raise_for_status()
+    client.cookies.clear()
     client.cookies.set('ff_session', session)
+    changed_user = client.get('/api/auth/me').json()['user']
+    assert changed_user['id'] == identity['id'] and changed_user['job_title'] == '出纳'
     assert client.get(f'/api/file/{common}/preview-data').status_code == 200
     assert client.get(f'/api/file/{job_only}/preview-data').status_code == 404
 
@@ -336,6 +339,7 @@ def test_phone_matching_drives_department_and_job_access_then_revokes_on_change(
     login(client)
     assert client.post('/api/system/feishu/sync').json()['matched'] == 0
     assert client.get('/api/system/feishu').json()['members'][0]['bound_user_id'] is None
+    client.cookies.clear()
     client.cookies.set('ff_session', session)
     assert client.get(f'/api/file/{common}/preview-data').status_code == 401
 
