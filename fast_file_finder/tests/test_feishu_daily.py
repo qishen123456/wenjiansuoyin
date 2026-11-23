@@ -302,3 +302,26 @@ def test_system_only_recipient_preserves_new_index_tracking(configured_daily, mo
     client.put('/api/system/feishu/daily/recipient', json={'type':'open_id', 'id':'ou_owner'}).raise_for_status()
     add('业务/产品统计表.csv')
     assert '今日新入索引：1 份文件' in daily.status(app)['preview']
+
+
+def test_removing_recipient_skips_future_sends_and_preserves_concurrent_edits(configured_daily, monkeypatch):
+    client, _, _ = configured_daily
+    login(client)
+    url = '/api/system/feishu/daily/recipient'
+    with app.db_session() as conn:
+        conn.execute('INSERT INTO feishu_members VALUES (?,?,?,1)', ('ou_replacement', '新接收人', '财务'))
+    initial_id = daily.status(app)['recipient']['id']
+    change = client.put(url, json={'type':'open_id', 'id':'ou_replacement', 'expected_id':initial_id})
+    assert change.raise_for_status().json()['recipient']['id'] == 'ou_replacement'
+    stale = client.put(url, json={'type':'off', 'id':'', 'expected_id':initial_id})
+    assert stale.status_code == 409
+    assert daily.status(app)['recipient']['id'] == 'ou_replacement'
+
+    removed = client.put(url, json={'type':'off', 'id':'', 'expected_id':'ou_replacement'})
+    assert removed.raise_for_status().json()['recipient']['id'] == ''
+    monkeypatch.setattr(feishu, 'call', lambda *a, **k: pytest.fail('Deleted recipient received a message'))
+    day = datetime.now(daily.ZONE).date() + timedelta(days=1)
+    daily.publish(app, datetime.combine(day, daily.wall_time(18), daily.ZONE))
+    assert client.get('/api/system/feishu').json()['daily']['recipient']['type'] == 'off'
+    restored = client.put(url, json={'type':'open_id', 'id':'ou_replacement', 'expected_id':''})
+    assert restored.raise_for_status().json()['recipient']['type'] == 'open_id'

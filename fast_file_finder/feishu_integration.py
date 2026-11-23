@@ -318,6 +318,7 @@ class Binding(BaseModel):
 class DailyRecipient(BaseModel):
     type: Literal['open_id', 'chat_id', 'off']
     id: str = Field(default='', max_length=128)
+    expected_id: str | None = Field(default=None, max_length=128)
 
 
 def register(app):
@@ -407,7 +408,7 @@ def register(app):
     @app.app.put('/api/system/feishu/daily/recipient')
     def update_daily_recipient(body: DailyRecipient, request: Request):
         actor = app._require_super_admin(request)
-        return app.feishu_daily.set_recipient(app, actor['id'], body.type, body.id)
+        return app.feishu_daily.set_recipient(app, actor['id'], body.type, body.id, expected_id=body.expected_id)
 
     @app.app.post('/api/system/feishu/sync')
     def sync(request: Request):

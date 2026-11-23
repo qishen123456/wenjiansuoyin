@@ -165,16 +165,26 @@ function feishuDailyDetails(daily, members) {
       <h4 id="feishuDailyHeading">同步日报</h4>
       <span>${daily.enabled ? '定时任务已启用' : '定时任务未启用'}</span>
     </div>
-    <dl><div><dt>当前接收人 · ${recipient.source === 'system' ? '系统配置' : '服务环境配置'}</dt><dd>${esc(label)}</dd></div>
-      <div><dt>发送时间</dt><dd>${esc(daily.schedule)}（北京时间）</dd></div>
+    <dl><div><dt>发送时间</dt><dd>${esc(daily.schedule)}（北京时间）</dd></div>
       <div><dt>发送状态</dt><dd>${esc(report)}</dd></div>
       <div><dt>多维表清单</dt><dd>${esc(table)}</dd></div></dl>
-    <form id="feishuDailyRecipientForm">
+    <div class="feishu-recipient-row">
+      <div><span>日报接收人 · ${recipient.source === 'system' ? '系统配置' : '服务环境配置'}</span><strong>${esc(label)}</strong></div>
+      <div id="feishuRecipientActions" class="feishu-recipient-actions">
+        <button id="editFeishuRecipient" type="button" class="tree-tool-btn" aria-controls="feishuDailyRecipientForm">${personal || group ? '修改' : '添加接收人'}</button>
+        ${personal || group ? '<button id="deleteFeishuRecipient" type="button" class="tree-tool-btn feishu-danger" aria-controls="feishuRecipientRemoval">删除</button>' : ''}
+      </div>
+    </div>
+    <div id="feishuRecipientRemoval" class="feishu-recipient-actions" hidden>
+      <p>确认删除「${esc(label)}」？删除后将停止向该对象发送日报。</p>
+      <button id="confirmFeishuRemoval" type="button" class="tree-tool-btn feishu-danger">确认删除</button>
+      <button id="cancelFeishuRemoval" type="button" class="tree-tool-btn">取消</button>
+    </div>
+    <form id="feishuDailyRecipientForm" hidden>
       <div class="feishu-daily-controls">
         <label>接收方式<select id="feishuDailyRecipientType">
           <option value="open_id" ${personal ? 'selected' : ''}>个人私聊</option>
           <option value="chat_id" ${group ? 'selected' : ''}>指定飞书群</option>
-          <option value="off" ${personal || group ? '' : 'selected'}>暂停推送</option>
         </select></label>
         <label id="feishuDailyMemberField" ${personal ? '' : 'hidden'}>飞书成员
           <select id="feishuDailyMember" ${personal ? 'required' : 'disabled'}>
@@ -189,11 +199,12 @@ function feishuDailyDetails(daily, members) {
         <label id="feishuDailyGroupField" ${group ? '' : 'hidden'}>飞书群标识
           <input id="feishuDailyGroup" type="text" placeholder="oc_ 开头的群标识" value="${group ? esc(recipient.id) : ''}" ${group ? 'required' : 'disabled'}>
         </label>
-        <button id="saveFeishuDailyRecipient" type="submit" class="btn-archive-primary">保存接收人</button>
+        <button id="saveFeishuDailyRecipient" type="submit" class="btn-archive-primary">保存</button>
+        <button id="cancelFeishuEdit" type="button" class="tree-tool-btn">取消</button>
       </div>
       <p class="feishu-daily-note">每次定时推送只发给这里指定的人或群。当天已发送时，保存设置后从下一次定时推送生效。</p>
-      <p id="feishuDailySaveStatus" class="feishu-daily-save-status" role="status" aria-live="polite"></p>
     </form>
+    <p id="feishuDailySaveStatus" class="feishu-daily-save-status" role="status" aria-live="polite"></p>
     ${errors.map(error => `<p class="feishu-daily-error" role="status">${esc(error)}</p>`).join('')}
     ${daily.preview ? `<details class="feishu-daily-preview"><summary>查看日报内容</summary><pre>${esc(daily.preview)}</pre></details>` : ''}
   </section>`;
@@ -205,7 +216,6 @@ function wireFeishuDailyRecipient(members) {
   const type = $('feishuDailyRecipientType');
   const member = $('feishuDailyMember');
   const group = $('feishuDailyGroup');
-  const save = $('saveFeishuDailyRecipient');
   const status = $('feishuDailySaveStatus');
   const updateFields = () => {
     const personal = type.value === 'open_id';
@@ -215,35 +225,73 @@ function wireFeishuDailyRecipient(members) {
     member.required = personal;
     group.required = isGroup;
   };
+  const saved = permState.daily.recipient;
+  const actions = $('feishuRecipientActions');
+  const removal = $('feishuRecipientRemoval');
+  const edit = $('editFeishuRecipient');
+  const remove = $('deleteFeishuRecipient');
+  let saving = false;
+  function closeEditor() {
+    if (saving) return;
+    form.hidden = removal.hidden = true;
+    actions.hidden = false;
+    status.textContent = '';
+    edit.focus();
+  }
+  edit.onclick = () => {
+    form.reset();
+    updateFields();
+    actions.hidden = true;
+    form.hidden = false;
+    status.textContent = '';
+    type.focus();
+  };
+  if (remove) remove.onclick = () => {
+    actions.hidden = true;
+    removal.hidden = false;
+    status.textContent = '';
+    $('cancelFeishuRemoval').focus();
+  };
+  $('cancelFeishuRemoval').onclick = $('cancelFeishuEdit').onclick = closeEditor;
+  async function persist(kind, id) {
+    if (saving) return;
+    saving = true;
+    const controls = [...form.elements, ...removal.querySelectorAll('button')];
+    controls.forEach(control => { control.disabled = true; });
+    status.textContent = kind === 'off' ? '正在删除…' : '正在保存…';
+    try {
+      permState.daily = await api('/api/system/feishu/daily/recipient', {
+        method:'PUT', body:{type:kind, id, expected_id:saved?.id || ''},
+      });
+      $('feishuDailyPanel').outerHTML = feishuDailyDetails(permState.daily, members);
+      wireFeishuDailyRecipient(members);
+      $('feishuDailySaveStatus').textContent = kind === 'off' ? '已删除接收人，日报推送已暂停。' : '接收人已保存';
+      $('editFeishuRecipient').focus({preventScroll:true});
+    } catch (error) {
+      saving = false;
+      controls.forEach(control => { control.disabled = false; });
+      updateFields();
+      status.textContent = error.message;
+    }
+  }
+  $('confirmFeishuRemoval').onclick = () => persist('off', '');
   type.onchange = updateFields;
-  updateFields();
-  form.onsubmit = async event => {
+  form.onsubmit = event => {
     event.preventDefault();
-    if (save.disabled) return;
-    const id = type.value === 'open_id' ? member.value : type.value === 'chat_id' ? group.value.trim() : '';
-    if (type.value === 'open_id' && !id) {
+    if (saving) return;
+    const kind = type.value;
+    const id = kind === 'open_id' ? member.value : group.value.trim();
+    if (kind === 'open_id' && !id) {
       status.textContent = '请从通讯录选择一位飞书成员。';
       return;
     }
-    if (type.value === 'chat_id' && !/^oc_[A-Za-z0-9_-]+$/.test(id)) {
+    if (kind === 'chat_id' && !/^oc_[A-Za-z0-9_-]+$/.test(id)) {
       status.textContent = '请输入以 oc_ 开头的飞书群标识。';
       return;
     }
-    if (type.value === 'chat_id' && (permState.daily.recipient?.type !== 'chat_id' || permState.daily.recipient?.id !== id)
-      && !window.confirm(`确认将同步日报发给飞书群 ${id}？请先核对群成员范围。`)) return;
-    type.disabled = member.disabled = group.disabled = save.disabled = true;
-    status.textContent = '正在保存接收人…';
-    try {
-      permState.daily = await api('/api/system/feishu/daily/recipient', {method:'PUT', body:{type:type.value, id}});
-      $('feishuDailyPanel').outerHTML = feishuDailyDetails(permState.daily, members);
-      wireFeishuDailyRecipient(members);
-      $('feishuDailySaveStatus').textContent = '接收人已保存';
-      $('saveFeishuDailyRecipient').focus({preventScroll:true});
-    } catch (error) {
-      status.textContent = error.message;
-      type.disabled = save.disabled = false;
-      updateFields();
-    }
+    if (kind === 'chat_id' && saved?.id !== id &&
+      !window.confirm(`确认将同步日报发给飞书群 ${id}？请先核对群成员范围。`)) return;
+    persist(kind, id);
   };
 }
 

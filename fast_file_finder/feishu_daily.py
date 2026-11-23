@@ -136,7 +136,7 @@ def settings(conn=None, root_key=''):
                     report_base, report_table, report_url, error, 'system' if saved else 'environment')
 
 
-def set_recipient(app, user_id, kind, recipient_id):
+def set_recipient(app, user_id, kind, recipient_id, *, expected_id=None):
     root_key = app.root_scope_key()
     if not root_key or not feishu.app_credentials_configured():
         raise HTTPException(422, '请先配置文件目录和飞书应用。')
@@ -148,6 +148,8 @@ def set_recipient(app, user_id, kind, recipient_id):
         raise HTTPException(422, '请选择飞书成员或填写指定飞书群的 ID。')
     with _recipient_lock, app.db_session() as conn:
         conn.execute('BEGIN IMMEDIATE')
+        if expected_id is not None and settings(conn, root_key).recipient != expected_id:
+            raise HTTPException(409, '接收人已被修改，请刷新页面后重试。')
         if kind == 'open_id':
             member = _member(conn, recipient_id)
             legacy_open_id = os.getenv('FEISHU_DAILY_OPEN_ID', '').strip()

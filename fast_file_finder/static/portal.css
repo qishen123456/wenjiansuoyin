@@ -2681,6 +2681,13 @@ button:disabled {
 .feishu-daily dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px;margin:12px 0}
 .feishu-daily dt,.feishu-daily p{font-size:12px;color:#536583}
 .feishu-daily dd{font-size:13px;font-weight:600;margin:3px 0 0;overflow-wrap:anywhere}
+.feishu-recipient-row{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:10px 0 4px;border-top:1px solid #e0e7f2}
+.feishu-recipient-row span,.feishu-recipient-row strong{display:block;overflow-wrap:anywhere}
+.feishu-recipient-row span{color:#536583;font-size:12px}
+.feishu-recipient-row strong{font-size:14px;margin-top:3px}
+.feishu-recipient-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.feishu-daily [hidden]{display:none!important}
+.feishu-daily .feishu-danger{color:#9f3434}
 .feishu-daily-controls{display:flex;gap:8px 12px;align-items:end;flex-wrap:wrap;padding-top:10px;border-top:1px solid #e0e7f2}
 .feishu-daily-controls label{display:grid;gap:5px;min-width:130px;font-size:12px;color:#536583}
 .feishu-daily-controls label[hidden]{display:none}
