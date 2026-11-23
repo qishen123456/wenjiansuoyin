@@ -58,6 +58,7 @@ function toast(t, type = 'info') {
 const KeyboardManager = {
   init() {
     window.addEventListener('keydown', (e) => {
+      if (!currentUser || document.querySelector('dialog[open]')) return;
       const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
       const isInput = (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select');
 
@@ -134,7 +135,7 @@ const KeyboardManager = {
         else if (e.key === '2') { switchNavMode('catalog'); toast('快捷切换：组织架构'); }
         else if (e.key === '3') { switchNavMode('archive'); toast('快捷切换：归档合规'); }
         else if (e.key === '4') { switchNavMode('approval'); toast('快捷切换：下载审批'); }
-        else if (e.key === '5') { switchNavMode('permission'); toast('快捷切换：人员权限'); }
+        else if (e.key === '5' && currentUser?.role === 'super_admin') { switchNavMode('members'); toast('快捷切换：成员管理'); }
       }
     });
   }
@@ -487,9 +488,13 @@ async function search(page = 1) {
     if (dateFrom) p.set('date_from', dateFrom);
     if (dateTo) p.set('date_to', dateTo);
     if (dateField) p.set('date_field', dateField);
+    if (dateFrom && dateFrom === dailyUpdateDate() && dateTo === dateFrom && dateField === 'mtime') p.set('date_zone', 'asia_shanghai');
     const data = await api('/api/search?' + p);
     recordSearchHistory(q);
     renderResults(data);
+    if (!q && dateFrom === dailyUpdateDate() && dateTo === dateFrom && dateFrom && dateField === 'mtime') {
+      $('resultTitle').textContent = dateFrom + ' 更新明细';
+    }
   } catch (e) {
     const msg = e.message || '搜索服务异常';
     toast(msg);
@@ -654,14 +659,29 @@ function isAdminUser() {
   return currentUser && (currentUser.role === 'super_admin' || currentUser.role === 'dept_admin');
 }
 
+const loginBackground = new Set();
+
 function showLoginOverlay() {
+  currentUser = null;
+  const overlay = $('loginOverlay');
+  if (!overlay || overlay.style.display === 'flex') return;
   window.FileWorkspace?.clear();
-  const el = $('loginOverlay');
-  if (el) el.style.display = 'flex';
+  for (const sibling of overlay.parentElement.children) {
+    if (sibling !== overlay && !sibling.inert) {
+      sibling.inert = true;
+      loginBackground.add(sibling);
+    }
+  }
+  overlay.style.display = 'flex';
+  const feishu = overlay.querySelector('[data-feishu-login]:not([hidden]) a');
+  (feishu || ($('loginPhone').value ? $('loginPassword') : $('loginPhone'))).focus();
 }
+
 function hideLoginOverlay() {
-  const el = $('loginOverlay');
-  if (el) el.style.display = 'none';
+  const overlay = $('loginOverlay');
+  if (overlay) overlay.style.display = 'none';
+  for (const sibling of loginBackground) sibling.inert = false;
+  loginBackground.clear();
 }
 
 async function checkAuth() {
@@ -694,10 +714,34 @@ function applyUserUI() {
   }
   applyPortalUserRole();
   // 非管理员隐藏"人员与账号权限"入口（该页接口本身也已被后端限制为管理员）
-  const permTab = $('navPermTab');
-  if (permTab) permTab.style.display = currentUser?.role === 'super_admin' ? '' : 'none';
+  for (const id of ['navMembersTab', 'navPermTab', 'navNotificationsTab']) {
+    $(id).style.display = currentUser?.role === 'super_admin' ? '' : 'none';
+  }
+  $('openDailyReportAudit').classList.toggle('hidden', !currentUser);
   // 标记当前访问方式（本机 / 公网），供按钮提示与后续样式扩展使用；按钮本身不隐藏
   document.body.classList.toggle('remote-mode', !isLocalHost());
+}
+
+function dailyUpdateDate() {
+  const params = new URLSearchParams(window.location.search);
+  const date = params.get('date') || '';
+  return (params.get('view') || params.get('tab')) === 'updates' && isReportAuditDate(date) ? date : '';
+}
+
+function openDailyUpdateDetails() {
+  const date = dailyUpdateDate();
+  if (!date || !currentUser) return;
+  $('q').value = '';
+  clearPortalSearchFilters();
+  dateField = 'mtime';
+  sortMode = 'time_desc';
+  $('resultsSortSelect').value = sortMode;
+  $('dateFromInput').value = date;
+  $('dateToInput').value = date;
+  if (!$('dateFromInput').value) return;
+  refreshDateFieldToggle();
+  onDateFilterChange();
+  return search(1);
 }
 
 async function doLogin() {
@@ -1036,37 +1080,195 @@ let catalogState = {
 };
 
 function canOpenWorkspacePage(mode) {
-  const pages = ['search', 'catalog', 'archive', 'approval', 'permission', 'sync'];
-  return pages.includes(mode) && (mode !== 'permission' || currentUser?.role === 'super_admin');
+  if (['members', 'access', 'notifications'].includes(mode)) return currentUser?.role === 'super_admin';
+  return Boolean(currentUser) && ['search', 'catalog', 'archive', 'approval', 'sync', 'report-audit'].includes(mode);
 }
 
-// Page visibility is separate from initial data loading: activating an existing
-// workspace tab keeps its filters, pagination and DOM without another request.
+// Each retained tab initializes once. Activation only changes visibility.
 function activateWorkspacePage(mode) {
   currentNavMode = mode || '';
-  const entries = { search: 'navSearchTab', catalog: 'navCatalogTab', archive: 'navArchiveTab', approval: 'navApprovalTab', permission: 'navPermTab', sync: 'navSyncTab' };
-  Object.entries(entries).forEach(([page, id]) => {
-    const active = page === mode;
-    $(id)?.classList.toggle('active', active);
-    $(id)?.setAttribute('aria-current', active ? 'page' : 'false');
-    $(page + 'View')?.classList.toggle('hidden', !active);
-  });
+  const entries = [
+    ['search', 'searchView', 'navSearchTab'], ['catalog', 'catalogView', 'navCatalogTab'],
+    ['archive', 'archiveView', 'navArchiveTab'], ['report-audit', 'reportAuditView'],
+    ['approval', 'approvalView', 'navApprovalTab'], ['members', 'membersView', 'navMembersTab'],
+    ['access', 'permissionView', 'navPermTab'], ['notifications', 'notificationsView', 'navNotificationsTab'],
+    ['sync', 'syncView', 'navSyncTab'],
+  ];
+  for (const [page, view, nav] of entries) {
+    $(view)?.classList.toggle('hidden', page !== mode);
+    if (!nav) continue;
+    const active = page === mode || (page === 'archive' && mode === 'report-audit');
+    $(nav)?.classList.toggle('active', active);
+    $(nav)?.setAttribute('aria-current', active ? 'page' : 'false');
+  }
   togglePortalSidebar(false);
 }
 
 function initializeWorkspacePage(mode) {
   if (mode === 'catalog') return initCatalogDashboard();
   if (mode === 'archive') { renderPortalArchiveNotice(); return initArchiveDashboard(); }
+  if (mode === 'report-audit') return initDailyReportAudit();
   if (mode === 'approval') return initApprovalCenter();
-  if (mode === 'permission') return initPermissionDashboard();
+  if (mode === 'members' || mode === 'access') return loadPermissionOverview(mode);
+  if (mode === 'notifications') return loadNotificationTasks();
   if (mode === 'sync') return refreshPortalSync();
 }
 
 function switchNavMode(mode) {
+  if (mode === 'permission') {
+    const section = new URLSearchParams(location.search).get('section');
+    mode = ['audit', 'grants'].includes(section) ? 'access' : 'members';
+  }
   if (!canOpenWorkspacePage(mode)) return Promise.resolve(false);
   if (window.FileWorkspace) return window.FileWorkspace.showSource(mode);
   activateWorkspacePage(mode);
   return Promise.resolve(initializeWorkspacePage(mode));
+}
+
+// Keep task links reloadable while preserving the main workspace's document history.
+function workspacePageUrl(mode) {
+  const url = new URL(location.href);
+  const previous = url.searchParams.get('view') || url.searchParams.get('tab');
+  const linked = ['members', 'access', 'notifications', 'permission', 'report-audit', 'updates'];
+  if (!linked.includes(mode) && !linked.includes(previous)) return undefined;
+  if (mode === previous) return undefined;
+  for (const key of ['view', 'section', 'date', 'download', 'panel', 'q']) url.searchParams.delete(key);
+  url.searchParams.set('tab', mode);
+  if (mode === 'access' && permState.section) url.searchParams.set('section', permState.section);
+  if (mode === 'report-audit' && reportAudit.date) url.searchParams.set('date', reportAudit.date);
+  return url.href;
+}
+
+function resetFeishuWorkspaceSession() {
+  reportAudit.request += 1;
+  reportAudit.date = '';
+  reportAudit.status = 'all';
+  permissionOverviewRequests.members += 1;
+  permissionOverviewRequests.access += 1;
+  permState = { users: [], directory: null, section: null };
+  window.resetNotificationSession?.();
+  window.resetDirectoryGrantSession?.();
+  for (const id of ['memberPanel', 'permissionAuditPanel', 'directoryGrantPanel', 'reportAuditTableBody']) {
+    $(id)?.replaceChildren();
+  }
+}
+
+// 日预警按报表核对，和文件搜索的更新列表分别保留。
+const reportAudit = { date: '', status: 'all', request: 0 };
+
+function beijingReportDate() {
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone:'Asia/Shanghai', year:'numeric', month:'2-digit', day:'2-digit',
+  }).formatToParts(new Date());
+  const date = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return [date.year, date.month, date.day].join('-');
+}
+
+function isReportAuditDate(day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day.startsWith('0000')) return false;
+  const parsed = new Date(day + 'T00:00:00.000Z');
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === day;
+}
+
+function prepareDailyReportRoute(params) {
+  const day = params.get('date') || '';
+  reportAudit.date = isReportAuditDate(day) && day <= beijingReportDate() ? day : beijingReportDate();
+  reportAudit.status = 'all';
+}
+
+function downloadDailyReportFromRoute() {
+  const url = new URL(location.href);
+  url.searchParams.delete('download');
+  history.replaceState(history.state, '', url);
+  $('reportAuditDownload').click();
+}
+
+function initDailyReportAudit() {
+  if (!currentUser) return;
+  const input = $('reportAuditDate');
+  input.max = beijingReportDate();
+  if (!reportAudit.date) reportAudit.date = input.max;
+  input.value = reportAudit.date;
+  return loadDailyReportAudit();
+}
+
+function changeDailyReportDate() {
+  const input = $('reportAuditDate');
+  if (!isReportAuditDate(input.value) || input.value > input.max) {
+    input.value = reportAudit.date;
+    return;
+  }
+  reportAudit.date = input.value;
+  const url = new URL(window.location.href);
+  if ((url.searchParams.get('view') || url.searchParams.get('tab')) === 'report-audit') {
+    url.searchParams.set('date', reportAudit.date);
+    history.replaceState(history.state, '', url);
+  }
+  loadDailyReportAudit();
+}
+
+function setDailyReportStatus(status) {
+  reportAudit.status = status;
+  loadDailyReportAudit();
+}
+
+function reportAuditTime(value) {
+  if (!value) return '—';
+  if (typeof value === 'number') return fmtDate(value).full;
+  return String(value).replace('T', ' ');
+}
+
+function renderDailyReportRows(rows, date) {
+  const tbody = $('reportAuditTableBody');
+  if (!rows.length) {
+    const text = reportAudit.status === 'all' ? '当天暂无检测明细' : '当前状态下暂无报表';
+    tbody.innerHTML = '<tr><td class="report-audit-empty" colspan="8">' + text + '</td></tr>';
+    return;
+  }
+  const statusClass = { normal:'normal', abnormal:'abnormal', pending:'pending' };
+  tbody.innerHTML = rows.map(row => {
+    const name = row.report_name || row.rule_name || '—';
+    const secondary = [row.rule_name && row.rule_name !== name ? row.rule_name : '', row.directory].filter(Boolean).join(' · ');
+    const status = Object.hasOwn(statusClass, row.status) ? statusClass[row.status] : 'pending';
+    return '<tr><td class="report-audit-name"><strong>' + esc(name) + '</strong>'
+      + (secondary ? '<small title="' + esc(secondary) + '">' + esc(secondary) + '</small>' : '')
+      + '</td><td class="report-audit-time">' + esc(row.date || date) + '</td><td>'
+      + '<span class="report-audit-state is-' + status + '">' + esc(row.status_label || '待检测') + '</span></td>'
+      + '<td class="report-audit-number">' + esc(fmtNumber(row.update_count)) + '</td>'
+      + '<td class="report-audit-time">' + esc(reportAuditTime(row.last_updated)) + '</td>'
+      + '<td class="report-audit-time">' + esc(reportAuditTime(row.deadline)) + '</td>'
+      + '<td>' + esc(row.owner || '—') + '</td><td class="report-audit-reason">' + esc(row.reason || '—') + '</td></tr>';
+  }).join('');
+}
+
+async function loadDailyReportAudit() {
+  if (!currentUser) return;
+  const request = ++reportAudit.request;
+  const params = new URLSearchParams({ date:reportAudit.date, status:reportAudit.status });
+  const message = $('reportAuditMessage');
+  const tbody = $('reportAuditTableBody');
+  const filters = $('reportAuditView').querySelectorAll('[data-report-audit-status]');
+  $('reportAuditDownload').href = '/api/reports/daily/abnormal.csv?' + new URLSearchParams({ date:reportAudit.date });
+  for (const button of filters) {
+    button.setAttribute('aria-pressed', String(button.dataset.reportAuditStatus === reportAudit.status));
+  }
+  message.classList.add('hidden');
+  tbody.innerHTML = '<tr><td class="report-audit-empty" colspan="8">正在读取报表明细…</td></tr>';
+  try {
+    const data = await api('/api/reports/daily?' + params);
+    if (request !== reportAudit.request) return;
+    for (const button of filters) {
+      const key = button.dataset.reportAuditStatus;
+      button.querySelector('span').textContent = fmtNumber(data.counts?.[key === 'all' ? 'total' : key]);
+    }
+    renderDailyReportRows(data.rows || [], data.date || reportAudit.date);
+  } catch (error) {
+    if (request !== reportAudit.request) return;
+    tbody.innerHTML = '';
+    for (const button of filters) button.querySelector('span').textContent = '—';
+    message.textContent = error.message || '暂时无法读取报表明细';
+    message.classList.remove('hidden');
+  }
 }
 
 async function initCatalogDashboard() {
@@ -2131,112 +2333,78 @@ function closeImagePreview() {
 /* -----------------------------------------------------------
  * 人员权限维护与飞书打通控制器 (Permission & Feishu Integration)
  * ----------------------------------------------------------- */
-let permState = {
-  users: [],
-  feishuConfig: {},
-  summary: {}
+let permState = { users: [], directory: null, section: null };
+const permissionOverviewRequests = { members: 0, access: 0 };
+
+function showPermissionSection(section, updateUrl = false) {
+  const tabs = [...$('permissionTabs').querySelectorAll('[role="tab"]')];
+  const selected = tabs.find(tab => tab.dataset.section === section);
+  if (!selected) return;
+  permState.section = section;
+  for (const tab of tabs) {
+    const active = tab === selected;
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    $(tab.getAttribute('aria-controls')).hidden = !active;
+  }
+  if (updateUrl) {
+    const url = new URL(location.href);
+    url.searchParams.delete('view');
+    url.searchParams.set('tab', 'access');
+    url.searchParams.set('section', section);
+    history.replaceState(history.state, '', url);
+  }
+  if (!permState.directory) return;
+  if (section === 'grants' && !$('directoryGrantPanel').hasChildNodes()) loadDirectoryGrantPanel();
+  if (section === 'audit') loadPermissionAudit();
+}
+
+const permissionTabs = $('permissionTabs');
+permissionTabs.onclick = event => {
+  const tab = event.target.closest('[role="tab"]');
+  if (tab && tab.dataset.section !== permState.section) showPermissionSection(tab.dataset.section, true);
+};
+permissionTabs.onkeydown = event => {
+  const tabs = [...permissionTabs.querySelectorAll('[role="tab"]')];
+  const index = tabs.indexOf(event.target);
+  if (index < 0) return;
+  const dest = {ArrowLeft:(index+tabs.length-1)%tabs.length, ArrowRight:(index+1)%tabs.length,
+                Home:0, End:tabs.length-1}[event.key];
+  if (dest === undefined) return;
+  event.preventDefault();
+  tabs[dest].focus();
+  showPermissionSection(tabs[dest].dataset.section, true);
 };
 
-async function initPermissionDashboard() {
-  await loadPermissionOverview();
-}
-
-async function loadPermissionOverview() {
+async function loadPermissionOverview(mode = 'members') {
+  if (currentUser?.role !== 'super_admin') return;
+  const request = ++permissionOverviewRequests[mode];
+  const requestedSection = new URLSearchParams(location.search).get('section');
+  const status = $(mode === 'members' ? 'memberLoadStatus' : 'permissionLoadStatus');
   try {
-    const res = await api('/api/system/permissions');
-    if (!res.ok) return;
+    status.hidden = true;
+    const res = await api('/api/system/permissions?include_daily=false');
+    if (!res.ok || request !== permissionOverviewRequests[mode]) return;
     permState.users = res.users || [];
-    permState.feishuConfig = res.feishu_config || {};
-    permState.summary = res.summary || {};
-
-    // 1. KPI 统计卡片渲染
-    if ($('permTotalUsers')) $('permTotalUsers').textContent = permState.summary.total_users || 0;
-    if ($('permSuperAdmins')) $('permSuperAdmins').textContent = permState.summary.super_admins || 0;
-    if ($('permDeptAdmins')) $('permDeptAdmins').textContent = permState.summary.dept_admins || 0;
-
-    const cfg = permState.feishuConfig;
-    const isBound = Boolean(cfg.app_id);
-    if ($('permFeishuStatus')) $('permFeishuStatus').innerHTML = isBound ? '已打通' : '待配置';
-    const lastSyncDisplay = cfg.last_synced_at ? `${new Date(cfg.last_synced_at * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 完成同步` : '尚未执行同步';
-    if ($('permFeishuSyncTip')) $('permFeishuSyncTip').textContent = `通讯录：${lastSyncDisplay}`;
-
-    // 2. 飞书配置表单回显
-    if ($('cfgFeishuAppId')) $('cfgFeishuAppId').value = cfg.app_id || '';
-    if ($('cfgFeishuAppSecret')) $('cfgFeishuAppSecret').value = cfg.app_secret || '';
-    if ($('cfgFeishuWebhook')) $('cfgFeishuWebhook').value = cfg.webhook_url || '';
-    if ($('cfgFeishuNotifyCheck')) $('cfgFeishuNotifyCheck').checked = cfg.notify_enabled !== false;
-
-    // 3. 人员表格渲染
-    renderPermissionUsersTable();
-    await loadDirectoryGrantPanel();
-    await loadFeishuPanel();
-  } catch (e) {
-    console.error('loadPermissionOverview error:', e);
+    permState.directory = res.directory || {source:'local', members:[], summary:{}};
+    if (mode === 'members') { renderMemberPanel(); return; }
+    $('directoryGrantPanel').replaceChildren();
+    const section = permState.section || requestedSection;
+    const known = [...permissionTabs.querySelectorAll('[role="tab"]')].some(tab => tab.dataset.section === section);
+    showPermissionSection(known ? section : 'grants');
+  } catch (error) {
+    if (request !== permissionOverviewRequests[mode]) return;
+    status.textContent = '加载失败：' + error.message;
+    status.hidden = false;
   }
 }
 
-function renderPermissionUsersTable() {
-  const tbody = $('permissionUsersTableBody');
-  if (!tbody) return;
-
-  if (!permState.users.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:#6f736b">暂无受控企业成员，请点击上方“+ 新增成员”</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = permState.users.map(u => {
-    const isActive = u.status === 'active';
-    const statusPill = `
-      <span class="rule-status-toggle ${isActive ? 'active' : 'inactive'}" onclick="toggleUserStatus(${u.id})" title="点击切换启用/停用">
-        ${isActive ? '正常' : '已停用'}
-      </span>
-    `;
-
-    return `
-      <tr>
-        <td>
-          <div style="display:flex;align-items:center;gap:9px">
-            <div style="width:28px;height:28px;border-radius:50%;background:#e3e5e1;color:#3e413a;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center">${esc(u.avatar || u.name.slice(0, 2))}</div>
-            <div>
-              <div style="font-weight:700;color:#171916">${esc(u.name)}</div>
-              <div style="font-size:10.5px;color:#6f736b">UID: ${u.id}</div>
-            </div>
-          </div>
-        </td>
-        <td>
-          <span style="font-size:12.5px;color:#171916;font-weight:600;font-family:monospace">${esc(u.phone || '--')}</span>
-        </td>
-        <td>
-          <div style="display:flex;align-items:center;gap:6px">
-            <span style="font-size:12px;color:#6f736b;font-family:monospace">••••••••</span>
-            <button class="btn-table-action" style="padding:2px 8px;font-size:11px;background:#FAFAFA;border:1px solid #e3e5e1;border-radius:6px;cursor:pointer" onclick="openResetPasswordModal(${u.id}, '${esc(u.name)}', '${esc(u.phone || '')}')" title="重置登录密码">重置</button>
-          </div>
-        </td>
-        <td><span style="font-size:12px;color:#3e413a">${esc(u.department || '未分配部门')}</span></td>
-        <td>
-          <div style="display:flex;align-items:center;gap:6px">
-            <select class="sort-select-pill" style="padding:2px 8px;font-size:11.5px;font-weight:600" onchange="changeUserRole(${u.id}, this.value)">
-              <option value="user" ${u.role === 'user' ? 'selected' : ''}>普通用户</option>
-              <option value="dept_admin" ${u.role === 'dept_admin' ? 'selected' : ''}>部门管理员</option>
-              <option value="super_admin" ${u.role === 'super_admin' ? 'selected' : ''}>系统超管</option>
-            </select>
-          </div>
-        </td>
-        <td>${statusPill}</td>
-        <td style="text-align:right">
-          <div class="table-action-btns" style="justify-content:flex-end">
-            <button class="btn-table-action" style="color:#ef4444" onclick="deleteUser(${u.id})" title="移除此人员系统权限">移除</button>
-          </div>
-        </td>
-      </tr>
-    `;
-  }).join('');
-}
-
-function openResetPasswordModal(userId, name, phone) {
+function openResetPasswordModal(userId) {
+  const user = permState.users.find(member => member.id === userId);
+  if (!user) return;
   $('resetPasswordUserId').value = userId;
-  $('resetPasswordUserName').textContent = name;
-  $('resetPasswordUserPhone').textContent = phone;
+  $('resetPasswordUserName').textContent = user.display_name || user.name;
+  $('resetPasswordUserPhone').textContent = user.phone || '';
   $('newPasswordInput').value = '';
   $('resetPasswordModal').classList.remove('hidden');
   _focusFirstInput('resetPasswordModal');
@@ -2310,6 +2478,7 @@ function openCreateUserModal() {
   $('newUserPhone').value = '';
   $('newUserPassword').value = '123456';
   $('newUserDept').value = '电商运营部';
+  $('newUserJob').value = '';
   $('newUserRole').value = 'user';
   $('createUserModal').classList.remove('hidden');
   _focusFirstInput('createUserModal');
@@ -2324,6 +2493,7 @@ async function confirmCreateUser() {
   const phone = $('newUserPhone').value.trim();
   const password = $('newUserPassword').value.trim() || '123456';
   const department = $('newUserDept').value.trim();
+  const job_title = $('newUserJob').value.trim();
   const role = $('newUserRole').value;
 
   if (!name) {
@@ -2338,7 +2508,7 @@ async function confirmCreateUser() {
   try {
     const res = await api('/api/system/permissions/users', {
       method: 'POST',
-      body: JSON.stringify({ name, phone, password, department, role })
+      body: JSON.stringify({ name, phone, password, department, job_title, role })
     });
     toast('' + (res.message || '新成员账号已成功创建并授权！'));
     closeCreateUserModal();

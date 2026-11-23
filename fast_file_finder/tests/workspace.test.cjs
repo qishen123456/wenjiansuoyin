@@ -91,8 +91,8 @@ function createWorkspace({ query = '', role = 'super_admin', initialize } = {}) 
   const frames = new Map();
   let nextFrame = 0;
   const context = {
-    document, console, URLSearchParams,
-    location: { origin: 'http://workspace.test', search: query },
+    document, console, URL, URLSearchParams,
+    location: new URL(query || '/', 'http://workspace.test'),
     history: {
       state: {},
       replaceState(state) { this.state = state; },
@@ -108,7 +108,7 @@ function createWorkspace({ query = '', role = 'super_admin', initialize } = {}) 
     addEventListener(name, callback) { listeners.set(name, callback); },
   };
   const loads = [], activations = [], searches = [];
-  context.canOpenWorkspacePage = mode => mode !== 'permission' || role === 'super_admin';
+  context.canOpenWorkspacePage = mode => !['members', 'access', 'notifications'].includes(mode) || role === 'super_admin';
   context.activateWorkspacePage = mode => { activations.push(mode); };
   context.initializeWorkspacePage = mode => { loads.push(mode); return initialize?.(mode); };
   context.search = page => { searches.push({ page, query: ids.q.value }); };
@@ -378,7 +378,7 @@ test('app navigation preserves await semantics, avoids repeat sync initializatio
     updatePortalNavigation() { throw new Error('Legacy navigation must not refresh an existing tab'); },
     initCatalogDashboard: async () => { counts.catalog += 1; },
     refreshPortalSync: async () => { counts.sync += 1; },
-    initPermissionDashboard: async () => { counts.permission += 1; },
+    loadPermissionOverview: async () => { counts.permission += 1; },
   });
   const source = readFileSync(join(__dirname, '../static/app.js'), 'utf8');
   vm.runInNewContext(source.slice(source.indexOf('function canOpenWorkspacePage('), source.indexOf('async function initCatalogDashboard(')), app.context);
@@ -391,7 +391,7 @@ test('app navigation preserves await semantics, avoids repeat sync initializatio
   app.context.currentUser.role = 'super_admin';
   await app.context.switchNavMode('permission');
   assert.equal(counts.permission, 1);
-  app.close('page:catalog'); app.close('page:sync'); app.close('page:permission');
+  app.close('page:catalog'); app.close('page:sync'); app.close('page:members');
   assert.equal(app.context.currentNavMode, '');
   assert.equal(app.ids.searchView.classList.contains('hidden'), true);
 });
@@ -405,4 +405,74 @@ test('showcase links only open allowed panels once on their matching page', asyn
     await app.workspace.restoreRoute(); await app.workspace.restoreRoute();
     assert.deepEqual(opened, expected ? [expected] : []);
   }
+});
+
+test('Feishu links open the matching retained page after login, including legacy permission links', async () => {
+  for (const [query, page] of [
+    ['?view=permission', 'members'], ['?tab=permission&section=audit', 'access'],
+    ['?tab=access&section=grants', 'access'], ['?tab=notifications', 'notifications'],
+  ]) {
+    const app = createWorkspace({query});
+    await app.workspace.restoreRoute();
+    await app.showSource('archive');
+    await app.showSource(page);
+    assert.deepEqual(app.loads, [page, 'archive']);
+    assert.equal(app.workspace.isPageActive(page), true);
+    const member = createWorkspace({query, role: 'user'});
+    await member.workspace.restoreRoute();
+    await member.showSource(page);
+    assert.deepEqual(member.loads, ['search']);
+  }
+});
+
+test('report links set the date before loading and download once after authentication', async () => {
+  const events = [];
+  const app = createWorkspace({query: '?tab=report-audit&date=2026-09-14&download=abnormal',
+    initialize: mode => events.push(mode)});
+  app.context.prepareDailyReportRoute = params => events.push(params.get('date'));
+  app.context.downloadDailyReportFromRoute = () => events.push('download');
+  await app.workspace.restoreRoute();
+  await app.workspace.restoreRoute();
+  assert.deepEqual(events, ['2026-09-14', 'report-audit', 'download']);
+  const legacy = createWorkspace({query: '?tab=updates&date=2026-09-14'});
+  let loads = 0;
+  legacy.context.openDailyUpdateDetails = () => { loads += 1; };
+  await legacy.workspace.restoreRoute(); await legacy.workspace.restoreRoute();
+  assert.equal(legacy.workspace.isPageActive('search'), true);
+  assert.equal(loads, 1);
+});
+
+test('report download uses the authenticated API, saves a Blob and shows failures', async () => {
+  const appSource = readFileSync(join(__dirname, '../static/app.js'), 'utf8');
+  const operations = readFileSync(join(__dirname, '../static/operations.js'), 'utf8');
+  const reportAnchor = { getAttribute() {}, setAttribute() {}, removeAttribute() {} };
+  const download = { click() { this.clicked = true; } };
+  const requests = [], messages = [];
+  const context = {
+    document: { createElement() { return download; } },
+    $: () => reportAnchor,
+    reportAudit: {date: '2026-09-14'},
+    sessionStorage: {getItem: () => 'fixture'},
+    URL: {createObjectURL: () => 'blob:csv', revokeObjectURL() {}},
+    setTimeout() {},
+    fetch: async (url, options) => {
+      requests.push({url, headers: options.headers});
+      return {ok: true, headers: {get() {}}, blob: async () => ({})};
+    },
+    toast: message => messages.push(message),
+  };
+  vm.runInNewContext(operations.slice(operations.indexOf('async function saveSessionDownload('),
+    operations.indexOf("document.addEventListener('click',event=>", operations.indexOf('async function saveSessionDownload('))), context);
+  assert.match(appSource, /reportAuditDownload'\)\.href = '\/api\/reports\/daily\/abnormal\.csv\?/);
+  reportAnchor.href = '/api/reports/daily/abnormal.csv?date=2026-09-14';
+  const event = { preventDefault() {}, currentTarget: reportAnchor };
+  await reportAnchor.onclick(event);
+  assert.equal(requests[0].url, reportAnchor.href);
+  assert.equal(requests[0].headers['X-App-Token'], 'fixture');
+  assert.equal(download.href, 'blob:csv');
+  assert.equal(download.clicked, true);
+  assert.equal(download.download, '异常清单-2026-09-14.csv');
+  context.fetch = async () => ({ok: false, status: 403, json: async () => ({detail: '缺少权限'})});
+  await reportAnchor.onclick(event);
+  assert.deepEqual(messages, ['缺少权限']);
 });

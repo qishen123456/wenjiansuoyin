@@ -3,8 +3,8 @@
  */
 (() => {
   'use strict';
-  const labels = { search: '文件搜索', catalog: '目录浏览', archive: '归档合规', approval: '下载审批', permission: '人员权限', sync: '索引与同步' };
-  const groups = { search: 'files', catalog: 'files', archive: 'tasks', approval: 'tasks', permission: 'manage', sync: 'manage' };
+  const labels = { search: '文件搜索', catalog: '目录浏览', archive: '归档合规', approval: '下载审批', members: '成员管理', access: '文件权限', notifications: '推送任务', 'report-audit': '报表更新明细', sync: '索引与同步' };
+  const groups = { search: 'files', catalog: 'files', archive: 'tasks', approval: 'tasks', members: 'manage', access: 'manage', notifications: 'manage', 'report-audit': 'tasks', sync: 'manage' };
   const tabs = new Map();
   const sources = document.getElementById('workspaceSources');
   const reader = document.getElementById('documentWorkspace');
@@ -30,11 +30,13 @@
     if (tab) tab.scroll = window.scrollY;
   }
 
-  function remember(replace = false) {
+  function remember(replace = false, navigate = false) {
     if (restoringHistory) return;
     const state = { ...history.state, fileWorkspace: { activeKey } };
-    if (replace) history.replaceState(state, '');
-    else history.pushState(state, '');
+    const tab = tabs.get(activeKey);
+    const url = navigate && tab?.kind === 'page' ? window.workspacePageUrl?.(tab.mode) : undefined;
+    if (replace) history.replaceState(state, '', url);
+    else history.pushState(state, '', url);
   }
 
   function closeMenus() {
@@ -146,7 +148,7 @@
       activeKey = key;
       closeMenus();
       render();
-      if (pushHistory) remember();
+      if (pushHistory) remember(false, true);
       announce(`已打开 ${tab.name}`);
     }
     return tab.kind === 'page' ? preparePage(tab) : Promise.resolve(true);
@@ -192,7 +194,7 @@
     tabs.delete(key);
     if (wasActive) activeKey = keys[index + 1] || keys[index - 1] || null;
     render({ restoreScroll: wasActive });
-    remember(true);
+    remember(true, wasActive);
     announce(`已关闭 ${tab.name}`);
     if (wasActive) (tabBar.querySelector('.active .workspace-tab-open') || empty?.querySelector('button'))?.focus({ preventScroll: true });
   }
@@ -204,6 +206,7 @@
     routeRestored = false;
     sessionReady = false;
     sessionVersion += 1;
+    window.resetFeishuWorkspaceSession?.();
     closeMenus();
     render();
     remember(true);
@@ -217,12 +220,18 @@
     const version = sessionVersion;
     const params = new URLSearchParams(location.search);
     const requested = params.get('view') || params.get('tab') || 'search';
-    const mode = canOpenPage(requested) ? requested : 'search';
+    const target = requested === 'permission'
+      ? (['audit', 'grants'].includes(params.get('section')) ? 'access' : 'members')
+      : requested;
+    const mode = canOpenPage(target) ? target : 'search';
+    if (mode === 'report-audit') window.prepareDailyReportRoute?.(params);
     await showSource(mode, false);
     if (version !== sessionVersion) return;
     remember(true);
     const query = (params.get('q') || '').trim().slice(0, 300);
-    if (mode === 'search' && query) {
+    if (mode === 'report-audit' && params.get('download') === 'abnormal') window.downloadDailyReportFromRoute?.();
+    if (requested === 'updates') await window.openDailyUpdateDetails?.();
+    else if (mode === 'search' && query) {
       document.getElementById('q').value = query;
       await window.search?.(1);
     }

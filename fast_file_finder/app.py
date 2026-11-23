@@ -45,6 +45,9 @@ import file_management
 import media_preview
 import html_preview
 import feishu_integration
+import feishu_identity
+import feishu_daily
+import report_daily
 import sys
 from collections import OrderedDict
 from starlette.concurrency import run_in_threadpool
@@ -208,6 +211,12 @@ def _archive_scheduler_loop() -> None:
                 _archive_scheduler_info["auto_resolved_total"] += res.get("tasks_auto_resolved", 0)
         except Exception as exc:
             logger.warning("Background archive compliance check error: %s", exc)
+            if feishu_daily.enabled() or feishu_integration.app_credentials_configured():
+                try:
+                    with db_session() as conn:
+                        feishu_daily.record_check_failure(conn, root_scope_key(), time.time())
+                except Exception:
+                    logger.exception("Could not record Feishu daily archive check status")
         try:
             feishu_integration.deliver_notices(sys.modules[__name__])
         except Exception:
@@ -236,7 +245,6 @@ async def lifespan(_app: FastAPI):
     init_db()
     with db_session() as conn:
         file_management.initialize(conn)
-        feishu_integration.initialize(conn)
     if DEMO_MODE:
         await run_in_threadpool(_ensure_demo_data)
     if SENSITIVE_DIRS:
@@ -257,6 +265,10 @@ async def lifespan(_app: FastAPI):
 
     scheduler_thread = threading.Thread(target=_archive_scheduler_loop, daemon=True, name="ArchiveScheduler")
     scheduler_thread.start()
+    feishu_daily_stop = threading.Event()
+    if feishu_daily.enabled() or feishu_integration.app_credentials_configured():
+        threading.Thread(target=feishu_daily.loop, args=(sys.modules[__name__], feishu_daily_stop),
+                         daemon=True, name="FeishuDaily").start()
     threading.Thread(target=file_management.backup_loop, args=(sys.modules[__name__],),
                      daemon=True, name='DatabaseBackup').start()
 
@@ -271,6 +283,7 @@ async def lifespan(_app: FastAPI):
     finally:
         _archive_scheduler_stop.set()
         _auto_scan_stop.set()
+        feishu_daily_stop.set()
 
 
 app = FastAPI(title="企业文件检索与轻量 BI 分析中心", version="0.3.0", lifespan=lifespan)
@@ -430,6 +443,10 @@ def init_db() -> None:
         # WAL is a database-level setting. Do it once at startup, not on every request.
         conn.execute("PRAGMA journal_mode=WAL")
         governance.initialize(conn)
+        feishu_daily.initialize(conn)
+        report_daily.initialize(conn)
+        feishu_integration.initialize(conn)
+        feishu_identity.initialize(conn)
         directory_access.initialize(conn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS files (
@@ -557,6 +574,8 @@ def init_db() -> None:
                 phone TEXT DEFAULT '',
                 password TEXT DEFAULT '123456',
                 feishu_id TEXT DEFAULT '',
+                feishu_binding_source TEXT NOT NULL DEFAULT '',
+                job_title TEXT NOT NULL DEFAULT '',
                 email TEXT DEFAULT '',
                 department TEXT DEFAULT '',
                 role TEXT NOT NULL DEFAULT 'user',
@@ -573,6 +592,11 @@ def init_db() -> None:
         if "password" not in user_cols:
             conn.execute("ALTER TABLE system_users ADD COLUMN password TEXT DEFAULT '123456'")
 
+        if "feishu_binding_source" not in user_cols:
+            conn.execute("ALTER TABLE system_users ADD COLUMN feishu_binding_source TEXT NOT NULL DEFAULT ''")
+        if "job_title" not in user_cols:
+            conn.execute("ALTER TABLE system_users ADD COLUMN job_title TEXT NOT NULL DEFAULT ''")
+
         conn.execute("CREATE INDEX IF NOT EXISTS idx_system_users_role ON system_users(role)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_system_users_phone ON system_users(phone)")
 
@@ -585,6 +609,14 @@ def init_db() -> None:
                 expires_at REAL NOT NULL
             )
         """)
+        session_columns = {row["name"] for row in conn.execute("PRAGMA table_info(login_sessions)")}
+        if "auth_source" not in session_columns:
+            conn.execute("ALTER TABLE login_sessions ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'password'")
+            if not DEMO_MODE:
+                conn.execute("""DELETE FROM login_sessions WHERE user_id IN (
+                    SELECT id FROM system_users WHERE coalesce(feishu_id,'') <> ''
+                )""")
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS download_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -636,6 +668,8 @@ def init_db() -> None:
             conn.execute("UPDATE system_users SET phone = '13800100004', password = '123456' WHERE id = 4 AND (phone = '' OR phone IS NULL)")
             conn.execute("UPDATE system_users SET phone = '13800100005', password = '123456' WHERE id = 5 AND (phone = '' OR phone IS NULL)")
 
+
+        feishu_identity.revoke_stale_super_admin_links(conn)
 
         # 飞书打通配置预置（可选，默认空）
         feishu_meta = conn.execute("SELECT value FROM app_meta WHERE key = 'feishu_config'").fetchone()
@@ -738,6 +772,7 @@ def update_index_file(
     scan_id: str | None = None,
     known_rows: dict | None = None,
     force: bool = False,
+    track_addition: bool = True,
 ) -> str:
     """Upsert one file and stamp it for the current scan generation."""
     path_str = str(file_path.resolve(strict=False)) if known_rows is None else os.path.normpath(str(file_path))
@@ -781,6 +816,12 @@ def update_index_file(
         )
         file_id = cur.lastrowid
         action = "indexed"
+        if track_addition and (feishu_daily.enabled() or feishu_integration.app_credentials_configured()):
+            config = feishu_daily.settings(conn, root_key)
+            relative = _relative_catalog_path(path_str, _catalog_root_path())
+            if config.active and not config.error and relative and not any(term in relative for term in SENSITIVE_DIRS):
+                feishu_daily.record_file(conn, root_key=root_key, relative=relative, name=name, ext=ext,
+                                         added_at=now, config=config)
     conn.execute("INSERT INTO file_fts(rowid,name,name_grams,path_grams) VALUES(?,?,?,?)",
                  (file_id, name, grams_text(name), grams_text(parent)))
     return action
@@ -908,6 +949,9 @@ def _scan_worker(lock_already_acquired: bool = False, mode: str = 'full', target
             known = {r['path']:r for r in conn.execute('SELECT id,path,size,mtime,ctime,name,root_key FROM files')}
             unseen = {path for path,row in known.items() if row["root_key"]==root_key
                       and (not scoped or directory_access.within(directory_access.normalise(path), directory_access.normalise(root)))}
+            # The first completed inventory is a baseline, not a daily delivery.
+            track_additions = bool(feishu_daily.settings(conn, root_key).active and conn.execute(
+                "SELECT 1 FROM app_meta WHERE key='indexed_root' AND value=?", (root_key,)).fetchone())
             if rebuilding:
                 conn.execute("BEGIN IMMEDIATE")
                 conn.execute("DELETE FROM file_fts")
@@ -937,7 +981,8 @@ def _scan_worker(lock_already_acquired: bool = False, mode: str = 'full', target
                 if filename.startswith('~$'):_scan_exclude('temporary');continue
                 if any(t in filename for t in SENSITIVE_DIRS):_scan_exclude('sensitive_name');continue
                 if ALLOWED_EXTENSIONS and fp.suffix.lower() not in ALLOWED_EXTENSIONS:_scan_exclude('unsupported_format');continue
-                action=update_index_file(conn,fp,event[2],root_key=root_key,scan_id=scan_id,known_rows=known,force=rebuilding)
+                action = update_index_file(conn, fp, event[2], root_key=root_key, scan_id=scan_id,
+                                           known_rows=known, force=rebuilding, track_addition=track_additions)
                 unseen.discard(os.path.normpath(str(fp)))
                 _scan_state_increment('seen');_scan_state_increment(action)
                 processed+=1
@@ -1020,8 +1065,20 @@ def _read_static_html(filename: str) -> str:
 
 
 @app.get("/", response_class=HTMLResponse)
-def home() -> str:
-    return _read_static_html("index.html")
+def home(request: Request) -> str:
+    page = _read_static_html("index.html")
+    if feishu_integration.configured():
+        page = page.replace('data-feishu-login hidden', 'data-feishu-login', 1)
+        tab = request.query_params.get('tab')
+        if tab in {'updates', 'report-audit'}:
+            report_date = feishu_integration.clean_report_date(request.query_params.get('date', ''))
+            if report_date:
+                route = f'/integrations/feishu/login?report_date={report_date}'
+                if tab == 'report-audit':
+                    view = 'exceptions' if request.query_params.get('download') == 'abnormal' else 'audit'
+                    route += '&amp;report_view=' + view
+                page = page.replace('href="/integrations/feishu/login"', f'href="{route}"', 1)
+    return page
 
 
 @app.get("/workbench", response_class=HTMLResponse)
@@ -1030,8 +1087,8 @@ def workbench() -> str:
 
 
 @app.get("/index.html", response_class=HTMLResponse, include_in_schema=False)
-def home_html_alias() -> str:
-    return _read_static_html("index.html")
+def home_html_alias(request: Request) -> str:
+    return home(request)
 
 
 @app.get("/bi_workbench.html", response_class=HTMLResponse, include_in_schema=False)
@@ -1691,6 +1748,7 @@ def search(
     date_from: str = Query(default=""),
     date_to: str = Query(default=""),
     date_field: Literal["mtime", "ctime"] = Query(default="mtime"),
+    date_zone: Literal["local", "asia_shanghai"] = Query(default="local"),
     directory: str = Query(default="",max_length=4096),
     min_size: int | None = Query(default=None,ge=0),
     max_size: int | None = Query(default=None,ge=0),
@@ -1725,16 +1783,17 @@ def search(
     # 日期范围 → Unix 时间戳（含当天全天）
     mtime_from_ts: float | None = None
     mtime_to_ts: float | None = None
+    zone = demo_data.ZONE if date_zone == "asia_shanghai" else None
     if date_from.strip():
         try:
-            mtime_from_ts = datetime.strptime(date_from.strip(), "%Y-%m-%d").timestamp()
+            mtime_from_ts = datetime.strptime(date_from.strip(), "%Y-%m-%d").replace(tzinfo=zone).timestamp()
         except ValueError:
             mtime_from_ts = None
     if date_to.strip():
         try:
             # 截止日期取当天 23:59:59.999，保证包含当天所有文件
             mtime_to_ts = datetime.strptime(date_to.strip(), "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, microsecond=999999
+                hour=23, minute=59, second=59, microsecond=999999, tzinfo=zone
             ).timestamp()
         except ValueError:
             mtime_to_ts = None
@@ -2961,9 +3020,17 @@ class CreateUserRequest(BaseModel):
     phone: str = Field(min_length=6, max_length=20)
     password: str = Field(default="123456", min_length=4, max_length=50)
     department: str = Field(default="业务运营部", max_length=100)
+    job_title: str = Field(default="", max_length=80)
     role: Literal["super_admin", "dept_admin", "user"] = "user"
     email: str = Field(default="", max_length=100)
     feishu_id: str = Field(default="", max_length=100)
+
+
+class UserProfileRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    phone: str = Field(min_length=6, max_length=30)
+    department: str = Field(default="", max_length=100)
+    job_title: str = Field(default="", max_length=80)
 
 
 class ResetUserPasswordRequest(BaseModel):
@@ -3017,10 +3084,12 @@ def _archive_rule_evidence(conn, target_path: str, period_days: int = 7, now: fl
         condition += " AND instr(lower(name),lower(?))>0"
         params.append(keyword)
     args = [root_scope_key(),*params]
+    today_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     row = conn.execute(f"""SELECT count(*) AS total,
         coalesce(sum(CASE WHEN size>0 THEN 1 ELSE 0 END),0) AS nonempty,
-        coalesce(sum(CASE WHEN size=0 AND mtime>=? AND mtime<=? THEN 1 ELSE 0 END),0) AS empty_due
-        FROM files WHERE root_key=? AND {condition}""", [window_start,now,*args]).fetchone()
+        coalesce(sum(CASE WHEN size=0 AND mtime>=? AND mtime<=? THEN 1 ELSE 0 END),0) AS empty_due,
+        coalesce(sum(CASE WHEN mtime>=? AND mtime<=? THEN 1 ELSE 0 END),0) AS today_updated
+        FROM files WHERE root_key=? AND {condition}""", [window_start,now,today_start,now,*args]).fetchone()
     latest = conn.execute(f"""SELECT name,mtime FROM files WHERE root_key=? AND size>0
         AND {condition} AND mtime<=? ORDER BY mtime DESC LIMIT 1""", [*args,now]).fetchone()
     latest_time = latest['mtime'] if latest else 0
@@ -3065,6 +3134,7 @@ def _archive_rule_evidence(conn, target_path: str, period_days: int = 7, now: fl
             "reason_code":'empty_delivery' if empty_failure else 'missing_update' if state=='overdue' else state,
             "path":path,"directory_display":_relative_catalog_path(path,_catalog_root_path()) or '根目录',
             "matched_files":row['total'],"nonempty_files":row['nonempty'],"empty_due_files":row['empty_due'],
+            "today_updated":row['today_updated'],
             "latest_time":latest_time,"latest_name":latest['name'] if latest else '',
             "window_start":window_start,"expected_at":deadline.timestamp() if deadline else None,
             "expected_at_display":deadline.strftime('%Y-%m-%d %H:%M') if deadline else '',
@@ -3145,13 +3215,20 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
     tasks_created = 0
     tasks_auto_resolved = 0
     tasks_updated = 0
+    overdue_rules = 0
     rule_issues = []
+    policy = directory_access.current.get()
+    full_scope = policy is None or policy.super_admin
+    daily_rows = []
+    local_now = datetime.fromtimestamp(now, demo_data.ZONE)
 
     for rule in rules:
         r_id = rule["id"]
         r_name = rule["name"]
         evidence = _assess_archive_rule(conn,rule,now)
         target_path = evidence["path"]
+        if full_scope:
+            daily_rows.append(report_daily.row_for_rule(rule, evidence, _catalog_root_path(), local_now))
         if evidence["state"] not in {"healthy", "overdue"}:
             rule_issues.append({"rule_id": r_id, "state": evidence["state"], "reason": evidence["reason"]})
             conn.execute("UPDATE archive_rules SET last_checked_at=? WHERE id=?", (now, r_id))
@@ -3194,6 +3271,7 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
                 """, (now, latest_name, now, active_task["id"]))
                 tasks_auto_resolved += 1
         else:
+            overdue_rules += 1
             if p_type == 'daily' or evidence.get('schedule'):
                 overdue_days = max(1, int(evidence['overdue_seconds']//86400)+1)
             elif latest_time > 0:
@@ -3223,6 +3301,11 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
                 tasks_created += 1
 
         conn.execute("UPDATE archive_rules SET last_checked_at = ? WHERE id = ?", (now, r_id))
+
+    if full_scope:
+        report_daily.save(conn, root_scope_key(), now, daily_rows)
+        if feishu_daily.settings(conn, root_scope_key()).active:
+            feishu_daily.record_check(conn, root_scope_key(), now, len(rules), overdue_rules, rule_issues)
 
     return {
         "tasks_created": tasks_created,
@@ -3583,6 +3666,15 @@ _AUTH_OPEN_PATHS = {"/api/auth/login", "/api/health"}
 _ADMIN_ROLES = ("super_admin", "dept_admin")
 
 
+def _with_display_identity(conn, row):
+    user = dict(row)
+    if user.get("feishu_id"):
+        profile = feishu_integration.linked_identities(conn, demo=DEMO_MODE, user_id=user["id"]).get(user["id"])
+        if profile:
+            user.update(name=profile["name"], feishu_profile=profile)
+    return user
+
+
 def _get_session_user(request: Request) -> dict[str, Any] | None:
     """从 ff_session Cookie 解析当前登录用户；会话过期或账号停用一律视为未登录。"""
     token = request.cookies.get("ff_session", "")
@@ -3591,15 +3683,15 @@ def _get_session_user(request: Request) -> dict[str, Any] | None:
     with db_session() as conn:
         row = conn.execute(
             """
-            SELECT s.expires_at, u.id, u.name, u.phone, u.role, u.status, u.department
+            SELECT s.expires_at, u.id, u.name, u.phone, u.role, u.status, u.department, u.feishu_id, u.job_title
             FROM login_sessions s JOIN system_users u ON u.id = s.user_id
             WHERE s.token = ?
             """,
             (token,),
         ).fetchone()
-    if not row or row["expires_at"] < time.time() or row["status"] != "active":
-        return None
-    return dict(row)
+        if not row or row["expires_at"] < time.time() or row["status"] != "active":
+            return None
+        return _with_display_identity(conn, row)
 
 
 def _require_user(request: Request) -> dict[str, Any]:
@@ -3624,8 +3716,13 @@ def _require_super_admin(request: Request) -> dict[str, Any]:
 
 
 def _public_user(u: dict[str, Any]) -> dict[str, Any]:
+    profile = u.get("feishu_profile")
+    organization = profile or u
     return {"id": u["id"], "name": u["name"], "phone": u.get("phone") or "",
-            "role": u["role"], "department": u.get("department") or "", "directory_acl_enabled": DIRECTORY_ACL_ENABLED,
+            "role": u["role"], "department": organization.get("department") or "",
+            "job_title": organization.get("job_title") or "",
+            "identity_source": "feishu" if profile else "platform",
+            "directory_acl_enabled": DIRECTORY_ACL_ENABLED,
             "demo_mode": DEMO_MODE}
 
 
@@ -3638,7 +3735,7 @@ class LoginRequest(BaseModel):
 def login(req: LoginRequest, response: Response) -> dict[str, Any]:
     with db_session() as conn:
         row = conn.execute("SELECT * FROM system_users WHERE phone = ?", (req.phone.strip(),)).fetchone()
-    if not row or (row["password"] or "123456") != req.password.strip():
+    if not row or not row["password"] or row["password"] != req.password.strip():
         raise HTTPException(status_code=401, detail="手机号或密码错误。")
     if row["status"] != "active":
         raise HTTPException(status_code=403, detail="账号已被停用，请联系管理员。")
@@ -3650,8 +3747,9 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
             "INSERT INTO login_sessions(token, user_id, created_at, expires_at) VALUES(?,?,?,?)",
             (token, row["id"], now, now + SESSION_TTL_HOURS * 3600),
         )
+        user = _with_display_identity(conn, row)
     response.set_cookie("ff_session", token, max_age=int(SESSION_TTL_HOURS * 3600), httponly=True, samesite="lax")
-    return {"ok": True, "user": _public_user(dict(row))}
+    return {"ok": True, "user": _public_user(user)}
 
 
 @app.post("/api/auth/logout")
@@ -3777,7 +3875,7 @@ def create_download_request(req: DownloadRequestCreate, request: Request) -> dic
                                           status, ticket, created_at, reviewed_by, reviewed_at, expires_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
-            (user["id"], user["name"], user.get("department") or "", req.file_id, file_info["name"], file_info["path"],
+            (user["id"], user["name"], (user.get("feishu_profile") or user).get("department") or "", req.file_id, file_info["name"], file_info["path"],
              reason, status, ticket, now, "管理员自助" if is_admin else "", now if is_admin else 0, expires),
         )
     _record_product_event("download_request", request, subject_id=req.file_id, search_event_id=req.search_event_id)
@@ -3915,23 +4013,13 @@ def preview_data(file_id: int,request: Request,sheet: str=Query(default='',max_l
 # ============================================================
 
 @app.get("/api/system/permissions")
-def get_system_permissions(request: Request) -> dict[str, Any]:
+def get_system_permissions(request: Request, include_daily: bool = True) -> dict[str, Any]:
     _require_super_admin(request)
     with db_session() as conn:
-        feishu_raw = conn.execute("SELECT value FROM app_meta WHERE key = 'feishu_config'").fetchone()
-        feishu_config = json.loads(feishu_raw[0]) if feishu_raw else {
-            "app_id": "",
-            "app_secret": "",
-            "webhook_url": "",
-            "notify_enabled": True,
-            "sync_enabled": False,
-            "last_synced_at": 0,
-            "synced_users_count": 0,
-            "synced_depts_count": 0
-        }
-        
+        directory = feishu_integration.directory_snapshot(conn)
+        identities = feishu_integration.linked_identities(conn, demo=DEMO_MODE)
         users_rows = conn.execute("""
-            SELECT id, name, phone, feishu_id, email, department, role, status, avatar, created_at, updated_at
+            SELECT id, name, phone, feishu_id, email, department, job_title, role, status, avatar, created_at, updated_at
             FROM system_users
             ORDER BY 
               CASE role 
@@ -3943,13 +4031,17 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
         
         users = []
         for u in users_rows:
+            profile = identities.get(u["id"])
             users.append({
                 "id": u["id"],
                 "name": u["name"],
+                "display_name": profile["name"] if profile else u["name"],
+                "identity_source": "feishu" if profile else "platform",
                 "phone": u["phone"] or "--",
                 "feishu_id": u["feishu_id"],
                 "email": u["email"],
                 "department": u["department"],
+                "job_title": u["job_title"],
                 "role": u["role"],
                 "status": u["status"],
                 "avatar": u["avatar"] or u["name"][:2],
@@ -3965,6 +4057,8 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
     return {
         "ok": True,
         "feishu_config": {"configured": feishu_integration.configured()},
+        "directory": directory,
+        "feishu_daily": feishu_daily.status(sys.modules[__name__]) if include_daily and directory['source'] == 'feishu' else None,
         "users": users,
         "summary": {
             "total_users": len(users),
@@ -3976,21 +4070,47 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
     }
 
 
+def _validate_account_phone(conn, phone, user_id=0):
+    normalized = feishu_identity.normalize_phone(phone)
+    for row in conn.execute("SELECT id,phone FROM system_users WHERE id<>?", (user_id,)):
+        if row['phone'] == phone or (normalized and normalized == feishu_identity.normalize_phone(row['phone'])):
+            raise HTTPException(400, '该电话号码成员已存在。')
+
+
 @app.post("/api/system/permissions/users")
 def create_system_user(req: CreateUserRequest, request: Request) -> dict[str, Any]:
     _require_super_admin(request)
     now_ts = time.time()
     phone = req.phone.strip()
     with db_session() as conn:
-        existing = conn.execute("SELECT id FROM system_users WHERE phone = ?", (phone,)).fetchone()
-        if existing:
-            raise HTTPException(status_code=400, detail="该电话号码成员已存在")
+        conn.execute('BEGIN IMMEDIATE')
+        _validate_account_phone(conn, phone)
         avatar = req.name.strip()[:2]
         cur = conn.execute("""
-            INSERT INTO system_users (name, phone, password, department, role, status, avatar, email, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
-        """, (req.name.strip(), phone, req.password.strip() or "123456", req.department.strip(), req.role, avatar, req.email.strip(), now_ts, now_ts))
-    return {"ok": True, "id": cur.lastrowid, "message": f"成员 {req.name}（手机号：{phone}）已授权创建"}
+            INSERT INTO system_users (name, phone, password, department, job_title, role, status, avatar, email, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+        """, (req.name.strip(), phone, req.password.strip() or "123456", req.department.strip(),
+              req.job_title.strip(), req.role, avatar, req.email.strip(), now_ts, now_ts))
+    return {"ok": True, "id": cur.lastrowid, "message": f"成员 {req.name} 已授权创建"}
+
+
+@app.put("/api/system/permissions/users/{user_id}/profile")
+def update_user_profile(user_id: int, req: UserProfileRequest, request: Request):
+    _require_super_admin(request)
+    name, phone = req.name.strip(), req.phone.strip()
+    if not name or not feishu_identity.normalize_phone(phone):
+        raise HTTPException(422, '请输入姓名和有效手机号。')
+    with db_session() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        previous = conn.execute('SELECT phone FROM system_users WHERE id=?', (user_id,)).fetchone()
+        if not previous:
+            raise HTTPException(404, '成员不存在。')
+        _validate_account_phone(conn, phone, user_id)
+        if feishu_identity.normalize_phone(previous['phone']) != feishu_identity.normalize_phone(phone):
+            feishu_identity.clear_user_link(conn, user_id)
+        conn.execute("""UPDATE system_users SET name=?,phone=?,department=?,job_title=?,avatar=?,updated_at=? WHERE id=?""",
+                     (name, phone, req.department.strip(), req.job_title.strip(), name[:2], time.time(), user_id))
+    return {'ok': True, 'message': '资料已保存。修改手机号后请重新同步飞书通讯录。'}
 
 
 @app.put("/api/system/permissions/users/{user_id}/password")
@@ -4012,9 +4132,16 @@ def update_user_role(user_id: int, req: UpdateUserRoleRequest, request: Request)
     if req.role not in ("super_admin", "dept_admin", "user"):
         raise HTTPException(status_code=400, detail="无效角色")
     with db_session() as conn:
-        cur = conn.execute("UPDATE system_users SET role = ?, updated_at = ? WHERE id = ?", (req.role, time.time(), user_id))
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=404, detail="成员不存在")
+        conn.execute('BEGIN IMMEDIATE')
+        previous = conn.execute('SELECT role,feishu_binding_source FROM system_users WHERE id=?', (user_id,)).fetchone()
+        if not previous:
+            raise HTTPException(404, '成员不存在。')
+        if req.role != previous['role']:
+            if req.role != 'user' and previous['feishu_binding_source'] == 'phone':
+                feishu_identity.clear_user_link(conn, user_id)
+            else:
+                conn.execute("DELETE FROM login_sessions WHERE user_id=? AND auth_source='feishu'", (user_id,))
+            conn.execute("UPDATE system_users SET role = ?, updated_at = ? WHERE id = ?", (req.role, time.time(), user_id))
     return {"ok": True, "message": "成员系统角色已更新"}
 
 
@@ -4029,6 +4156,7 @@ def toggle_user_status(user_id: int, request: Request) -> dict[str, Any]:
         """, (time.time(), user_id))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="成员不存在")
+        conn.execute('DELETE FROM login_sessions WHERE user_id=?', (user_id,))
     return {"ok": True, "message": "成员状态已更新"}
 
 
@@ -4036,15 +4164,17 @@ def toggle_user_status(user_id: int, request: Request) -> dict[str, Any]:
 def delete_system_user(user_id: int, request: Request) -> dict[str, Any]:
     _require_super_admin(request)
     with db_session() as conn:
+        feishu_identity.remember_previous_link(conn, user_id)
         cur = conn.execute("DELETE FROM system_users WHERE id = ?", (user_id,))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="成员不存在")
+        conn.execute('DELETE FROM login_sessions WHERE user_id=?', (user_id,))
     return {"ok": True, "message": "成员授权已移除"}
 
 
 
 class DirectoryGrantRequest(BaseModel):
-    subject_type: Literal['user', 'department']
+    subject_type: directory_access.SubjectType
     subject_key: str = Field(min_length=1, max_length=200)
     target_path: str = Field(min_length=1, max_length=4096)
     effect: Literal['allow', 'deny'] = 'allow'
@@ -4065,7 +4195,7 @@ class DirectoryGrantRequest(BaseModel):
 
 
 class DirectoryGrantBatch(BaseModel):
-    subject_type: Literal['user', 'department']
+    subject_type: directory_access.SubjectType
     subject_keys: list[str] = Field(min_length=1, max_length=100)
     target_paths: list[str] = Field(min_length=1, max_length=100)
     permissions: dict[str, str]
@@ -4084,8 +4214,12 @@ def _validate_grant_target(conn, subject_type, subject, value):
         raise HTTPException(422, '请选择有效成员或部门。')
     if subject_type == 'user':
         exists = conn.execute('SELECT id FROM system_users WHERE CAST(id AS TEXT)=?', (subject,)).fetchone()
-    else:
+    elif subject_type == 'department':
         exists = conn.execute("SELECT id FROM system_users WHERE department=? AND department<>''", (subject,)).fetchone()
+    elif subject_type == 'feishu_department':
+        exists = conn.execute("SELECT 1 FROM feishu_departments WHERE open_id=?", (subject,)).fetchone()
+    else:
+        exists = any(target['key'] == subject for target in directory_access.feishu_targets(conn)['feishu_job'])
     if not exists:
         raise HTTPException(422, '请选择系统已有的成员或部门。')
     target = _resolve_catalog_path(value)
@@ -4127,7 +4261,8 @@ def list_directory_grants(request: Request) -> dict[str, Any]:
     with db_session() as conn:
         rows = conn.execute('SELECT * FROM directory_grants WHERE root_key=? ORDER BY id DESC', (root_scope_key(),)).fetchall()
         audit = conn.execute('SELECT * FROM directory_grant_audit ORDER BY id DESC LIMIT 30').fetchall()
-    return {'enabled': DIRECTORY_ACL_ENABLED,
+        feishu_subjects = directory_access.feishu_targets(conn)
+    return {'enabled': DIRECTORY_ACL_ENABLED, 'feishu_subjects': feishu_subjects,
             'grants': [{**dict(row), 'permissions': directory_access.grant_permissions(row),
                         'legacy': row['permissions'] is None} for row in rows],
             'audit': [dict(row) for row in audit]}
@@ -4196,13 +4331,12 @@ def effective_directory_grants(request: Request, user_id: int, path: str):
             raise HTTPException(404, '成员不存在。')
         target = _validate_grant_target(conn, 'user', str(user_id), path)
         policy = directory_access.load_policy(conn, dict(user), root_scope_key(), _catalog_root_path())
-        rows = conn.execute('''SELECT * FROM directory_grants WHERE root_key=? AND
-            ((subject_type='user' AND subject_key=?) OR (subject_type='department' AND subject_key=? AND subject_key<>''))''',
-            (root_scope_key(), str(user_id), user['department'] or '')).fetchall()
+        rows = directory_access.user_grant_rows(conn, dict(user), root_scope_key())
+        user_name = _with_display_identity(conn, user)["name"]
     permissions = {op: policy.decision(target, op) for op in directory_access.OPERATIONS}
     if user['status'] != 'active':
         permissions = dict.fromkeys(directory_access.OPERATIONS, 'deny')
-    return {'user_name': user['name'], 'permissions': permissions, 'super_admin': policy.super_admin,
+    return {'user_name': user_name, 'permissions': permissions, 'super_admin': policy.super_admin,
             'sources': [{**dict(r), 'permissions': directory_access.grant_permissions(r)} for r in rows
                         if directory_access.within(target, r['target_path'])]}
 
@@ -4221,6 +4355,7 @@ def delete_directory_grant(grant_id: int, request: Request) -> dict[str, Any]:
 
 file_management.register(sys.modules[__name__])
 feishu_integration.register(sys.modules[__name__])
+report_daily.register(sys.modules[__name__])
 
 
 async def not_found_handler(request: Request, exc: Exception):

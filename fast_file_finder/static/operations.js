@@ -145,40 +145,489 @@ async function loadBackupPanel(){const panel=$('systemBackupPanel');if(!panel ||
   }catch(e){panel.textContent='备份信息读取失败：'+e.message;}
 }
 
-fetch('/integrations/feishu/status').then(r=>r.json()).then(s=>{
-  if(s.configured) $('feishuLoginLink').hidden=false;
-}).catch(()=>{});
+const notificationTasksUrl = '/api/system/feishu/daily/tasks';
+const notificationState = { tasks: [], members: [], request: 0, editing: null, deleting: null, sending: null, saving: false };
+const notificationDate = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
+});
 
-async function loadFeishuPanel(){
-  const panel=$('feishuPanel');
-  if(!panel || currentUser?.role!=='super_admin') return;
-  try{
-    const status=await api('/api/system/feishu');
-    panel.innerHTML='<h3>飞书企业应用</h3>';
-    if(!status.configured){
-      panel.insertAdjacentHTML('beforeend','<p>尚未配置企业应用。请在服务环境中设置应用 ID、密钥与登录回调地址，再同步通讯录。</p>');
+function notificationTime(value) {
+  if (!value) return '';
+  // The scheduler already formats next_run in Beijing time. Successful sends use Unix seconds.
+  if (typeof value !== 'number') return String(value).replace('T', ' ');
+  return notificationDate.format(new Date(value * 1000));
+}
+
+function notificationRow(task) {
+  const group = task.recipient_type === 'chat_id';
+  const privateChat = task.recipient_type === 'open_id';
+  const recipient = task.recipient_label || task.recipient_id || '待设置';
+  const type = group ? '群 ID · …' + task.recipient_id.slice(-8) : privateChat ? '个人私聊' : '';
+  let status = task.enabled ? '已启用' : '已暂停';
+  if (task.enabled && task.error) status = '执行异常';
+  if (!task.recipient_id) status = '待设接收对象';
+  const statusClass = !task.recipient_id || !task.enabled ? '' : task.error ? 'error' : 'on';
+  const action = task.enabled ? 'pause' : 'resume';
+  const original = task.last_sent_at && task.last_sent_to_current === false ? '<small>发往原接收对象</small>' : '';
+  const cmd = (name, label) => '<button type="button" class="table-link" data-task-action="' + name + '">' + label + '</button>';
+  return '<tr data-task-id="' + esc(task.id) + '">' +
+    '<td data-label="任务名称"><strong>' + esc(task.name) + '</strong></td>' +
+    '<td data-label="接收对象">' + esc(recipient) + '<small title="' + esc(task.recipient_id) + '">' + esc(type) + '</small></td>' +
+    '<td data-label="发送计划">每天 ' + esc(task.schedule) + (task.enabled && task.next_run ? '<small>下次 ' + esc(notificationTime(task.next_run)) + '</small>' : '') + '</td>' +
+    '<td data-label="最近发送">' + esc(notificationTime(task.last_sent_at) || '暂无成功记录') + original +
+      (task.error ? '<small class="notification-error">' + esc(task.error) + '</small>' : '') + '</td>' +
+    '<td data-label="状态"><span class="notification-state ' + statusClass + '">' + status + '</span></td>' +
+    '<td data-label="操作"><div class="notification-actions">' + (task.recipient_id ? cmd('send', '立即推送') : '') +
+      cmd('edit', '编辑') + (task.recipient_id ? cmd(action, task.enabled ? '暂停' : '恢复') : '') +
+      cmd('delete', '删除') + '</div></td></tr>';
+}
+
+function resetNotificationSession() {
+  notificationState.request += 1;
+  Object.assign(notificationState, { tasks: [], members: [], editing: null, deleting: null, sending: null, saving: false });
+  for (const id of ['notificationTaskDialog', 'notificationDeleteDialog', 'notificationSendDialog']) {
+    if ($(id)?.open) $(id).close();
+  }
+  for (const id of ['notificationTaskRows', 'notificationPreviewText', 'notificationTotal', 'notificationListStatus']) {
+    $(id)?.replaceChildren();
+  }
+  $('notificationPreview').hidden = true;
+  $('newNotificationTask').disabled = true;
+}
+
+async function loadNotificationTasks(message = '') {
+  if (currentUser?.role !== 'super_admin') return;
+  const request = ++notificationState.request;
+  const status = $('notificationListStatus');
+  $('newNotificationTask').disabled = true;
+  status.textContent = '正在读取任务…';
+  try {
+    const data = await api(notificationTasksUrl);
+    if (request !== notificationState.request) return;
+    notificationState.tasks = data.tasks;
+    notificationState.members = data.members || [];
+    $('notificationTaskRows').innerHTML = data.tasks.map(notificationRow).join('') ||
+      '<tr><td colspan="6" class="notification-empty">尚无任务。点击「新建任务」选择接收对象及发送时间。</td></tr>';
+    $('notificationTotal').textContent = data.tasks.length + ' 项';
+    $('notificationPreviewText').textContent = data.preview || '';
+    $('notificationPreview').hidden = !data.preview;
+    $('newNotificationTask').disabled = false;
+    status.textContent = message;
+  } catch (error) {
+    if (request !== notificationState.request) return;
+    status.textContent = (message ? message + '。' : '') + '列表读取失败，请刷新。' + error.message;
+  }
+}
+
+function selectNotificationType() {
+  const group = $('notifyRecipientType').value === 'chat_id';
+  $('notifyMemberField').hidden = group;
+  $('notifyMember').disabled = group;
+  $('notifyGroupField').hidden = !group;
+  $('notifyGroup').disabled = !group;
+  $('notifyGroup').required = group;
+  $('notifyGroupFeedback').textContent = '';
+}
+
+function openNotificationEditor(task = null) {
+  notificationState.editing = task;
+  $('notificationTaskForm').reset();
+  $('notifyFormStatus').textContent = '';
+  $('notifyEditorTitle').textContent = task ? '编辑推送任务' : '新建推送任务';
+  $('notifyName').value = task?.name || '';
+  $('notifyTime').value = task?.schedule || '18:00';
+  $('notifyRecipientType').value = task?.recipient_type === 'chat_id' ? 'chat_id' : 'open_id';
+  $('notifyEnabled').checked = task ? task.enabled : true;
+  const members = notificationState.members.filter(member => member.active && member.open_id);
+  const options = $('notifyMember');
+  options.replaceChildren(new Option(members.length ? '请选择一位成员' : '请先在成员管理同步飞书', ''));
+  const names = new Set(), duplicateNames = new Set();
+  for (const member of members) {
+    if (names.has(member.name)) duplicateNames.add(member.name);
+    names.add(member.name);
+  }
+  for (const member of members) {
+    const label = [member.name || member.open_id, member.department,
+      member.phone_tail && '手机尾号 ' + member.phone_tail,
+      duplicateNames.has(member.name) && '成员 ID …' + member.open_id.slice(-8)
+    ].filter(Boolean).join(' · ');
+    options.add(new Option(label, member.open_id));
+  }
+  if (task?.recipient_type === 'open_id' && task.recipient_id) {
+    if (!members.some(m => m.open_id === task.recipient_id)) {
+      options.add(new Option((task.recipient_label || task.recipient_id) + '（当前接收人）', task.recipient_id));
+    }
+    options.value = task.recipient_id;
+  }
+  $('notifyGroup').value = task?.recipient_type === 'chat_id' ? task.recipient_id : '';
+  selectNotificationType();
+  $('notificationTaskDialog').showModal();
+  $('notifyName').focus();
+}
+
+function taskUpdateBody(task, enabled) {
+  return { name: task.name, schedule: task.schedule, recipient_type: task.recipient_type,
+    recipient_id: task.recipient_id, revision: task.revision, enabled };
+}
+
+async function saveNotificationTask(event) {
+  event.preventDefault();
+  if (notificationState.saving) return;
+  const task = notificationState.editing;
+  const type = $('notifyRecipientType').value;
+  const body = { name: $('notifyName').value.trim(), schedule: $('notifyTime').value,
+    recipient_type: type, recipient_id: (type === 'chat_id' ? $('notifyGroup').value : $('notifyMember').value).trim(),
+    enabled: $('notifyEnabled').checked };
+  const status = $('notifyFormStatus');
+  if (!body.name || !body.recipient_id) { status.textContent = '请填写任务名称并指定接收对象。'; return; }
+  if (task) body.revision = task.revision;
+  notificationState.saving = true;
+  $('notifySave').disabled = $('notifyCancel').disabled = true;
+  status.textContent = '正在保存…';
+  try {
+    await api(task ? notificationTasksUrl + '/' + encodeURIComponent(task.id) : notificationTasksUrl,
+      {method: task ? 'PUT' : 'POST', body});
+    $('notificationTaskDialog').close();
+    await loadNotificationTasks(task ? '任务已更新' : '任务已创建');
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    notificationState.saving = false;
+    $('notifySave').disabled = $('notifyCancel').disabled = false;
+  }
+}
+
+async function checkNotificationGroup() {
+  const id = $('notifyGroup').value.trim();
+  const button = $('notifyCheckGroup');
+  const feedback = $('notifyGroupFeedback');
+  if (!id) { $('notifyGroup').reportValidity(); return; }
+  button.disabled = true;
+  feedback.textContent = '正在检查…';
+  const current = () => $('notifyGroup').value.trim() === id && $('notifyRecipientType').value === 'chat_id';
+  try {
+    const data = await api('/api/system/feishu/daily/group-membership', {method:'POST', body:{chat_id:id}});
+    if (current()) feedback.textContent = data.is_in_chat ? '机器人已在群内，请确认有发言权限。' : '机器人不在群内，请在群设置中添加「文件索引」后再推送。';
+  } catch (error) {
+    if (current()) feedback.textContent = '检查失败：' + error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function handleNotificationRow(event) {
+  const button = event.target.closest('button[data-task-action]');
+  if (!button) return;
+  const row = button.closest('tr');
+  const task = notificationState.tasks.find(item => String(item.id) === row.dataset.taskId);
+  if (!task) return;
+  const action = button.dataset.taskAction;
+  if (action === 'edit') { openNotificationEditor(task); return; }
+  if (action === 'send') { openNotificationSend(task); return; }
+  if (action === 'delete') {
+    notificationState.deleting = task;
+    $('notifyDeleteText').textContent = '删除「' + task.name + '」后，此任务将停止向 ' + (task.recipient_type === 'chat_id' ? task.recipient_id : task.recipient_label || task.recipient_id || '当前接收对象') + ' 推送日报。';
+    $('notifyDeleteStatus').textContent = '';
+    $('notificationDeleteDialog').showModal();
+    return;
+  }
+  const buttons = row.querySelectorAll('button');
+  buttons.forEach(item => item.disabled = true);
+  try {
+    await api(notificationTasksUrl + '/' + encodeURIComponent(task.id), {method:'PUT', body:taskUpdateBody(task, action === 'resume')});
+    await loadNotificationTasks(action === 'resume' ? '任务已恢复' : '任务已暂停');
+  } catch (error) {
+    await loadNotificationTasks(error.message);
+  } finally {
+    buttons.forEach(item => item.disabled = false);
+  }
+}
+
+function openNotificationSend(task) {
+  notificationState.sending = task;
+  const recipient = task.recipient_type === 'chat_id'
+    ? '飞书群 ' + task.recipient_id
+    : '飞书成员 ' + (task.recipient_label || task.recipient_id) + '（ID …' + task.recipient_id.slice(-8) + '）';
+  $('notifySendText').textContent = '将「' + task.name + '」的今日日报发送给 ' + recipient + '。';
+  const sentToday = task.report_sent_at && task.last_sent_to_current;
+  $('notifySendHint').textContent = sentToday ? '今日已向此对象发送过，确认后将再次发送。'
+    : task.enabled ? '发送成功后，本任务今日的定时推送会跳过。' : '仅发送这一次，定时任务保持暂停。';
+  $('notifySendStatus').textContent = '';
+  $('notifyConfirmSend').textContent = sentToday ? '确认再次发送' : '确认发送';
+  $('notificationSendDialog').showModal();
+}
+
+async function sendNotificationTask() {
+  const confirm = $('notifyConfirmSend');
+  const cancel = $('notifyCancelSend');
+  if (confirm.disabled) return;
+  const task = notificationState.sending;
+  const status = $('notifySendStatus');
+  confirm.disabled = cancel.disabled = true;
+  status.textContent = '正在发送到飞书…';
+  try {
+    const result = await api(notificationTasksUrl + '/' + encodeURIComponent(task.id) + '/send', {
+      method: 'POST',
+      body: { revision: task.revision, recipient_id: task.recipient_id, last_sent_at: task.last_sent_at },
+      timeoutMs: 40000,
+    });
+    $('notificationSendDialog').close();
+    await loadNotificationTasks(result.status === 'already_sent' ? '已发送至该接收对象' : '飞书日报已发送');
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    confirm.disabled = cancel.disabled = false;
+  }
+}
+
+async function deleteNotificationTask() {
+  if ($('notifyConfirmDelete').disabled) return;
+  const task = notificationState.deleting;
+  $('notifyConfirmDelete').disabled = $('notifyCancelDelete').disabled = true;
+  try {
+    await api(notificationTasksUrl + '/' + encodeURIComponent(task.id) + '?revision=' + encodeURIComponent(task.revision), {method:'DELETE'});
+    $('notificationDeleteDialog').close();
+    await loadNotificationTasks('任务已删除');
+  } catch (error) {
+    $('notifyDeleteStatus').textContent = error.message;
+  } finally {
+    $('notifyConfirmDelete').disabled = $('notifyCancelDelete').disabled = false;
+  }
+}
+
+$('newNotificationTask').onclick = () => openNotificationEditor();
+$('refreshNotificationTasks').onclick = () => loadNotificationTasks();
+$('notifyRecipientType').onchange = selectNotificationType;
+$('notifyGroup').oninput = () => { $('notifyGroupFeedback').textContent = ''; };
+$('notifyCheckGroup').onclick = checkNotificationGroup;
+$('notifyCancel').onclick = () => $('notificationTaskDialog').close();
+$('notificationTaskDialog').oncancel = event => { if (notificationState.saving) event.preventDefault(); };
+$('notificationTaskForm').onsubmit = saveNotificationTask;
+$('notificationTaskRows').onclick = handleNotificationRow;
+$('notifyConfirmSend').onclick = sendNotificationTask;
+$('notifyCancelSend').onclick = () => $('notificationSendDialog').close();
+$('notificationSendDialog').oncancel = event => { if ($('notifyConfirmSend').disabled) event.preventDefault(); };
+$('notifyConfirmDelete').onclick = deleteNotificationTask;
+$('notifyCancelDelete').onclick = () => $('notificationDeleteDialog').close();
+$('notificationDeleteDialog').oncancel = event => { if ($('notifyConfirmDelete').disabled) event.preventDefault(); };
+
+const memberFilter = { query:'', source:'', department:'', page:1 };
+const memberRoles = {super_admin:'超级管理员', dept_admin:'部门管理员', user:'普通成员'};
+const memberSources = {linked:'飞书 + 平台', feishu:'仅飞书', local:'仅平台'};
+const memberMatchLabels = {
+  review:'待确认关联', conflict:'关联冲突', resync:'待重新同步', no_phone:'手机号不可见',
+  no_account:'首次飞书登录自动开通', blocked:'关联已失效或移除', disabled:'账号已停用', inactive:'已离职',
+};
+
+function unifiedMembers(users, members) {
+  const byId = new Map(users.map(user => [user.id, user]));
+  const byFeishu = new Map(users.filter(user => user.feishu_id).map(user => [user.feishu_id, user]));
+  const included = new Set();
+  const rows = members.map(member => {
+    const account = byId.get(member.bound_user_id) || byFeishu.get(member.open_id);
+    if (account) included.add(account.id);
+    return {member, account};
+  });
+  for (const account of users) {
+    if (!included.has(account.id)) rows.push({account});
+  }
+  return rows.map(({member, account}) => {
+    const source = member || account?.feishu_id ? (account ? 'linked' : 'feishu') : 'local';
+    const name = member?.name || account?.display_name || account?.name || '未命名成员';
+    const departments = (member?.department || account?.department || '').split('、').filter(Boolean);
+    const job = member?.job_title || account?.job_title || '';
+    const search = [name, account?.name, account?.phone, member?.phone_tail, ...departments, job].filter(Boolean).join(' ').toLowerCase();
+    return {member, account, source, name, departments, job, search};
+  }).sort((a,b) => a.name.localeCompare(b.name, 'zh-CN'));
+}
+
+function renderMemberPanel() {
+  const directory = permState.directory;
+  const members = unifiedMembers(permState.users, directory.members || []);
+  const departments = [...new Set(members.flatMap(row => row.departments))].sort((a,b) => a.localeCompare(b,'zh-CN'));
+  const connected = directory.source === 'feishu';
+  const panel = $('memberPanel');
+  panel.innerHTML = `<div class="permission-panel-toolbar"><strong>成员名单</strong>
+    <div class="permission-roster-actions">${connected ? '<button id="syncFeishu" class="tree-tool-btn" type="button">同步飞书</button>' : ''}
+      <button id="createMemberAccount" type="button" class="btn-archive-primary">新建平台账号</button></div></div>
+    <div class="permission-roster-filters">
+      <label>查找成员<input type="search" id="memberQuery" placeholder="姓名、手机号或岗位"></label>
+      <label>账号来源<select id="memberSource"><option value="">全部来源</option>
+        ${Object.entries(memberSources).map(([key,label])=>`<option value="${key}">${label}</option>`).join('')}</select></label>
+      <label>部门<select id="memberDept"><option value="">全部部门</option>
+        ${departments.map(dept=>`<option value="${esc(dept)}">${esc(dept)}</option>`).join('')}</select></label>
+    </div>
+    <div class="permission-roster-scroll"><table class="catalog-table permission-members-table"><thead>
+      <tr><th>成员</th><th>账号来源</th><th>部门 / 岗位</th><th>平台角色</th><th>状态</th><th>操作</th></tr>
+      </thead><tbody id="memberRows"></tbody></table></div>
+    <div class="permission-member-footer"><span id="memberCount"></span><div id="memberPaging" hidden>
+      <button type="button" id="memberPrev" class="tree-tool-btn">上一页</button>
+      <button type="button" id="memberNext" class="tree-tool-btn">下一页</button></div></div>
+    <p id="bindingStatus" role="status" aria-live="polite"></p>`;
+  const query = $('memberQuery'), source = $('memberSource'), department = $('memberDept');
+  query.value = memberFilter.query;
+  source.value = memberFilter.source;
+  department.value = departments.includes(memberFilter.department) ? memberFilter.department : '';
+  const pageSize = 25;
+  let visible = [];
+
+  function renderRows() {
+    Object.assign(memberFilter, {query:query.value, source:source.value, department:department.value});
+    const needle = query.value.trim().toLowerCase();
+    const filtered = members.filter(row => (!source.value || source.value === row.source)
+      && (!department.value || row.departments.includes(department.value)) && row.search.includes(needle));
+    const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    memberFilter.page = Math.min(memberFilter.page, pages);
+    visible = filtered.slice((memberFilter.page - 1)*pageSize, memberFilter.page*pageSize);
+    $('memberRows').innerHTML = visible.map(({member:m, account:u, name, source, departments, job}, index) => {
+      const role = u ? `<select aria-label="平台角色" data-role>${Object.entries(memberRoles).map(([k,v])=>
+        `<option value="${k}" ${k === u.role ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '—';
+      const actions = [];
+      if (u) actions.push(['reset','重置密码'], ['status',u.status === 'active' ? '停用账号' : '启用账号']);
+      if (u?.feishu_id) actions.push(['unlink','解除飞书关联']);
+      if (u) actions.push(['delete','移除平台账号']);
+      const candidate = !u && m?.match_status === 'review' && m.local_user_id
+        ? permState.users.find(user => user.id === m.local_user_id) : null;
+      const extra = m && memberMatchLabels[m.match_status];
+      const status = u ? (u.status === 'active' ? '已启用' : '已停用') : (m.active ? '在职' : '已离职');
+      const phone = u?.phone || (m?.phone_tail ? '手机尾号 ' + m.phone_tail : '');
+      return `<tr data-row="${index}"><td><strong>${esc(name)}</strong><small>${esc(phone)}</small></td>
+        <td><span class="member-source" data-source="${source}">${memberSources[source]}</span></td>
+        <td>${esc(departments.join('、') || '—')}<small>${esc(job)}</small></td><td>${role}</td>
+        <td>${status}${extra && status !== extra ? `<small>${esc(extra)}</small>` : ''}${candidate ? `<small>候选账号 · ${esc(candidate.name)}</small>` : ''}</td>
+        <td><div class="permission-roster-actions">${u ? '<button type="button" class="tree-tool-btn" data-action="edit">编辑资料</button>' : ''}
+          ${candidate ? '<button type="button" class="tree-tool-btn" data-action="bind">确认关联</button>' : ''}
+          ${actions.length ? `<select data-more aria-label="更多账号操作"><option value="">更多操作</option>${actions.map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select>` : ''}
+        </div></td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="permission-roster-empty">没有符合条件的成员</td></tr>';
+    $('memberCount').textContent = `共 ${filtered.length} 位成员` + (pages > 1 ? ` · 第 ${memberFilter.page} / ${pages} 页` : '');
+    $('memberPaging').hidden = pages <= 1;
+    $('memberPrev').disabled = memberFilter.page <= 1;
+    $('memberNext').disabled = memberFilter.page >= pages;
+  }
+
+  async function act(control, action) {
+    const {member, account} = visible[Number(control.closest('tr').dataset.row)];
+    if (action === 'edit') return openEditAccountProfile(account.id);
+    if (action === 'reset') return openResetPasswordModal(account.id);
+    if (action === 'delete') return deleteUser(account.id);
+    if (action === 'status') return toggleUserStatus(account.id);
+    if (action === 'role') return changeUserRole(account.id, control.value);
+    const unlink = action === 'unlink';
+    if (!confirm(unlink ? '解除这个账号的飞书登录关联？' : '确认关联到该候选平台账号？')) return;
+    control.disabled = true;
+    try {
+      await api('/api/system/feishu/bind', {method:'POST', body:{
+        user_id:unlink ? account.id : member.local_user_id, open_id:unlink ? '' : member.open_id}});
+      toast(unlink ? '关联已解除' : '关联已生效');
+      await loadPermissionOverview();
+    } catch (error) {
+      $('bindingStatus').textContent = error.message;
+      control.disabled = false;
+    }
+  }
+  $('memberRows').onclick = event => {
+    const control = event.target.closest('button[data-action]');
+    if (control) act(control, control.dataset.action);
+  };
+  $('memberRows').onchange = event => {
+    const control = event.target;
+    if (control.matches('[data-role]')) return act(control, 'role');
+    if (!control.matches('[data-more]') || !control.value) return;
+    const action = control.value;
+    control.value = '';
+    act(control, action);
+  };
+  $('createMemberAccount').onclick = () => openCreateUserModal();
+  if (connected) $('syncFeishu').onclick = async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    $('bindingStatus').textContent = '正在同步飞书通讯录…';
+    try {
+      const result = await api('/api/system/feishu/sync', {method:'POST', timeoutMs:180000});
+      toast(`已同步 ${result.users} 位成员`);
+      await loadPermissionOverview();
+    } catch (error) {
+      $('bindingStatus').textContent = error.message;
+      button.disabled = false;
+    }
+  };
+  query.oninput = source.onchange = department.onchange = () => {memberFilter.page = 1; renderRows();};
+  $('memberPrev').onclick = () => {memberFilter.page--; renderRows();};
+  $('memberNext').onclick = () => {memberFilter.page++; renderRows();};
+  renderRows();
+}
+
+
+
+function openEditAccountProfile(userId) {
+  const user = permState.users.find(member => member.id === userId);
+  if (!user) return;
+  const input = (id, label, type, value, length) =>
+    `<label for="${id}">${label}<input id="${id}" type="${type}" value="${esc(value || '')}" maxlength="${length}"></label>`;
+  const form = `<div class="account-profile-grid">
+    ${input('profileName', '平台账号名称', 'text', user.name, 50)}
+    ${input('profilePhone', '登录及匹配手机号', 'tel', user.phone === '--' ? '' : user.phone, 30)}
+    ${input('profileDepartment', '自定义部门', 'text', user.department, 100)}
+    ${input('profileJob', '自定义岗位', 'text', user.job_title, 80)}
+  </div><p>请填与飞书通讯录一致的手机号。修改号码会解除当前关联，并要求重新登录。</p>`;
+  operationDialog('编辑平台账号', form, '<button type="button" class="btn-archive-primary" id="saveAccountProfile">保存资料</button>');
+  $('saveAccountProfile').onclick = async () => {
+    const body = {name:$('profileName').value.trim(), phone:$('profilePhone').value.trim(),
+      department:$('profileDepartment').value.trim(), job_title:$('profileJob').value.trim()};
+    if (!body.name || !body.phone) {
+      $('fileOperationStatus').textContent = '请填写姓名和手机号。';
       return;
     }
-    panel.insertAdjacentHTML('beforeend',`<p>最近同步 ${esc(portalMonitorTime(status.last_sync))} · ${status.members.length} 名成员</p><button id="syncFeishu" class="tree-tool-btn">同步通讯录</button><div class="grant-toolbar"><label>本地账号 <select id="localFeishuUser">${permState.users.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></label><label>飞书成员 <select id="remoteFeishuUser"><option value="">解除绑定</option>${status.members.filter(m=>m.active).map(m=>`<option value="${esc(m.open_id)}">${esc(m.name)} · ${esc(m.department)}</option>`).join('')}</select></label><button id="bindFeishu" class="tree-tool-btn">保存绑定</button></div><p id="bindingStatus"></p>`);
-    const showBinding=()=>{$('remoteFeishuUser').value=permState.users.find(u=>String(u.id)===$('localFeishuUser').value)?.feishu_id || '';};
-    $('localFeishuUser').onchange=showBinding;showBinding();
-    $('syncFeishu').onclick=async()=>{const b=$('syncFeishu');b.disabled=true;try{await api('/api/system/feishu/sync',{method:'POST',timeoutMs:180000});await loadFeishuPanel();}catch(e){$('bindingStatus').textContent=e.message;b.disabled=false;}};
-    $('bindFeishu').onclick=async()=>{try{await api('/api/system/feishu/bind',{method:'POST',body:{user_id:Number($('localFeishuUser').value),open_id:$('remoteFeishuUser').value}});toast('绑定已更新，该成员下次访问时需要重新登录');await loadPermissionOverview();}catch(e){$('bindingStatus').textContent=e.message;}};
-  }catch(e){panel.textContent=e.message;}
+    setFileOperationBusy(true);
+    try {
+      const result = await api(`/api/system/permissions/users/${userId}/profile`, {method:'PUT', body});
+      setFileOperationBusy(false);
+      closeFileOperation();
+      toast(result.message);
+      await loadPermissionOverview();
+    } catch (error) {
+      setFileOperationBusy(false);
+      $('fileOperationStatus').textContent = error.message;
+    }
+  };
 }
 
-async function saveApprovedDownload(fileId,ticket=''){
-  const url='/api/file/'+encodeURIComponent(fileId)+'/download?'+new URLSearchParams({ticket});
-  const token=sessionStorage.getItem('fileFinderAccessToken') || '';
-  if(!token){location.assign(url);return;}
-  const response=await fetch(url,{headers:{'X-App-Token':token}});
-  if(!response.ok){const data=await response.json();throw Error(data.detail || '下载失败');}
-  const blob=URL.createObjectURL(await response.blob());
-  const link=document.createElement('a');link.href=blob;
-  const encoded=response.headers.get('Content-Disposition')?.match(/filename\*=UTF-8''(.+)/i);
-  link.download=encoded?decodeURIComponent(encoded[1]):'文件';
-  link.click();setTimeout(()=>URL.revokeObjectURL(blob),60000);
+async function saveSessionDownload(url, fallbackName) {
+  const token = sessionStorage.getItem('fileFinderAccessToken');
+  const response = await fetch(url, { headers: token ? { 'X-App-Token': token } : {} });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw Error(typeof data.detail === 'string' ? data.detail : '下载失败 (' + response.status + ')');
+  }
+  const blob = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = blob;
+  const encoded = response.headers.get('Content-Disposition')?.match(/filename\*=UTF-8''([^;]+)/i);
+  link.download = encoded ? decodeURIComponent(encoded[1]) : fallbackName;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(blob), 60000);
 }
+
+async function saveApprovedDownload(fileId, ticket = '') {
+  const url = '/api/file/' + encodeURIComponent(fileId) + '/download?' + new URLSearchParams({ticket});
+  if (!sessionStorage.getItem('fileFinderAccessToken')) { location.assign(url); return; }
+  await saveSessionDownload(url, '文件');
+}
+
+$('reportAuditDownload').onclick = async event => {
+  event.preventDefault();
+  const link = event.currentTarget;
+  if (link.getAttribute('aria-busy') === 'true') return;
+  link.setAttribute('aria-busy', 'true');
+  try {
+    await saveSessionDownload(link.href, '异常清单-' + reportAudit.date + '.csv');
+  } catch (error) {
+    toast(error.message || '异常清单下载失败', 'error');
+  } finally {
+    link.removeAttribute('aria-busy');
+  }
+};
 document.addEventListener('click',event=>{
   const link=event.target.closest('a[download]');
   if(!link || !sessionStorage.getItem('fileFinderAccessToken'))return;

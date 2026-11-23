@@ -7,7 +7,7 @@
 
 <link rel="stylesheet" href="/static/theme.css?v=20261112-pine">
 <link rel="stylesheet" href="/static/base.css?v=20261112-pine">
-<link rel="stylesheet" href="/static/portal.css?v=20261113-workspace-navigation2">
+<link rel="stylesheet" href="/static/portal.css?v=20261124-feishu-workspace">
 <link rel="stylesheet" href="/static/ui.css?v=20261112-pine">
 </head>
 <body class="workspace-app">
@@ -97,17 +97,24 @@
 </div>
 <div class="workspace-nav-group" data-group="manage">
 <button class="workspace-nav-trigger" aria-expanded="false" aria-controls="navGroup-manage">管理<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button>
-<div class="workspace-nav-menu" id="navGroup-manage" hidden><button class="nav-mode-btn " id="navPermTab" onclick="switchNavMode('permission')" title="人员权限（5）" aria-current="false">
-<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-<use href="#i-users"/>
-</svg>
-<span>人员权限</span>
-</button><button class="nav-mode-btn " id="navSyncTab" onclick="switchNavMode('sync')" title="索引与同步（6）" aria-current="false">
-<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-<use href="#i-refresh"/>
-</svg>
-<span>索引与同步</span>
-</button></div>
+<div class="workspace-nav-menu" id="navGroup-manage" hidden>
+<button class="nav-mode-btn" id="navMembersTab" onclick="switchNavMode('members')" title="成员管理（5）" aria-current="false" style="display:none">
+<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg>
+<span>成员管理</span>
+</button>
+<button class="nav-mode-btn" id="navPermTab" onclick="switchNavMode('access')" title="文件权限" aria-current="false" style="display:none">
+<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-shield-check"/></svg>
+<span>文件权限</span>
+</button>
+<button class="nav-mode-btn" id="navSyncTab" onclick="switchNavMode('sync')" title="文件索引（6）" aria-current="false">
+<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-refresh"/></svg>
+<span>文件索引</span>
+</button>
+<button class="nav-mode-btn" id="navNotificationsTab" onclick="switchNavMode('notifications')" title="推送任务" aria-current="false" style="display:none">
+<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-inbox"/></svg>
+<span>推送任务</span>
+</button>
+</div>
 </div>
 </nav>
 <div class="sidebar-bottom">
@@ -529,7 +536,7 @@
     </section>
 
     <!-- 视图 3：归档合规时效监控 (完整保留) -->
-    <section id="archiveView" class="hidden archive-shell"><div class="portal-page-heading"><div><h1>归档合规</h1><p id="portalArchiveDescription">查看归档待办、审核凭证与管理监控规则。</p></div><span class="portal-rule-rate" id="portalArchiveRate">当前规则达标率：待核验</span></div><div id="portalArchiveNotice" class="portal-notice hidden"></div>
+    <section id="archiveView" class="hidden archive-shell"><div class="portal-page-heading"><div><h1>归档合规</h1><p id="portalArchiveDescription">查看归档待办、审核凭证与管理监控规则。</p></div><div class="report-archive-actions"><span class="portal-rule-rate" id="portalArchiveRate">当前规则达标率：待核验</span><button type="button" class="portal-button hidden" id="openDailyReportAudit" onclick="switchNavMode('report-audit')">日报明细</button></div></div><div id="portalArchiveNotice" class="portal-notice hidden"></div>
       <!-- 顶部 5 大合规统筹指标 -->
       <div class="catalog-overview-grid">
         <div class="catalog-kpi-card">
@@ -638,6 +645,35 @@
       </div>
     </section>
 
+    <section id="reportAuditView" class="hidden archive-shell" aria-labelledby="reportAuditTitle">
+      <div class="portal-page-heading report-audit-heading">
+        <div><h1 id="reportAuditTitle">报表更新明细</h1><p>按北京时间查看各监控报表的每日更新与检测结果。</p></div>
+        <button type="button" class="portal-button" onclick="switchNavMode('archive')">返回归档合规</button>
+      </div>
+      <div class="report-audit-panel">
+        <div class="report-audit-toolbar">
+          <label class="report-audit-date" for="reportAuditDate">检测日期<input type="date" id="reportAuditDate" onchange="changeDailyReportDate()"></label>
+          <div class="report-audit-filters" role="group" aria-label="检测状态">
+            <button type="button" data-report-audit-status="all" aria-pressed="true" onclick="setDailyReportStatus('all')">全部 <span>—</span></button>
+            <button type="button" data-report-audit-status="normal" aria-pressed="false" onclick="setDailyReportStatus('normal')">正常 <span>—</span></button>
+            <button type="button" data-report-audit-status="abnormal" aria-pressed="false" onclick="setDailyReportStatus('abnormal')">异常 <span>—</span></button>
+            <button type="button" data-report-audit-status="pending" aria-pressed="false" onclick="setDailyReportStatus('pending')">待检测 <span>—</span></button>
+          </div>
+          <a id="reportAuditDownload" class="portal-button report-audit-download" href="/api/reports/daily/abnormal.csv"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>下载异常清单</a>
+        </div>
+        <div id="reportAuditMessage" class="report-audit-message hidden" role="status" aria-live="polite"></div>
+        <div class="report-audit-table-wrap">
+          <table class="report-audit-table" aria-label="当日报表检测明细">
+            <thead><tr>
+              <th scope="col">报表 / 监控规则</th><th scope="col">日期</th><th scope="col">状态</th><th scope="col">更新数量</th>
+              <th scope="col">最近更新</th><th scope="col">检测截止</th><th scope="col">责任人</th><th scope="col">检测说明</th>
+            </tr></thead>
+            <tbody id="reportAuditTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <!-- 视图 4：下载审批中心 (完整保留) -->
     <section id="approvalView" class="hidden archive-shell">
       <div class="panel" style="padding:20px;border-radius:14px;background:#fff;border:1px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.02)">
@@ -652,93 +688,88 @@
       </div>
     </section>
 
-    <!-- 视图 5：人员与账号权限中心 (完整保留) -->
-    <section id="permissionView" class="hidden archive-shell"><section id="feishuPanel" class="directory-grant-panel"></section>
-      <div id="directoryGrantPanel" class="directory-grant-panel"></div>
-      <!-- 4 大指标卡片 -->
-      <div class="catalog-overview-grid" style="grid-template-columns: repeat(4, 1fr);">
-        <div class="catalog-kpi-card">
-          <div class="kpi-icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg></div>
-          <div class="kpi-meta-wrap">
-            <div class="kpi-label-text">受控企业人员总数</div>
-            <div class="kpi-value-text" id="permTotalUsers">--</div>
-            <div class="kpi-sub-text">企业手机号实名账号</div>
-          </div>
-        </div>
-        <div class="catalog-kpi-card">
-          <div class="kpi-icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--warning)"><use href="#i-shield"/></svg></div>
-          <div class="kpi-meta-wrap">
-            <div class="kpi-label-text">系统超级管理员</div>
-            <div class="kpi-value-text" id="permSuperAdmins">--</div>
-            <div class="kpi-sub-text">全系统配置与人员角色权限</div>
-          </div>
-        </div>
-        <div class="catalog-kpi-card">
-          <div class="kpi-icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--success)"><use href="#i-shield-check"/></svg></div>
-          <div class="kpi-meta-wrap">
-            <div class="kpi-label-text">部门权限管理员</div>
-            <div class="kpi-value-text" id="permDeptAdmins">--</div>
-            <div class="kpi-sub-text">维护归档规则与审批工单</div>
-          </div>
-        </div>
-        <div class="catalog-kpi-card">
-          <div class="kpi-icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-zap"/></svg></div>
-          <div class="kpi-meta-wrap">
-            <div class="kpi-label-text">内网运行模式</div>
-            <div class="kpi-value-text" style="font-size:14px;color:var(--success);font-weight:600">纯内网免映射</div>
-            <div class="kpi-sub-text">使用手机号与密码登录</div>
-          </div>
-        </div>
-      </div>
+    <section id="membersView" class="hidden archive-shell" aria-labelledby="membersTitle">
+      <div class="portal-page-heading"><h1 id="membersTitle">成员管理</h1></div>
+      <p id="memberLoadStatus" role="status" hidden></p>
+      <section id="memberPanel" aria-label="成员名单" class="directory-grant-panel"></section>
+    </section>
 
-      <!-- 企业内网独立账号管理安全策略面板 -->
-      <div class="panel" style="margin-top:16px;padding:20px;border-radius:14px;background:#ffffff;border:1px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.02)">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
-          <div style="display:flex;align-items:center;gap:10px">
-            <div style="width:34px;height:34px;border-radius:10px;background:var(--ink);display:flex;align-items:center;justify-content:center;color:#ffffff;box-shadow:var(--shadow-sm)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg></div>
-            <div>
-              <div style="font-size:14px;font-weight:700;color:#171916">成员与访问权限</div>
-              <div style="font-size:11.5px;color:#6f736b">管理成员账号、系统角色与可访问的文件目录。</div>
+    <section id="permissionView" class="hidden archive-shell">
+      <div class="portal-page-heading"><h1>文件权限</h1></div>
+      <div class="permission-tabs" id="permissionTabs" role="tablist" aria-label="文件权限">
+        <button id="showFolderGrants" role="tab" type="button" data-section="grants" aria-controls="directoryGrantPanel" aria-selected="true" tabindex="0">文件夹授权</button>
+        <button id="showGrantHistory" role="tab" type="button" data-section="audit" aria-controls="permissionAuditPanel" aria-selected="false" tabindex="-1">授权记录</button>
+      </div>
+      <p id="permissionLoadStatus" role="status" hidden></p>
+      <section id="directoryGrantPanel" role="tabpanel" aria-labelledby="showFolderGrants" class="directory-grant-panel" hidden></section>
+      <section id="permissionAuditPanel" role="tabpanel" aria-labelledby="showGrantHistory" class="directory-grant-panel" hidden></section>
+    </section>
+
+    <section id="notificationsView" class="hidden archive-shell" aria-labelledby="notificationTitle">
+      <div class="portal-page-heading">
+        <div><h1 id="notificationTitle">推送任务</h1><p>按北京时间，将文件更新和归档异常日报发给指定成员或群。</p></div>
+        <button id="newNotificationTask" type="button" class="portal-button primary" disabled>新建任务</button>
+      </div>
+      <section class="home-panel notification-panel">
+        <div class="home-panel-heading"><h2>定时推送 <span id="notificationTotal"></span></h2>
+          <button id="refreshNotificationTasks" type="button" class="tree-tool-btn">刷新</button></div>
+        <p id="notificationListStatus" role="status"></p>
+        <div class="notification-table-scroll"><table class="portal-table notification-table">
+          <thead><tr><th scope="col">任务名称</th><th scope="col">接收对象</th><th scope="col">发送计划</th>
+            <th scope="col">最近发送</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+          <tbody id="notificationTaskRows"></tbody>
+        </table></div>
+      </section>
+      <details id="notificationPreview" class="home-panel notification-preview" hidden>
+        <summary>查看今日日报内容</summary>
+        <p>同日任务共用首轮推送时的归档明细。</p><pre id="notificationPreviewText"></pre>
+      </details>
+      <dialog id="notificationTaskDialog" class="notification-dialog" aria-labelledby="notifyEditorTitle">
+        <form id="notificationTaskForm">
+          <header><h2 id="notifyEditorTitle">新建推送任务</h2></header>
+          <div class="notification-fields">
+            <label>任务名称<input id="notifyName" maxlength="80" required autocomplete="off" placeholder="例如：运营组晚间日报"></label>
+            <div class="notification-field-pair">
+              <label>接收方式<select id="notifyRecipientType"><option value="open_id">个人私聊</option><option value="chat_id">指定飞书群</option></select></label>
+              <label>每日发送时间（北京时间）<input id="notifyTime" type="time" step="60" required></label>
             </div>
+            <label id="notifyMemberField">接收成员<select id="notifyMember" required></select></label>
+            <div id="notifyGroupField" hidden>
+              <label>飞书群 ID<input id="notifyGroup" placeholder="oc_…" autocomplete="off" aria-describedby="notifyGroupHelp"></label>
+              <p id="notifyGroupHelp">从飞书群设置复制群 ID。先把「文件索引」机器人添加到群，并允许它发言。</p>
+              <button type="button" id="notifyCheckGroup" class="tree-tool-btn">检查机器人是否在群</button>
+              <p id="notifyGroupFeedback" role="status"></p>
+            </div>
+            <div><label class="notification-checkbox"><input type="checkbox" id="notifyEnabled" aria-describedby="notifyScheduleHint">启用定时发送</label>
+              <p id="notifyScheduleHint">若已过发送时间且该任务今天尚未发送，启用后将在下次调度发送。</p></div>
+            <p id="notifyFormStatus" role="alert"></p>
           </div>
-          <button class="btn-archive-primary" onclick="openCreateUserModal()" style="font-weight:600;padding:0 14px;height:34px">
-            <span>+ 新增成员</span>
-          </button>
+          <footer><button id="notifyCancel" type="button" class="portal-button">取消</button>
+            <button id="notifySave" type="submit" class="portal-button primary">保存任务</button></footer>
+        </form>
+      </dialog>
+      <dialog id="notificationDeleteDialog" class="notification-dialog small" aria-labelledby="notifyDeleteTitle">
+        <header><h2 id="notifyDeleteTitle">删除推送任务</h2></header>
+        <div class="notification-fields"><p id="notifyDeleteText"></p><p id="notifyDeleteStatus" role="alert"></p></div>
+        <footer><button id="notifyCancelDelete" type="button" class="portal-button" autofocus>取消</button>
+          <button id="notifyConfirmDelete" type="button" class="portal-button notify-danger">确认删除</button></footer>
+      </dialog>
+      <dialog id="notificationSendDialog" class="notification-dialog small" aria-labelledby="notifySendTitle">
+        <header><h2 id="notifySendTitle">立即推送日报</h2></header>
+        <div class="notification-fields">
+          <p id="notifySendText"></p>
+          <p id="notifySendHint"></p>
+          <p id="notifySendStatus" role="status"></p>
         </div>
-      </div>
-
-      <!-- 人员权限维护表格 -->
-      <div class="panel" style="margin-top:16px;padding:0;overflow:hidden;border-radius:14px;background:#ffffff;border:1px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.02)">
-        <div style="padding:14px 20px;border-bottom:1px solid #f4f4f3;display:flex;justify-content:space-between;align-items:center;background:#fcfcfc">
-          <div>
-            <div style="font-size:13.5px;font-weight:700;color:#171916">成员列表</div>
-            <div style="font-size:11px;color:#6f736b;margin-top:2px">在这里管理成员角色、账号状态和登录凭据。</div>
-          </div>
-          <span style="font-size:11.5px;color:#6f736b">仅超级管理员可管理成员</span>
-        </div>
-        <table class="catalog-table">
-          <thead>
-            <tr>
-              <th style="width:16%">成员姓名</th>
-              <th style="width:18%">登录手机号 (账号)</th>
-              <th style="width:16%">密码凭据状态</th>
-              <th style="width:20%">所属业务部门</th>
-              <th style="width:16%">系统权限角色</th>
-              <th style="width:8%">账号状态</th>
-              <th style="width:12%;text-align:right">操作</th>
-            </tr>
-          </thead>
-          <tbody id="permissionUsersTableBody">
-            <tr><td colspan="7" style="text-align:center;padding:40px;color:#6f736b">加载成员列表中…</td></tr>
-          </tbody>
-        </table>
-      </div>
+        <footer><button id="notifyCancelSend" type="button" class="portal-button" autofocus>取消</button>
+          <button id="notifyConfirmSend" type="button" class="portal-button primary">确认发送</button></footer>
+      </dialog>
     </section>
 
     <section id="syncView" class="hidden">
       <div class="portal-page-heading">
 <div>
-<h1>索引与同步</h1>
+<h1>文件索引</h1>
 <p id="portalSyncDescription">查看索引状态与扫描计划。新文件在相应扫描完成后进入检索范围。</p>
 </div>
 <button class="portal-button" onclick="refreshPortalSync()">刷新状态</button>
@@ -766,7 +797,7 @@
         <div class="sync-left-column">
 <section class="home-panel">
 <div class="home-panel-heading">
-<h2>后台任务</h2>
+<h2>索引任务</h2>
 <span class="portal-muted">按配置运行</span>
 </div>
 <div class="portal-table-scroll">
@@ -794,15 +825,6 @@
 <tr>
 <td>
 <b>重建检索索引</b><small>重新生成检索词，完整扫描成功后生效</small></td><td>手动</td><td>按需运行</td><td><button class="table-link" data-scan-button onclick="startScan('rebuild')">重建索引</button></td></tr>
-<tr><td><b>归档检测</b>
-<small>对照规则，生成归档待办</small>
-</td>
-<td id="portalArchiveInterval">—</td>
-<td id="portalArchiveJobState">—</td>
-<td>
-<button class="table-link" id="portalRunArchiveCheck" onclick="runPortalArchiveCheck()">立即运行</button>
-</td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -1145,7 +1167,11 @@
         </div>
       </div>
       <div>
-        <label style="font-size:12.5px;font-weight:700;color:#171916;display:block;margin-bottom:6px">分配系统权限角色：</label>
+        <label for="newUserJob" class="member-form-label">自定义岗位</label>
+        <input type="text" id="newUserJob" class="sort-select-pill member-job-input" maxlength="80">
+      </div>
+      <div>
+        <label for="newUserRole" class="member-form-label">分配角色</label>
         <select id="newUserRole" class="sort-select-pill" style="width:100%">
           <option value="user">普通用户（报表检索、AI 找表与下载申请）</option>
           <option value="dept_admin">部门管理员 (归档规则维护与审核关闭)</option>
@@ -1212,17 +1238,24 @@
   <div class="toast-container" id="toastContainer" role="status" aria-live="polite"></div>
 
   <!-- 登录遮罩与下载弹窗 -->
-  <div id="loginOverlay" class="modal-overlay" style="display:none">
-    <div class="modal-card" style="max-width:380px;padding:28px 24px;text-align:center">
-      <div style="width:42px;height:42px;border-radius:10px;background:var(--ink);color:#FFF;display:flex;align-items:center;justify-content:center;margin:0 auto 14px auto;font-weight:800;font-size:18px">EA</div>
-      <div style="font-size:16px;font-weight:700;color:var(--ink)">企业文件资产智能检索中心</div>
-      <div style="font-size:12px;color:var(--muted);margin:6px 0 20px 0">请使用员工账号登录以获取操作与审批权限</div>
-      <input id="loginPhone" class="modal-input" type="tel" value="13800100001" placeholder="员工手机号 / 账号" autocomplete="username" style="width:100%;height:38px;padding:0 12px;border-radius:6px;border:1px solid var(--line-strong);margin-bottom:10px;font-size:13px">
-      <input id="loginPassword" class="modal-input" type="password" placeholder="密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()" style="width:100%;height:38px;padding:0 12px;border-radius:6px;border:1px solid var(--line-strong);margin-bottom:14px;font-size:13px">
-      <button class="btn-action-primary" onclick="doLogin()" style="width:100%;height:38px;border-radius:6px;font-weight:600;font-size:13px">登 录</button>
-      <a id="feishuLoginLink" hidden href="/integrations/feishu/login">使用飞书登录</a>
-      <div id="loginError" style="color:var(--danger);font-size:11.5px;margin-top:10px;min-height:16px"></div>
-    </div>
+  <div id="loginOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="loginTitle" style="display:none">
+    <section class="modal-card login-card">
+      <span aria-hidden="true" class="login-brand-mark">EA</span>
+      <h1 id="loginTitle">企业文件资产智能检索中心</h1>
+      <div class="login-feishu-method" data-feishu-login hidden>
+        <a id="feishuLoginLink" class="login-feishu-button" href="/integrations/feishu/login">飞书登录</a>
+        <div class="login-divider">或使用账号密码</div>
+      </div>
+      <form class="login-password-form" onsubmit="event.preventDefault();doLogin()">
+        <label for="loginPhone">手机号</label>
+        <input id="loginPhone" class="modal-input" type="tel" placeholder="员工手机号 / 账号" autocomplete="username" value="13800100001">
+        <label for="loginPassword">密码</label>
+        <input id="loginPassword" class="modal-input" type="password" placeholder="请输入密码" autocomplete="current-password" autocapitalize="off" spellcheck="false" value="">
+        <button class="btn-action-primary" type="submit">使用账号密码登录</button>
+      </form>
+      <div id="loginError" class="login-error" role="status" aria-live="polite"></div>
+      <a class="login-showcase-link" href="/showcase">返回演示总览</a>
+    </section>
   </div>
 
   <div id="downloadModal" class="modal-overlay" style="display:none" onclick="if(event.target===this)this.style.display='none'">
@@ -1243,10 +1276,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261112-tabs"></script>
-<script src="/static/portal.js?v=20261112-pine"></script>
-<script src="/static/operations.js?v=20261108-robot"></script>
-<script src="/static/workspace.js?v=20261113-showcase-panels"></script>
+<script src="/static/app.js?v=20261124-feishu-workspace"></script>
+<script src="/static/portal.js?v=20261124-feishu-workspace"></script>
+<script src="/static/operations.js?v=20261124-feishu-workspace"></script>
+<script src="/static/workspace.js?v=20261124-feishu-workspace"></script>
 <script src="/static/robot-drag.js?v=20261108"></script>
 </body>
 </html>

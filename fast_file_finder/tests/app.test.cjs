@@ -30,3 +30,54 @@ test('opening a file from approval details dismisses the modal covering the read
   assert.equal(openedFile, 42);
   assert.equal(modal, null, 'the document must not remain covered by approval details');
 });
+
+test('member and access pages finish independently while another retained tab is active', async () => {
+  const source = readFileSync(join(__dirname, '../static/app.js'), 'utf8');
+  const pending = [], renders = [];
+  const nodes = { memberLoadStatus: {}, permissionLoadStatus: {}, directoryGrantPanel: {replaceChildren() {}} };
+  const context = {
+    currentUser: {role: 'super_admin'}, currentNavMode: 'members', URLSearchParams,
+    permissionOverviewRequests: {members: 0, access: 0}, permState: {},
+    $: id => nodes[id], location: {search: '?tab=access&section=audit'},
+    permissionTabs: {querySelectorAll: () => [{dataset: {section: 'audit'}}]},
+    api: () => new Promise(resolve => pending.push(resolve)),
+    renderMemberPanel: () => renders.push('members'),
+    showPermissionSection: section => renders.push(section),
+  };
+  vm.runInNewContext(source.slice(source.indexOf('async function loadPermissionOverview('),
+    source.indexOf('function openResetPasswordModal(')), context);
+  const members = context.loadPermissionOverview('members');
+  context.currentNavMode = 'access';
+  const access = context.loadPermissionOverview('access');
+  context.currentNavMode = 'catalog';
+  context.location.search = '?tab=catalog';
+  pending[1]({ok: true, users: []}); await access;
+  pending[0]({ok: true, users: []}); await members;
+  assert.deepEqual(renders, ['audit', 'members']);
+});
+
+test('notification list survives a tab switch and discards an earlier session’s response', async () => {
+  const source = readFileSync(join(__dirname, '../static/operations.js'), 'utf8');
+  const pending = [], nodes = {};
+  const context = {
+    $: id => nodes[id] ||= {replaceChildren() { this.textContent = this.innerHTML = ''; }},
+    currentUser: {role: 'super_admin'}, currentNavMode: 'notifications',
+    notificationState: {request: 0}, notificationTasksUrl: '/api/feishu/tasks',
+    notificationRow: task => task.name,
+    api: () => new Promise(resolve => pending.push(resolve)),
+  };
+  vm.runInNewContext(source.slice(source.indexOf('function resetNotificationSession('),
+    source.indexOf('function selectNotificationType(')), context);
+  const first = context.loadNotificationTasks();
+  context.currentNavMode = 'members';
+  pending[0]({tasks: [{name: '日报'}], preview: '示例'}); await first;
+  assert.equal(nodes.notificationTaskRows.innerHTML, '日报');
+  assert.equal(nodes.newNotificationTask.disabled, false);
+  const second = context.loadNotificationTasks();
+  context.resetNotificationSession();
+  pending[1]({tasks: [{name: '旧会话'}]}); await second;
+  assert.equal(nodes.notificationTaskRows.innerHTML, '');
+  assert.equal(nodes.notificationPreviewText.textContent, '');
+  assert.equal(nodes.newNotificationTask.disabled, true);
+  assert.equal(context.notificationState.tasks.length, 0);
+});
