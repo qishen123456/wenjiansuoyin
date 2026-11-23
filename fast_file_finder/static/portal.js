@@ -587,6 +587,14 @@ function renderGrantChoices(kind) {
 function updateGrantSelectionCount() {
   $('grantSelectionCount').textContent=`已选 ${grantSelectedSubjects.size} 个成员／部门、${grantSelectedPaths.size} 个文件夹；共 ${grantSelectedSubjects.size*grantSelectedPaths.size} 组（每批最多 500 组）`;
 }
+let grantFeishuSubjects = {};
+
+function grantSubjectLabel(type, key) {
+  if (type === 'user') return permState.users.find(user => String(user.id) === key)?.name || `成员 #${key}`;
+  if (type === 'department') return key + '（自定义部门）';
+  return grantFeishuSubjects[type]?.find(subject => subject.key === key)?.label || `已变更的飞书授权对象 · ${key}`;
+}
+
 async function loadDirectoryGrantPanel() {
   const panel=$('directoryGrantPanel');
   if(!panel || currentUser?.role!=='super_admin')return;
@@ -594,13 +602,14 @@ async function loadDirectoryGrantPanel() {
   try {
     const [permissions,tree]=await Promise.all([api('/api/system/directory-grants'),api('/api/catalog/tree')]);
     directoryGrantData=permissions.grants || [];
+    grantFeishuSubjects=permissions.feishu_subjects || {};
     grantFolderOptions=[];grantSelectedPaths=new Set();grantSelectedSubjects=new Set();grantBatchRevision='';
     const collect=node=>{if(!node)return;grantFolderOptions.push([node.path,node.path===tree.tree?.path?'整个文件根目录':node.path.replace(tree.tree?.path || '', '').replace(/^\//,'')]);(node.children || []).forEach(collect);};
     collect(tree.tree || tree);
     panel.innerHTML=`<div class="grant-heading"><div><h3>文件操作权限</h3><p>阅读、上传、下载和更新分别授权。子目录继承，明确禁止优先；多个来源的下载规则以需审批优先。</p></div><button class="tree-tool-btn" id="refreshGrantPanel">刷新</button></div>
       ${!permissions.enabled?'<p class="grant-warning">目录权限校验当前已关闭，配置不会拦截文件访问；请开启 DIRECTORY_ACL_ENABLED 后使用。</p>':''}
       <p>超级管理员拥有根目录内的完整权限。上传与更新还需数据源允许写入，默认只读挂载需由管理员配置。</p>
-      <div class="grant-toolbar"><label>设置方式 <select id="grantDirection"><option value="people">按人员设置</option><option value="folders">按文件夹设置</option></select></label><label>授权对象 <select id="grantSubjectType"><option value="user">成员</option><option value="department">部门</option></select></label><button id="clearGrantSelection" class="tree-tool-btn">清空选择</button></div>
+      <div class="grant-toolbar"><label>设置方式 <select id="grantDirection"><option value="people">按人员设置</option><option value="folders">按文件夹设置</option></select></label><label>授权对象 <select id="grantSubjectType"><option value="user">成员</option><option value="department">自定义部门</option><option value="feishu_department">飞书部门</option><option value="feishu_job">飞书部门 · 岗位</option></select></label><button id="clearGrantSelection" class="tree-tool-btn">清空选择</button></div>
       <div class="grant-pickers" id="grantPickers"><section id="grantPeoplePane"><h4>选择成员／部门</h4><input id="grantSubjectSearch" placeholder="搜索成员或部门" aria-label="搜索授权对象"><div class="grant-choices" id="grantSubjectChoices"></div></section><section id="grantFolderPane"><h4>选择文件夹（包含子目录）</h4><input id="grantPathSearch" placeholder="搜索文件夹名称或路径" aria-label="搜索文件夹"><div class="grant-choices" id="grantPathChoices"></div><div class="grant-empty-folder"><input id="grantExtraPath" placeholder="填写未入索引或空文件夹的完整路径" aria-label="补充文件夹路径"><button class="tree-tool-btn" id="addGrantPath">加入</button></div></section></div>
       <div class="grant-selection-count" id="grantSelectionCount"></div>
       <div class="grant-toolbar"><label>权限模板 <select id="grantTemplate"><option value="">自定义</option><option value="readonly">只读</option><option value="request">阅读并申请下载</option><option value="submit">阅读并上传新文件</option></select></label></div><div class="grant-actions-grid">${Object.entries(grantActionLabels).map(([key,label])=>`<label>${label}<select id="grantAction_${key}"><option value="">不改动／不配置</option><option value="deny">禁止</option>${key==='download'?'<option value="approval">需审批</option><option value="direct">直接下载</option>':'<option value="allow">允许</option>'}</select></label>`).join('')}</div>
@@ -609,7 +618,22 @@ async function loadDirectoryGrantPanel() {
       <div id="directoryGrantStatus" role="status" aria-live="polite"></div><div id="grantBatchPreview"></div><div id="grantEffectiveResult"></div>
       <details class="grant-existing"><summary>现有授权与继承来源</summary><div id="directoryGrantList" class="directory-grant-list"></div></details>
       <details class="grant-existing"><summary>最近的权限变更记录</summary><div class="grant-audit">${(permissions.audit||[]).map(row=>`<div>操作人 #${Number(row.actor_id)} · ${esc(portalMonitorTime(row.created_at))} · ${esc(({save:'设置授权',delete:'撤销授权',batch_merge:'批量调整',batch_revoke:'批量撤销',batch_replace:'批量替换'})[row.action]||'权限变更')}<small>${esc(row.grant_json)}</small></div>`).join('') || '<p>暂无记录</p>'}</div></details>`;
-    const subjects=()=>{grantSelectedSubjects.clear();grantSubjectOptions=$('grantSubjectType').value==='department'?[...new Set(permState.users.map(u=>u.department).filter(Boolean))].map(d=>[d,d]):permState.users.filter(u=>u.role!=='super_admin').map(u=>[String(u.id),`${u.name} · ${u.department||'未填部门'}`]);renderGrantChoices('subjects');invalidateGrantPreview();updateGrantSelectionCount();};
+    const subjects = () => {
+      grantSelectedSubjects.clear();
+      const type = $('grantSubjectType').value;
+      if (type === 'department') {
+        grantSubjectOptions = [...new Set(permState.users.map(user => user.department).filter(Boolean))].map(dept => [dept, dept]);
+      } else if (type === 'user') {
+        grantSubjectOptions = permState.users.filter(user => user.role !== 'super_admin').map(user => [
+          String(user.id), `${user.name} · ${user.department || '未填部门'}`
+        ]);
+      } else {
+        grantSubjectOptions = (grantFeishuSubjects[type] || []).map(subject => [subject.key, subject.label]);
+      }
+      renderGrantChoices('subjects');
+      invalidateGrantPreview();
+      updateGrantSelectionCount();
+    };
     $('grantSubjectType').onchange=subjects;subjects();renderGrantChoices('paths');
     $('grantSubjectSearch').oninput=()=>renderGrantChoices('subjects');$('grantPathSearch').oninput=()=>renderGrantChoices('paths');
     $('grantDirection').onchange=()=>{$('grantPeoplePane').style.order=$('grantDirection').value==='folders'?'2':'0';};
@@ -630,7 +654,7 @@ async function loadDirectoryGrantPanel() {
 }
 function renderDirectoryGrants(){
   const list=$('directoryGrantList');if(!list)return;
-  list.innerHTML=directoryGrantData.map(grant=>{const subject=grant.subject_type==='user'?permState.users.find(u=>String(u.id)===grant.subject_key)?.name||`成员 #${grant.subject_key}`:`${grant.subject_key}（部门）`;return `<div class="directory-grant-row"><div><strong>${esc(subject)}</strong><small>${esc(grant.target_path)} · 子目录继承</small><span>${esc(grantSummary(grant.permissions))}</span></div><button class="tree-tool-btn" data-revoke-grant="${grant.id}">撤销整组</button></div>`;}).join('') || '<p>暂无授权；普通成员默认无文件权限。</p>';
+  list.innerHTML=directoryGrantData.map(grant=>{const subject=grantSubjectLabel(grant.subject_type, grant.subject_key);return `<div class="directory-grant-row"><div><strong>${esc(subject)}</strong><small>${esc(grant.target_path)} · 子目录继承</small><span>${esc(grantSummary(grant.permissions))}</span></div><button class="tree-tool-btn" data-revoke-grant="${grant.id}">撤销整组</button></div>`;}).join('') || '<p>暂无授权；普通成员默认无文件权限。</p>';
   list.querySelectorAll('[data-revoke-grant]').forEach(button=>button.onclick=async()=>{
     if(!confirm('撤销这组本级授权？上级或部门权限仍可能生效。'))return;
     button.disabled=true;
@@ -652,7 +676,7 @@ async function submitGrantBatch(preview){
 }
 async function checkEffectiveGrant(){
   if($('grantSubjectType').value!=='user'||grantSelectedSubjects.size!==1||grantSelectedPaths.size!==1){$('directoryGrantStatus').textContent='请只选择一名成员和一个文件夹。';return;}
-  try{const data=await api('/api/system/directory-grants/effective?'+new URLSearchParams({user_id:[...grantSelectedSubjects][0],path:[...grantSelectedPaths][0]}));$('grantEffectiveResult').innerHTML=`<h4>${esc(data.user_name)}的最终权限</h4><p>${esc(grantSummary(data.permissions))}</p><ul>${data.sources.map(s=>`<li>${esc(s.subject_type==='department'?'部门 '+s.subject_key:'个人授权')} · ${esc(s.target_path)}<small>${esc(grantSummary(s.permissions))}</small></li>`).join('')||'<li>没有匹配的授权来源，默认禁止</li>'}</ul>`;}
+  try{const data=await api('/api/system/directory-grants/effective?'+new URLSearchParams({user_id:[...grantSelectedSubjects][0],path:[...grantSelectedPaths][0]}));$('grantEffectiveResult').innerHTML=`<h4>${esc(data.user_name)}的最终权限</h4><p>${esc(grantSummary(data.permissions))}</p><ul>${data.sources.map(s=>`<li>${esc(grantSubjectLabel(s.subject_type, s.subject_key))} · ${esc(s.target_path)}<small>${esc(grantSummary(s.permissions))}</small></li>`).join('')||'<li>没有匹配的授权来源，默认禁止</li>'}</ul>`;}
   catch(error){$('directoryGrantStatus').textContent=error.message;}
 }
 

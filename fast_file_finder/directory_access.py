@@ -6,9 +6,27 @@ import json
 import posixpath
 import re
 import sqlite3
+from typing import Literal
 
 
 OPERATIONS = ('read', 'upload', 'download', 'update')
+SubjectType = Literal['user', 'department', 'feishu_department', 'feishu_job']
+
+GRANT_SCHEMA = """CREATE TABLE IF NOT EXISTS directory_grants (
+    id INTEGER PRIMARY KEY, root_key TEXT NOT NULL,
+    subject_type TEXT NOT NULL CHECK(subject_type IN ('user','department','feishu_department','feishu_job')),
+    subject_key TEXT NOT NULL, target_path TEXT NOT NULL,
+    effect TEXT NOT NULL CHECK(effect IN ('allow','deny')),
+    created_by INTEGER NOT NULL, created_at REAL NOT NULL, permissions TEXT,
+    UNIQUE(root_key,subject_type,subject_key,target_path)
+)"""
+FEISHU_DEPARTMENT_TREE = """WITH RECURSIVE department_tree(department_id, ancestor_id) AS (
+    SELECT open_id, open_id FROM feishu_departments
+    UNION
+    SELECT t.department_id, d.parent FROM department_tree t
+      JOIN feishu_departments d ON d.open_id=t.ancestor_id
+      JOIN feishu_departments parent ON parent.open_id=d.parent
+)"""
 
 
 def grant_permissions(row):
@@ -93,32 +111,73 @@ current: ContextVar[Policy | None] = ContextVar('directory_policy', default=None
 
 
 def initialize(conn):
-    conn.executescript('''
-        CREATE TABLE IF NOT EXISTS directory_grants (
-            id INTEGER PRIMARY KEY, root_key TEXT NOT NULL,
-            subject_type TEXT NOT NULL CHECK(subject_type IN ('user','department')),
-            subject_key TEXT NOT NULL, target_path TEXT NOT NULL,
-            effect TEXT NOT NULL CHECK(effect IN ('allow','deny')),
-            created_by INTEGER NOT NULL, created_at REAL NOT NULL,
-            UNIQUE(root_key,subject_type,subject_key,target_path)
-        );
-        CREATE TABLE IF NOT EXISTS directory_grant_audit (
-            id INTEGER PRIMARY KEY, actor_id INTEGER NOT NULL, action TEXT NOT NULL,
-            grant_json TEXT NOT NULL, created_at REAL NOT NULL
-        );
-    ''')
-    columns = {r[1] for r in conn.execute('PRAGMA table_info(directory_grants)')}
-    if 'permissions' not in columns:
-        conn.execute('ALTER TABLE directory_grants ADD COLUMN permissions TEXT')
+    conn.execute("""CREATE TABLE IF NOT EXISTS directory_grant_audit (
+        id INTEGER PRIMARY KEY, actor_id INTEGER NOT NULL, action TEXT NOT NULL,
+        grant_json TEXT NOT NULL, created_at REAL NOT NULL
+    )""")
+    existing = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='directory_grants'").fetchone()
+    if not existing:
+        conn.execute(GRANT_SCHEMA)
+    elif "'feishu_department'" not in existing[0]:
+        columns = {r[1] for r in conn.execute('PRAGMA table_info(directory_grants)')}
+        permissions = 'permissions' if 'permissions' in columns else 'NULL'
+        conn.execute('SAVEPOINT upgrade_grants')
+        try:
+            conn.execute('ALTER TABLE directory_grants RENAME TO prior_directory_grants')
+            conn.execute(GRANT_SCHEMA)
+            conn.execute(f"""INSERT INTO directory_grants
+                (id,root_key,subject_type,subject_key,target_path,effect,created_by,created_at,permissions)
+                SELECT id,root_key,subject_type,subject_key,target_path,effect,created_by,created_at,{permissions}
+                FROM prior_directory_grants""")
+            conn.execute('DROP TABLE prior_directory_grants')
+        except Exception:
+            conn.execute('ROLLBACK TO upgrade_grants')
+            raise
+        finally:
+            conn.execute('RELEASE upgrade_grants')
+
+
+def feishu_targets(conn):
+    departments = [{'key': row['open_id'], 'label': row['name']} for row in conn.execute(
+        'SELECT open_id,name FROM feishu_departments ORDER BY name,open_id')]
+    jobs = [dict(row) for row in conn.execute(FEISHU_DEPARTMENT_TREE + """ SELECT
+        d.open_id || '|' || p.job_key AS key, d.name || ' · ' || max(p.job_title) AS label
+        FROM feishu_member_profiles p JOIN feishu_members m ON m.open_id=p.open_id AND m.active=1
+        JOIN feishu_member_departments md ON md.open_id=p.open_id
+        JOIN department_tree t ON t.department_id=md.department_id
+        JOIN feishu_departments d ON d.open_id=t.ancestor_id
+        WHERE p.job_key<>'' AND p.job_title<>'' GROUP BY d.open_id,p.job_key ORDER BY label,key""")]
+    return {'feishu_department': departments, 'feishu_job': jobs}
+
+
+def user_grant_rows(conn, user, root_key):
+    local = """(subject_type='user' AND subject_key=?) OR (subject_type='department' AND subject_key=? AND subject_key<>'')"""
+    params = (root_key, str(user['id']), user.get('department') or '')
+    feishu_id = user.get('feishu_id')
+    if not feishu_id or user.get('status') != 'active':
+        return conn.execute(f'SELECT * FROM directory_grants WHERE root_key=? AND ({local}) ORDER BY target_path,effect,id',
+                            params).fetchall()
+    return conn.execute("""WITH RECURSIVE linked_subjects(ancestor_id,job_key) AS (
+        SELECT md.department_id,p.job_key FROM feishu_member_profiles p
+        JOIN feishu_members m ON m.open_id=p.open_id AND m.active=1
+        JOIN feishu_member_departments md ON md.open_id=p.open_id
+        JOIN feishu_departments d ON d.open_id=md.department_id
+        WHERE p.open_id=? AND p.local_user_id=? AND p.match_status='matched'
+        UNION
+        SELECT d.parent, subject.job_key FROM linked_subjects subject
+        JOIN feishu_departments d ON d.open_id=subject.ancestor_id
+        JOIN feishu_departments parent ON parent.open_id=d.parent
+    ) SELECT * FROM directory_grants WHERE root_key=? AND (""" + local + """
+        OR (subject_type='feishu_department' AND subject_key IN (SELECT ancestor_id FROM linked_subjects))
+        OR (subject_type='feishu_job' AND subject_key IN (
+            SELECT ancestor_id || '|' || job_key FROM linked_subjects WHERE job_key<>''
+        ))) ORDER BY target_path,effect,id""", (feishu_id, user['id'], *params)).fetchall()
 
 
 def load_policy(conn, user, root_key, root):
     if user is None:
         return Policy(root_key, normalise(root), 0, False)
-    rows = conn.execute('''SELECT target_path,effect,permissions FROM directory_grants
-        WHERE root_key=? AND ((subject_type='user' AND subject_key=?)
-        OR (subject_type='department' AND subject_key=? AND subject_key<>''))
-        ORDER BY target_path,effect''', (root_key, str(user['id']), user.get('department') or '')).fetchall()
+    rows = user_grant_rows(conn, user, root_key)
     operations = tuple((r['target_path'], action, value) for r in rows
                        for action, value in grant_permissions(r).items())
     grants = tuple((path, value) for path, action, value in operations if action == 'read')

@@ -2685,3 +2685,22 @@ button:disabled {
 .feishu-daily summary{cursor:pointer;width:fit-content;color:#244c9c}
 .feishu-daily pre{font:inherit;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0}
 .feishu-daily .feishu-daily-error{color:#963a2b}
+
+.feishu-directory{margin-top:16px}
+.feishu-directory h4{font-size:14px;margin:0 0 4px}
+.feishu-directory p,.feishu-match-row small{font-size:12px;color:#5f6d84}
+.feishu-directory .feishu-daily-error{color:#963a2b}
+.feishu-directory-search{display:grid;gap:5px;width:min(100%,360px);font-size:12px;color:#536583;margin:12px 0}
+.feishu-directory-search input,.account-profile-grid input{border:1px solid #dce2ed;border-radius:7px;background:white;color:#263755;padding:9px;font:inherit;min-width:0}
+.feishu-match-rows{border:1px solid #e1e7ef;border-radius:10px;max-height:370px;overflow:auto}
+.feishu-match-rows>p{padding:10px 12px;margin:0}
+.feishu-match-row{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) auto;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid #eaedf3;font-size:13px}
+.feishu-match-row:last-child{border-bottom:0}
+.feishu-match-row strong,.feishu-match-row small{display:block;overflow-wrap:anywhere}
+.feishu-match-row small{padding-top:3px}
+.feishu-match-status{display:inline-block;border-radius:6px;background:#f1f3f8;color:#536583;padding:2px 6px;font-size:11px}
+.feishu-match-status.matched{color:#245943;background:#eaf5ef}
+.account-profile-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+.account-profile-grid label{display:grid;gap:6px;font-size:13px;color:#33435d}
+.account-local-job{display:block;color:#68758a;margin-top:3px}
+@media(max-width:540px){.feishu-match-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.feishu-match-row>div:last-child:empty{display:none}}

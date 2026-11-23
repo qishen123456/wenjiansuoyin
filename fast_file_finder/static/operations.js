@@ -176,12 +176,118 @@ async function loadFeishuPanel(){
       panel.insertAdjacentHTML('beforeend','<p>尚未配置企业应用。请在服务环境中设置应用 ID、密钥与登录回调地址，再同步通讯录。</p>');
       return;
     }
-    panel.insertAdjacentHTML('beforeend',`<p>最近同步 ${esc(portalMonitorTime(status.last_sync))} · ${status.members.length} 名成员</p><button id="syncFeishu" class="tree-tool-btn">同步通讯录</button><div class="grant-toolbar"><label>本地账号 <select id="localFeishuUser">${permState.users.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></label><label>飞书成员 <select id="remoteFeishuUser"><option value="">解除绑定</option>${status.members.filter(m=>m.active).map(m=>`<option value="${esc(m.open_id)}">${esc(m.name)} · ${esc(m.department)}</option>`).join('')}</select></label><button id="bindFeishu" class="tree-tool-btn">保存绑定</button></div><p id="bindingStatus"></p>`);
-    const showBinding=()=>{$('remoteFeishuUser').value=permState.users.find(u=>String(u.id)===$('localFeishuUser').value)?.feishu_id || '';};
-    $('localFeishuUser').onchange=showBinding;showBinding();
-    $('syncFeishu').onclick=async()=>{const b=$('syncFeishu');b.disabled=true;try{await api('/api/system/feishu/sync',{method:'POST',timeoutMs:180000});await loadFeishuPanel();}catch(e){$('bindingStatus').textContent=e.message;b.disabled=false;}};
-    $('bindFeishu').onclick=async()=>{try{await api('/api/system/feishu/bind',{method:'POST',body:{user_id:Number($('localFeishuUser').value),open_id:$('remoteFeishuUser').value}});toast('绑定已更新，该成员下次访问时需要重新登录');await loadPermissionOverview();}catch(e){$('bindingStatus').textContent=e.message;}};
+    const members = status.members;
+    const matched = members.filter(member => member.match_status === 'matched').length;
+    const noPhone = members.filter(member => member.active && member.match_status === 'no_phone').length;
+    panel.insertAdjacentHTML('beforeend', `<section class="feishu-directory">
+      <div class="home-panel-heading"><div><h4>通讯录匹配</h4>
+        <p>最近同步 ${esc(portalMonitorTime(status.last_sync))} · ${members.length} 位飞书成员 · ${matched} 位已匹配</p></div>
+        <button type="button" id="syncFeishu" class="tree-tool-btn">同步并匹配</button></div>
+      <p>同一手机号只匹配一个启用账号。部门和岗位可在「文件操作权限」中配置授权。</p>
+      ${noPhone ? `<p class="feishu-daily-error">${noPhone} 位在职成员未返回手机号。请核对飞书的手机号字段权限和通讯录范围。</p>` : ''}
+      <label class="feishu-directory-search"><span>查找匹配结果</span><input id="feishuMemberSearch" type="search" placeholder="姓名、部门、岗位或手机号尾号"></label>
+      <div id="feishuMatchRows" class="feishu-match-rows"></div><p id="bindingStatus" role="status" aria-live="polite"></p>
+    </section>`);
+    const labels = {matched:'手机号已匹配', no_phone:'手机号不可见', no_account:'平台无同号账号',
+      conflict:'号码或关联冲突', disabled:'平台账号已停用', inactive:'飞书成员不可用',
+      review:'等待确认', resync:'待重新同步'};
+    const render = () => {
+      const query = $('feishuMemberSearch').value.trim().toLowerCase();
+      const rows = members.filter(member => {
+        const local = permState.users.find(user => user.id === (member.local_user_id || member.bound_user_id));
+        return [member.name, member.department, member.job_title, member.phone_tail, local?.name]
+          .some(value => value?.toLowerCase().includes(query));
+      });
+      $('feishuMatchRows').innerHTML = rows.slice(0, 100).map(member => {
+        const local = permState.users.find(user => user.id === (member.local_user_id || member.bound_user_id));
+        const bound = permState.users.find(user => user.id === member.bound_user_id);
+        const matchLabel = labels[member.match_status] || '待同步';
+        const tag = bound && member.match_status !== 'matched' && status.demo_mode
+          ? '演示关联 · ' + matchLabel : matchLabel;
+        const accountLabel = local ? (bound && bound.id !== local.id
+          ? '候选 ' + local.name + ' · 当前关联 ' + bound.name : local.name) : '';
+        const action = member.match_status === 'review' && member.local_user_id
+          ? `<button type="button" class="tree-tool-btn" data-confirm-feishu="${esc(member.open_id)}" data-user-id="${member.local_user_id}">确认关联</button>`
+          : member.bound_user_id
+            ? `<button type="button" class="tree-tool-btn" data-unlink-feishu="${member.bound_user_id}">解除关联</button>`
+            : local ? `<button type="button" class="tree-tool-btn" data-edit-match-user="${local.id}">编辑资料</button>` : '';
+        return `<article class="feishu-match-row"><div><strong>${esc(member.name)}</strong>
+          <small>${esc(member.department || '部门未返回')} · ${esc(member.job_title || '岗位未返回')}</small></div>
+          <div><span class="feishu-match-status ${member.match_status === 'matched' ? 'matched' : ''}">${esc(tag)}</span>
+          <small>${esc(member.phone_tail ? '手机尾号 ' + member.phone_tail : '手机号不可见')}${accountLabel ? ' · ' + esc(accountLabel) : ''}</small></div>
+          <div>${action}</div></article>`;
+      }).join('') || '<p>没有符合条件的成员</p>';
+      if (rows.length > 100) $('feishuMatchRows').insertAdjacentHTML('beforeend', '<p>显示前 100 条，请输入关键词缩小范围。</p>');
+      $('feishuMatchRows').querySelectorAll('[data-confirm-feishu], [data-unlink-feishu]').forEach(button => {
+        button.onclick = async () => {
+          const unlink = Boolean(button.dataset.unlinkFeishu);
+          const userId = Number(button.dataset.unlinkFeishu || button.dataset.userId);
+          if (unlink && !confirm('解除这位成员的飞书登录关联？')) return;
+          if (!unlink && !confirm('将该飞书身份关联到手机号相同的平台账号，并使用该账号权限？')) return;
+          button.disabled = true;
+          try {
+            await api('/api/system/feishu/bind', {method:'POST', body:{user_id:userId, open_id:button.dataset.confirmFeishu || ''}});
+            toast(unlink ? '关联已解除' : '关联已生效');
+            await loadPermissionOverview();
+          } catch (error) {
+            $('bindingStatus').textContent = error.message;
+            button.disabled = false;
+          }
+        };
+      });
+      $('feishuMatchRows').querySelectorAll('[data-edit-match-user]').forEach(button => {
+        button.onclick = () => openEditAccountProfile(Number(button.dataset.editMatchUser));
+      });
+    };
+    $('feishuMemberSearch').oninput = render;
+    render();
+    $('syncFeishu').onclick = async () => {
+      const button = $('syncFeishu');
+      button.disabled = true;
+      $('bindingStatus').textContent = '正在读取授权范围并校验手机号…';
+      try {
+        const result = await api('/api/system/feishu/sync', {method:'POST', timeoutMs:180000});
+        toast(`同步 ${result.users} 位成员，已匹配 ${result.matched} 位`);
+        await loadPermissionOverview();
+      } catch (error) {
+        $('bindingStatus').textContent = error.message;
+        button.disabled = false;
+      }
+    };
   }catch(e){panel.textContent=e.message;}
+}
+
+function openEditAccountProfile(userId) {
+  const user = permState.users.find(member => member.id === userId);
+  if (!user) return;
+  const input = (id, label, type, value, length) =>
+    `<label for="${id}">${label}<input id="${id}" type="${type}" value="${esc(value || '')}" maxlength="${length}"></label>`;
+  const form = `<div class="account-profile-grid">
+    ${input('profileName', '姓名', 'text', user.name, 50)}
+    ${input('profilePhone', '登录及匹配手机号', 'tel', user.phone === '--' ? '' : user.phone, 30)}
+    ${input('profileDepartment', '自定义部门', 'text', user.department, 100)}
+    ${input('profileJob', '自定义岗位', 'text', user.job_title, 80)}
+  </div><p>请填与飞书通讯录一致的手机号。修改号码会解除当前关联，并要求重新登录。</p>`;
+  operationDialog('编辑平台账号', form, '<button type="button" class="btn-archive-primary" id="saveAccountProfile">保存资料</button>');
+  $('saveAccountProfile').onclick = async () => {
+    const body = {name:$('profileName').value.trim(), phone:$('profilePhone').value.trim(),
+      department:$('profileDepartment').value.trim(), job_title:$('profileJob').value.trim()};
+    if (!body.name || !body.phone) {
+      $('fileOperationStatus').textContent = '请填写姓名和手机号。';
+      return;
+    }
+    setFileOperationBusy(true);
+    try {
+      const result = await api(`/api/system/permissions/users/${userId}/profile`, {method:'PUT', body});
+      setFileOperationBusy(false);
+      closeFileOperation();
+      toast(result.message);
+      await loadPermissionOverview();
+    } catch (error) {
+      setFileOperationBusy(false);
+      $('fileOperationStatus').textContent = error.message;
+    }
+  };
 }
 
 async function saveApprovedDownload(fileId,ticket=''){

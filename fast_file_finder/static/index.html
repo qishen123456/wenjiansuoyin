@@ -2281,7 +2281,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
               <th style="width:16%">成员姓名</th>
               <th style="width:18%">登录手机号 (账号)</th>
               <th style="width:16%">密码凭据状态</th>
-              <th style="width:20%">所属业务部门</th>
+              <th style="width:20%">自定义部门／岗位</th>
               <th style="width:16%">系统权限角色</th>
               <th style="width:8%">账号状态</th>
               <th style="width:12%;text-align:right">操作</th>
@@ -2693,6 +2693,10 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
           <label style="font-size:12.5px;font-weight:700;color:#18181B;display:block;margin-bottom:6px">所属业务部门：</label>
           <input type="text" id="newUserDept" class="sort-select-pill" style="width:100%" placeholder="例如：数据智能部 / BI报表组" value="电商运营部">
         </div>
+      </div>
+      <div>
+        <label for="newUserJob" style="font-size:12.5px;font-weight:700;color:#18181B;display:block;margin-bottom:6px">自定义岗位</label>
+        <input type="text" id="newUserJob" class="sort-select-pill" style="width:100%" maxlength="80">
       </div>
       <div>
         <label style="font-size:12.5px;font-weight:700;color:#18181B;display:block;margin-bottom:6px">分配系统权限角色：</label>
@@ -4984,10 +4988,12 @@ function renderPermissionUsersTable() {
         <td>
           <div style="display:flex;align-items:center;gap:6px">
             <span style="font-size:12px;color:#71717A;font-family:monospace">••••••••</span>
-            <button class="btn-table-action" style="padding:2px 8px;font-size:11px;background:#FAFAFA;border:1px solid #E4E4E7;border-radius:6px;cursor:pointer" onclick="openResetPasswordModal(${u.id}, '${esc(u.name)}', '${esc(u.phone || '')}')" title="重置登录密码">重置</button>
+            <button class="btn-table-action" style="padding:2px 8px;font-size:11px;background:#FAFAFA;border:1px solid #E4E4E7;border-radius:6px;cursor:pointer" onclick="openResetPasswordModal(${u.id})" title="重置登录密码">重置</button>
           </div>
         </td>
-        <td><span style="font-size:12px;color:#3F3F46">${esc(u.department || '未分配部门')}</span></td>
+        <td><span style="font-size:12px;color:#3F3F46">${esc(u.department || '未分配部门')}</span>
+          ${u.job_title ? `<small class="account-local-job">${esc(u.job_title)}</small>` : ''}
+        </td>
         <td>
           <div style="display:flex;align-items:center;gap:6px">
             <select class="sort-select-pill" style="padding:2px 8px;font-size:11.5px;font-weight:600" onchange="changeUserRole(${u.id}, this.value)">
@@ -5000,6 +5006,7 @@ function renderPermissionUsersTable() {
         <td>${statusPill}</td>
         <td style="text-align:right">
           <div class="table-action-btns" style="justify-content:flex-end">
+            <button class="btn-table-action" type="button" onclick="openEditAccountProfile(${u.id})">编辑资料</button>
             <button class="btn-table-action" style="color:#ef4444" onclick="deleteUser(${u.id})" title="移除此人员系统权限">移除</button>
           </div>
         </td>
@@ -5008,10 +5015,12 @@ function renderPermissionUsersTable() {
   }).join('');
 }
 
-function openResetPasswordModal(userId, name, phone) {
+function openResetPasswordModal(userId) {
+  const user = permState.users.find(member => member.id === userId);
+  if (!user) return;
   $('resetPasswordUserId').value = userId;
-  $('resetPasswordUserName').textContent = name;
-  $('resetPasswordUserPhone').textContent = phone;
+  $('resetPasswordUserName').textContent = user.name;
+  $('resetPasswordUserPhone').textContent = user.phone || '';
   $('newPasswordInput').value = '';
   $('resetPasswordModal').classList.remove('hidden');
   _focusFirstInput('resetPasswordModal');
@@ -5085,6 +5094,7 @@ function openCreateUserModal() {
   $('newUserPhone').value = '';
   $('newUserPassword').value = '123456';
   $('newUserDept').value = '电商运营部';
+  $('newUserJob').value = '';
   $('newUserRole').value = 'user';
   $('createUserModal').classList.remove('hidden');
   _focusFirstInput('createUserModal');
@@ -5099,6 +5109,7 @@ async function confirmCreateUser() {
   const phone = $('newUserPhone').value.trim();
   const password = $('newUserPassword').value.trim() || '123456';
   const department = $('newUserDept').value.trim();
+  const job_title = $('newUserJob').value.trim();
   const role = $('newUserRole').value;
 
   if (!name) {
@@ -5113,7 +5124,7 @@ async function confirmCreateUser() {
   try {
     const res = await api('/api/system/permissions/users', {
       method: 'POST',
-      body: JSON.stringify({ name, phone, password, department, role })
+      body: JSON.stringify({ name, phone, password, department, job_title, role })
     });
     toast('' + (res.message || '新成员账号已成功创建并授权！'));
     closeCreateUserModal();

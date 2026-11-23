@@ -44,6 +44,7 @@ import limited_preview
 import file_management
 import media_preview
 import feishu_integration
+import feishu_identity
 import feishu_daily
 import sys
 from collections import OrderedDict
@@ -242,7 +243,6 @@ async def lifespan(_app: FastAPI):
     init_db()
     with db_session() as conn:
         file_management.initialize(conn)
-        feishu_integration.initialize(conn)
     if DEMO_MODE:
         await run_in_threadpool(_ensure_demo_data)
     if SENSITIVE_DIRS:
@@ -442,6 +442,8 @@ def init_db() -> None:
         conn.execute("PRAGMA journal_mode=WAL")
         governance.initialize(conn)
         feishu_daily.initialize(conn)
+        feishu_integration.initialize(conn)
+        feishu_identity.initialize(conn)
         directory_access.initialize(conn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS files (
@@ -569,6 +571,8 @@ def init_db() -> None:
                 phone TEXT DEFAULT '',
                 password TEXT DEFAULT '123456',
                 feishu_id TEXT DEFAULT '',
+                feishu_binding_source TEXT NOT NULL DEFAULT '',
+                job_title TEXT NOT NULL DEFAULT '',
                 email TEXT DEFAULT '',
                 department TEXT DEFAULT '',
                 role TEXT NOT NULL DEFAULT 'user',
@@ -585,6 +589,11 @@ def init_db() -> None:
         if "password" not in user_cols:
             conn.execute("ALTER TABLE system_users ADD COLUMN password TEXT DEFAULT '123456'")
 
+        if "feishu_binding_source" not in user_cols:
+            conn.execute("ALTER TABLE system_users ADD COLUMN feishu_binding_source TEXT NOT NULL DEFAULT ''")
+        if "job_title" not in user_cols:
+            conn.execute("ALTER TABLE system_users ADD COLUMN job_title TEXT NOT NULL DEFAULT ''")
+
         conn.execute("CREATE INDEX IF NOT EXISTS idx_system_users_role ON system_users(role)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_system_users_phone ON system_users(phone)")
 
@@ -597,6 +606,14 @@ def init_db() -> None:
                 expires_at REAL NOT NULL
             )
         """)
+        session_columns = {row["name"] for row in conn.execute("PRAGMA table_info(login_sessions)")}
+        if "auth_source" not in session_columns:
+            conn.execute("ALTER TABLE login_sessions ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'password'")
+            if not DEMO_MODE:
+                conn.execute("""DELETE FROM login_sessions WHERE user_id IN (
+                    SELECT id FROM system_users WHERE coalesce(feishu_id,'') <> ''
+                )""")
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS download_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2978,9 +2995,17 @@ class CreateUserRequest(BaseModel):
     phone: str = Field(min_length=6, max_length=20)
     password: str = Field(default="123456", min_length=4, max_length=50)
     department: str = Field(default="业务运营部", max_length=100)
+    job_title: str = Field(default="", max_length=80)
     role: Literal["super_admin", "dept_admin", "user"] = "user"
     email: str = Field(default="", max_length=100)
     feishu_id: str = Field(default="", max_length=100)
+
+
+class UserProfileRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    phone: str = Field(min_length=6, max_length=30)
+    department: str = Field(default="", max_length=100)
+    job_title: str = Field(default="", max_length=80)
 
 
 class ResetUserPasswordRequest(BaseModel):
@@ -3614,7 +3639,7 @@ def _get_session_user(request: Request) -> dict[str, Any] | None:
     with db_session() as conn:
         row = conn.execute(
             """
-            SELECT s.expires_at, u.id, u.name, u.phone, u.role, u.status, u.department
+            SELECT s.expires_at, u.id, u.name, u.phone, u.role, u.status, u.department, u.feishu_id, u.job_title
             FROM login_sessions s JOIN system_users u ON u.id = s.user_id
             WHERE s.token = ?
             """,
@@ -3648,7 +3673,8 @@ def _require_super_admin(request: Request) -> dict[str, Any]:
 
 def _public_user(u: dict[str, Any]) -> dict[str, Any]:
     return {"id": u["id"], "name": u["name"], "phone": u.get("phone") or "",
-            "role": u["role"], "department": u.get("department") or "", "directory_acl_enabled": DIRECTORY_ACL_ENABLED,
+            "role": u["role"], "department": u.get("department") or "", "job_title": u.get("job_title") or "",
+            "directory_acl_enabled": DIRECTORY_ACL_ENABLED,
             "demo_mode": DEMO_MODE}
 
 
@@ -3948,7 +3974,7 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
         }
         
         users_rows = conn.execute("""
-            SELECT id, name, phone, feishu_id, email, department, role, status, avatar, created_at, updated_at
+            SELECT id, name, phone, feishu_id, email, department, job_title, role, status, avatar, created_at, updated_at
             FROM system_users
             ORDER BY 
               CASE role 
@@ -3967,6 +3993,7 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
                 "feishu_id": u["feishu_id"],
                 "email": u["email"],
                 "department": u["department"],
+                "job_title": u["job_title"],
                 "role": u["role"],
                 "status": u["status"],
                 "avatar": u["avatar"] or u["name"][:2],
@@ -3993,21 +4020,47 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
     }
 
 
+def _validate_account_phone(conn, phone, user_id=0):
+    normalized = feishu_identity.normalize_phone(phone)
+    for row in conn.execute("SELECT id,phone FROM system_users WHERE id<>?", (user_id,)):
+        if row['phone'] == phone or (normalized and normalized == feishu_identity.normalize_phone(row['phone'])):
+            raise HTTPException(400, '该电话号码成员已存在。')
+
+
 @app.post("/api/system/permissions/users")
 def create_system_user(req: CreateUserRequest, request: Request) -> dict[str, Any]:
     _require_super_admin(request)
     now_ts = time.time()
     phone = req.phone.strip()
     with db_session() as conn:
-        existing = conn.execute("SELECT id FROM system_users WHERE phone = ?", (phone,)).fetchone()
-        if existing:
-            raise HTTPException(status_code=400, detail="该电话号码成员已存在")
+        conn.execute('BEGIN IMMEDIATE')
+        _validate_account_phone(conn, phone)
         avatar = req.name.strip()[:2]
         cur = conn.execute("""
-            INSERT INTO system_users (name, phone, password, department, role, status, avatar, email, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
-        """, (req.name.strip(), phone, req.password.strip() or "123456", req.department.strip(), req.role, avatar, req.email.strip(), now_ts, now_ts))
-    return {"ok": True, "id": cur.lastrowid, "message": f"成员 {req.name}（手机号：{phone}）已授权创建"}
+            INSERT INTO system_users (name, phone, password, department, job_title, role, status, avatar, email, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+        """, (req.name.strip(), phone, req.password.strip() or "123456", req.department.strip(),
+              req.job_title.strip(), req.role, avatar, req.email.strip(), now_ts, now_ts))
+    return {"ok": True, "id": cur.lastrowid, "message": f"成员 {req.name} 已授权创建"}
+
+
+@app.put("/api/system/permissions/users/{user_id}/profile")
+def update_user_profile(user_id: int, req: UserProfileRequest, request: Request):
+    _require_super_admin(request)
+    name, phone = req.name.strip(), req.phone.strip()
+    if not name or not feishu_identity.normalize_phone(phone):
+        raise HTTPException(422, '请输入姓名和有效手机号。')
+    with db_session() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        previous = conn.execute('SELECT phone FROM system_users WHERE id=?', (user_id,)).fetchone()
+        if not previous:
+            raise HTTPException(404, '成员不存在。')
+        _validate_account_phone(conn, phone, user_id)
+        if feishu_identity.normalize_phone(previous['phone']) != feishu_identity.normalize_phone(phone):
+            feishu_identity.clear_user_link(conn, user_id)
+        conn.execute("""UPDATE system_users SET name=?,phone=?,department=?,job_title=?,avatar=?,updated_at=? WHERE id=?""",
+                     (name, phone, req.department.strip(), req.job_title.strip(), name[:2], time.time(), user_id))
+    return {'ok': True, 'message': '资料已保存。修改手机号后请重新同步飞书通讯录。'}
 
 
 @app.put("/api/system/permissions/users/{user_id}/password")
@@ -4029,9 +4082,16 @@ def update_user_role(user_id: int, req: UpdateUserRoleRequest, request: Request)
     if req.role not in ("super_admin", "dept_admin", "user"):
         raise HTTPException(status_code=400, detail="无效角色")
     with db_session() as conn:
-        cur = conn.execute("UPDATE system_users SET role = ?, updated_at = ? WHERE id = ?", (req.role, time.time(), user_id))
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=404, detail="成员不存在")
+        conn.execute('BEGIN IMMEDIATE')
+        previous = conn.execute('SELECT role,feishu_binding_source FROM system_users WHERE id=?', (user_id,)).fetchone()
+        if not previous:
+            raise HTTPException(404, '成员不存在。')
+        if req.role != previous['role']:
+            if req.role != 'user' and previous['feishu_binding_source'] == 'phone':
+                feishu_identity.clear_user_link(conn, user_id)
+            else:
+                conn.execute("DELETE FROM login_sessions WHERE user_id=? AND auth_source='feishu'", (user_id,))
+            conn.execute("UPDATE system_users SET role = ?, updated_at = ? WHERE id = ?", (req.role, time.time(), user_id))
     return {"ok": True, "message": "成员系统角色已更新"}
 
 
@@ -4046,6 +4106,7 @@ def toggle_user_status(user_id: int, request: Request) -> dict[str, Any]:
         """, (time.time(), user_id))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="成员不存在")
+        conn.execute('DELETE FROM login_sessions WHERE user_id=?', (user_id,))
     return {"ok": True, "message": "成员状态已更新"}
 
 
@@ -4061,7 +4122,7 @@ def delete_system_user(user_id: int, request: Request) -> dict[str, Any]:
 
 
 class DirectoryGrantRequest(BaseModel):
-    subject_type: Literal['user', 'department']
+    subject_type: directory_access.SubjectType
     subject_key: str = Field(min_length=1, max_length=200)
     target_path: str = Field(min_length=1, max_length=4096)
     effect: Literal['allow', 'deny'] = 'allow'
@@ -4082,7 +4143,7 @@ class DirectoryGrantRequest(BaseModel):
 
 
 class DirectoryGrantBatch(BaseModel):
-    subject_type: Literal['user', 'department']
+    subject_type: directory_access.SubjectType
     subject_keys: list[str] = Field(min_length=1, max_length=100)
     target_paths: list[str] = Field(min_length=1, max_length=100)
     permissions: dict[str, str]
@@ -4101,8 +4162,12 @@ def _validate_grant_target(conn, subject_type, subject, value):
         raise HTTPException(422, '请选择有效成员或部门。')
     if subject_type == 'user':
         exists = conn.execute('SELECT id FROM system_users WHERE CAST(id AS TEXT)=?', (subject,)).fetchone()
-    else:
+    elif subject_type == 'department':
         exists = conn.execute("SELECT id FROM system_users WHERE department=? AND department<>''", (subject,)).fetchone()
+    elif subject_type == 'feishu_department':
+        exists = conn.execute("SELECT 1 FROM feishu_departments WHERE open_id=?", (subject,)).fetchone()
+    else:
+        exists = any(target['key'] == subject for target in directory_access.feishu_targets(conn)['feishu_job'])
     if not exists:
         raise HTTPException(422, '请选择系统已有的成员或部门。')
     target = _resolve_catalog_path(value)
@@ -4144,7 +4209,8 @@ def list_directory_grants(request: Request) -> dict[str, Any]:
     with db_session() as conn:
         rows = conn.execute('SELECT * FROM directory_grants WHERE root_key=? ORDER BY id DESC', (root_scope_key(),)).fetchall()
         audit = conn.execute('SELECT * FROM directory_grant_audit ORDER BY id DESC LIMIT 30').fetchall()
-    return {'enabled': DIRECTORY_ACL_ENABLED,
+        feishu_subjects = directory_access.feishu_targets(conn)
+    return {'enabled': DIRECTORY_ACL_ENABLED, 'feishu_subjects': feishu_subjects,
             'grants': [{**dict(row), 'permissions': directory_access.grant_permissions(row),
                         'legacy': row['permissions'] is None} for row in rows],
             'audit': [dict(row) for row in audit]}
@@ -4213,9 +4279,7 @@ def effective_directory_grants(request: Request, user_id: int, path: str):
             raise HTTPException(404, '成员不存在。')
         target = _validate_grant_target(conn, 'user', str(user_id), path)
         policy = directory_access.load_policy(conn, dict(user), root_scope_key(), _catalog_root_path())
-        rows = conn.execute('''SELECT * FROM directory_grants WHERE root_key=? AND
-            ((subject_type='user' AND subject_key=?) OR (subject_type='department' AND subject_key=? AND subject_key<>''))''',
-            (root_scope_key(), str(user_id), user['department'] or '')).fetchall()
+        rows = directory_access.user_grant_rows(conn, dict(user), root_scope_key())
     permissions = {op: policy.decision(target, op) for op in directory_access.OPERATIONS}
     if user['status'] != 'active':
         permissions = dict.fromkeys(directory_access.OPERATIONS, 'deny')

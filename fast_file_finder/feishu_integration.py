@@ -3,16 +3,19 @@ import json
 import os
 import secrets
 import time
+import threading
 import uuid
 from collections import deque
 from urllib.parse import urlencode, quote
 import httpx
 from fastapi import HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 import directory_access
+import feishu_identity
 
 BASE = 'https://open.feishu.cn/open-apis'
+_sync_lock = threading.Lock()
 
 
 def app_credentials_configured():
@@ -86,12 +89,6 @@ def pages(path, token, params):
         yield from page.get('items', [])
 
 
-def _member_record(member, key, department):
-    status = member.get('status') or {}
-    active = not any(status.get(flag) for flag in ('is_resigned', 'is_frozen', 'is_exited', 'is_unjoin'))
-    return key, member.get('name') or f'飞书成员（{key[-6:]}）', department, int(active)
-
-
 def _walk_departments(token, departments, queue):
     members = {}
     while queue:
@@ -107,7 +104,17 @@ def _walk_departments(token, departments, queue):
         for member in pages('/contact/v3/users/find_by_department', token,
                             {'department_id': dept_id, 'department_id_type': 'open_department_id', 'user_id_type': 'open_id'}):
             key = member['open_id']
-            members[key] = _member_record(member, key, label)
+            profile = feishu_identity.member_profile(member, key, dept_id)
+            previous = members.get(key)
+            if previous:
+                profile.departments.update(previous.departments)
+                profile.active = profile.active and previous.active
+                if profile.phone and previous.phone and profile.phone != previous.phone:
+                    raise HTTPException(502, '飞书返回了不一致的手机号，请重新同步。')
+                profile.phone = profile.phone or previous.phone
+                if not profile.job_key:
+                    profile.job_key, profile.job_title = previous.job_key, previous.job_title
+            members[key] = profile
     return members
 
 
@@ -137,11 +144,20 @@ def _authorized_directory(token):
                       params=id_options)['data']['user']
         if member.get('open_id') not in (None, key):
             raise HTTPException(502, '飞书返回的成员标识与授权范围不一致。')
-        members[key] = _member_record(member, key, '')
+        members[key] = feishu_identity.member_profile(member, key)
     return departments, members
 
 
 def sync_directory(app):
+    if not _sync_lock.acquire(blocking=False):
+        raise HTTPException(409, '通讯录正在同步，请稍后查看结果。')
+    try:
+        return _sync_directory(app)
+    finally:
+        _sync_lock.release()
+
+
+def _sync_directory(app):
     token = tenant_token()
     departments = {}
     try:
@@ -151,15 +167,20 @@ def sync_directory(app):
             raise
         departments, members = _authorized_directory(token)
     with app.db_session() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        matched = feishu_identity.reconcile(conn, members, departments, demo=app.DEMO_MODE)
         conn.execute('DELETE FROM feishu_members')
         conn.execute('DELETE FROM feishu_departments')
-        conn.executemany('INSERT INTO feishu_members VALUES (?,?,?,?)', members.values())
+        conn.executemany('INSERT INTO feishu_members VALUES (?,?,?,?)', (
+            (m.open_id, m.name, '、'.join(departments[key][1] for key in sorted(m.departments & departments.keys())), int(m.active))
+            for m in members.values()
+        ))
         conn.executemany('INSERT INTO feishu_departments VALUES (?,?,?)', departments.values())
         conn.execute("""DELETE FROM login_sessions WHERE user_id IN (
             SELECT id FROM system_users WHERE feishu_id<>'' AND feishu_id NOT IN
             (SELECT open_id FROM feishu_members WHERE active=1))""")
         conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_last_sync',?)",(str(time.time()),))
-    return {'users':len(members),'departments':len(departments)}
+    return {'users': len(members), 'departments': len(departments), 'matched': matched}
 
 
 def deliver_notices(app):
@@ -167,7 +188,10 @@ def deliver_notices(app):
         return
     with app.db_session() as conn:
         users = conn.execute("""SELECT u.* FROM system_users u JOIN feishu_members f ON u.feishu_id=f.open_id
-            WHERE u.status='active' AND f.active=1""").fetchall()
+            LEFT JOIN feishu_member_profiles p ON p.open_id=f.open_id
+            WHERE u.status='active' AND f.active=1
+              AND ((p.local_user_id=u.id AND p.match_status='matched')
+                   OR (? AND u.feishu_binding_source IN ('','manual')))""", (app.DEMO_MODE,)).fetchall()
         # Scope the initial delivery window to the current activation. Do not notify historical demo records.
         conn.execute("INSERT OR IGNORE INTO app_meta VALUES('feishu_notify_since',?)",(str(time.time()),))
         since = float(conn.execute("SELECT value FROM app_meta WHERE key='feishu_notify_since'").fetchone()[0])
@@ -250,13 +274,26 @@ def register(app):
         if not identity:
             raise HTTPException(502, '无法读取飞书身份，请检查应用授权。')
         with app.db_session() as conn:
-            row=conn.execute("""SELECT u.id FROM system_users u JOIN feishu_members m ON u.feishu_id=m.open_id
-                WHERE m.open_id=? AND m.active=1 AND u.status='active'""",(identity,)).fetchone()
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute("""SELECT u.id FROM system_users u JOIN feishu_members m ON u.feishu_id=m.open_id
+                LEFT JOIN feishu_member_profiles p ON p.open_id=m.open_id
+                WHERE m.open_id=? AND m.active=1 AND u.status='active'
+                  AND ((p.local_user_id=u.id AND p.match_status='matched')
+                       OR (? AND u.feishu_binding_source IN ('','manual')))""", (identity, app.DEMO_MODE)).fetchone()
             if not row:
-                raise HTTPException(403,'此飞书身份尚未绑定已启用的平台账号。')
+                denied = HTMLResponse(
+                    '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+                    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                    '<title>请核对平台账号</title><main style="font:16px system-ui;max-width:480px;margin:15vh auto;padding:24px">'
+                    '<h1>飞书身份尚未匹配</h1><p>请联系平台管理员同步通讯录，并核对平台账号的手机号。'
+                    '管理员账号匹配后还需要确认关联。</p><a href="/">返回平台</a></main></html>',
+                    status_code=403, headers={'Cache-Control': 'no-store'})
+                denied.delete_cookie('ff_feishu_state')
+                return denied
             session=secrets.token_urlsafe(48)
             ttl=int(app.SESSION_TTL_HOURS*3600)
-            conn.execute('INSERT INTO login_sessions(token,user_id,created_at,expires_at) VALUES(?,?,?,?)',(session,row[0],time.time(),time.time()+ttl))
+            conn.execute("INSERT INTO login_sessions(token,user_id,created_at,expires_at,auth_source) VALUES(?,?,?,?,'feishu')",
+                         (session, row[0], time.time(), time.time()+ttl))
         response=RedirectResponse('/')
         response.delete_cookie('ff_feishu_state')
         response.set_cookie('ff_session',session,max_age=ttl,httponly=True,samesite='lax',secure=os.environ['FEISHU_REDIRECT_URI'].startswith('https:'))
@@ -266,10 +303,15 @@ def register(app):
     def status(request: Request):
         app._require_super_admin(request)
         with app.db_session() as conn:
-            rows=conn.execute('SELECT * FROM feishu_members ORDER BY department,name').fetchall()
+            rows = conn.execute("""SELECT m.*, p.phone_tail, p.job_title, p.local_user_id, p.match_status,
+                u.id AS bound_user_id, u.feishu_binding_source AS binding_source
+                FROM feishu_members m LEFT JOIN feishu_member_profiles p ON p.open_id=m.open_id
+                LEFT JOIN system_users u ON u.feishu_id=m.open_id AND u.status='active'
+                ORDER BY m.department,m.name""").fetchall()
             stamp=conn.execute("SELECT value FROM app_meta WHERE key='feishu_last_sync'").fetchone()
         return {'configured': configured(), 'members': [dict(r) for r in rows],
-                'last_sync': float(stamp[0]) if stamp else 0, 'daily': app.feishu_daily.status(app)}
+                'last_sync': float(stamp[0]) if stamp else 0, 'demo_mode': app.DEMO_MODE,
+                'daily': app.feishu_daily.status(app)}
 
     @app.app.post('/api/system/feishu/sync')
     def sync(request: Request):
@@ -281,12 +323,26 @@ def register(app):
         app._require_super_admin(request)
         with app.db_session() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            if body.open_id:
-                if not conn.execute('SELECT 1 FROM feishu_members WHERE open_id=? AND active=1',(body.open_id,)).fetchone():
-                    raise HTTPException(422,'请选择已同步的在职成员。')
-                if conn.execute('SELECT 1 FROM system_users WHERE feishu_id=? AND id<>?',(body.open_id,body.user_id)).fetchone():
-                    raise HTTPException(409,'该身份已绑定其他账号。')
-            if not conn.execute('UPDATE system_users SET feishu_id=? WHERE id=?',(body.open_id,body.user_id)).rowcount:
-                raise HTTPException(404,'本地成员不存在。')
-            conn.execute('DELETE FROM login_sessions WHERE user_id=?',(body.user_id,))
-        return {'ok':True}
+            target = conn.execute('SELECT id,status FROM system_users WHERE id=?', (body.user_id,)).fetchone()
+            if not target:
+                raise HTTPException(404, '本地成员不存在。')
+            if not body.open_id:
+                feishu_identity.clear_user_link(conn, body.user_id, block=True)
+                return {'ok': True}
+            if target['status'] != 'active':
+                raise HTTPException(422, '请选择已启用的平台账号。')
+            member = conn.execute("""SELECT m.active, p.local_user_id, p.match_status
+                FROM feishu_members m LEFT JOIN feishu_member_profiles p ON p.open_id=m.open_id
+                WHERE m.open_id=?""", (body.open_id,)).fetchone()
+            if not member or not member['active']:
+                raise HTTPException(422, '请选择已同步的在职成员。')
+            if conn.execute('SELECT 1 FROM system_users WHERE feishu_id=? AND id<>?', (body.open_id, body.user_id)).fetchone():
+                raise HTTPException(409, '该身份已绑定其他账号。')
+            verified = member['local_user_id'] == body.user_id and member['match_status'] in ('review', 'matched')
+            if not verified:
+                raise HTTPException(422, '手机号匹配通过后才能确认绑定，请检查账号资料并重新同步。')
+            conn.execute("UPDATE system_users SET feishu_id=?, feishu_binding_source='manual' WHERE id=?",
+                         (body.open_id, body.user_id))
+            conn.execute("UPDATE feishu_member_profiles SET match_status='matched' WHERE open_id=?", (body.open_id,))
+            conn.execute('DELETE FROM login_sessions WHERE user_id=?', (body.user_id,))
+        return {'ok': True}

@@ -40,7 +40,7 @@ def test_feishu_sync_bind_login_and_state_replay(foundation,monkeypatch):
     def mock(method,path,**kwargs):
         if path.endswith('tenant_access_token/internal'):return {'tenant_access_token':'tenant'}
         if path.endswith('/children'):return {'data':{'items':[]}}
-        if path.endswith('/find_by_department'):return {'data':{'items':[{'open_id':'ou_fixture','name':'测试成员','status':{}}]}}
+        if path.endswith('/find_by_department'):return {'data':{'items':[{'open_id':'ou_fixture','name':'测试成员','mobile':'+86 13800100004','status':{}}]}}
         if path.endswith('/oauth/token'):return {'access_token':'member'}
         if path.endswith('/user_info'):return {'data':{'open_id':'ou_fixture'}}
         raise AssertionError(path)
@@ -70,6 +70,7 @@ def test_notice_delivery_uses_binding_and_deduplicates(foundation,monkeypatch):
     monkeypatch.setattr(feishu,'call',lambda method,path,**kwargs:sent.append(kwargs['json']['receive_id']))
     with application.db_session() as conn:
         conn.execute("INSERT INTO feishu_members VALUES ('ou_test','测试负责人','测试部门',1)")
+        conn.execute("INSERT INTO feishu_member_profiles VALUES ('ou_test','0001','','',1,'matched')")
         conn.execute("UPDATE system_users SET feishu_id='ou_test' WHERE id=1")
         conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_notify_since','0')")
     login(client,admin=False)
@@ -109,7 +110,7 @@ def test_sync_uses_explicit_contacts_when_root_not_authorized(foundation, monkey
 
     monkeypatch.setattr(feishu.httpx, 'request', request)
     login(client)
-    assert client.post('/api/system/feishu/sync').json() == {'users': 2, 'departments': 1}
+    assert client.post('/api/system/feishu/sync').json() == {'users': 2, 'departments': 1, 'matched': 0}
     entries = {member['open_id']: member for member in client.get('/api/system/feishu').json()['members']}
     assert entries['ou_direct']['name'] == '飞书成员（direct）'
     assert entries['ou_pilot']['department'] == '试点部门'
