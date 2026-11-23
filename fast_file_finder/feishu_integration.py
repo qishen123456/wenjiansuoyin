@@ -328,6 +328,18 @@ class DailyRecipient(BaseModel):
     revision: float | None = None
 
 
+class NotificationTask(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    recipient_type: Literal['open_id', 'chat_id']
+    recipient_id: str = Field(min_length=1, max_length=128)
+    schedule: str = Field(pattern=r'^(?:[01][0-9]|2[0-3]):[0-5][0-9]$')
+    enabled: bool
+
+
+class NotificationTaskUpdate(NotificationTask):
+    revision: float
+
+
 def register(app):
     @app.app.get('/integrations/feishu/status')
     def public_status():
@@ -411,6 +423,50 @@ def register(app):
             snapshot = directory_snapshot(conn, include_stored=True)
         return {**snapshot, 'configured': configured(), 'demo_mode': app.DEMO_MODE,
                 'daily': app.feishu_daily.status(app)}
+
+    @app.app.get('/api/system/feishu/daily/tasks')
+    def notification_tasks(request: Request):
+        app._require_super_admin(request)
+        with app.db_session() as conn:
+            members = [dict(row) for row in conn.execute(
+                'SELECT open_id,name,department,active FROM feishu_members WHERE active=1 ORDER BY name,open_id'
+            )]
+        return {'tasks': app.feishu_daily.list_tasks(app), 'members': members,
+                'preview': app.feishu_daily.status(app)['preview']}
+
+    @app.app.post('/api/system/feishu/daily/tasks')
+    def create_notification_task(body: NotificationTask, request: Request):
+        actor = app._require_super_admin(request)
+        app.feishu_daily.save_task(app, actor['id'], **body.model_dump())
+        return {'ok': True}
+
+    @app.app.put('/api/system/feishu/daily/tasks/{task_id}')
+    def update_notification_task(task_id: str, body: NotificationTaskUpdate, request: Request):
+        actor = app._require_super_admin(request)
+        app.feishu_daily.save_task(app, actor['id'], task_id=task_id, **body.model_dump())
+        return {'ok': True}
+
+    @app.app.delete('/api/system/feishu/daily/tasks/{task_id}')
+    def delete_notification_task(task_id: str, revision: float, request: Request):
+        app._require_super_admin(request)
+        app.feishu_daily.delete_task(app, task_id, revision=revision)
+        return {'ok': True}
+
+    @app.app.post('/api/system/feishu/daily/group-membership')
+    def group_membership(body: ChatLookup, request: Request):
+        app._require_super_admin(request)
+        try:
+            result = call('GET', '/im/v1/chats/' + body.chat_id + '/members/is_in_chat', token=tenant_token())
+        except FeishuAPIError as exc:
+            if exc.code == 99991672:
+                raise HTTPException(403, '应用缺少查询群成员的权限，请在飞书群设置的「群机器人」中核对。') from exc
+            if exc.code == 232006:
+                raise HTTPException(422, '飞书群 ID 无效，请从目标群设置中重新复制。') from exc
+            raise
+        membership = (result.get('data') or {}).get('is_in_chat')
+        if not isinstance(membership, bool):
+            raise HTTPException(502, '飞书未返回机器人在群内的状态。')
+        return {'is_in_chat': membership}
 
     @app.app.post('/api/system/feishu/daily/verify-chat')
     def verify_chat(body: ChatLookup, request: Request):

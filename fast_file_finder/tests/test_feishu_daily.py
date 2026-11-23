@@ -369,3 +369,30 @@ def test_admin_can_lookup_group_without_sending_or_changing_task(configured_dail
     assert client.post(path, json={'chat_id':'oc_test'}).raise_for_status().json() == {'name':'测试工作群'}
     assert requested == [('GET', '/im/v1/chats/oc_test')]
     assert daily.status(app)['recipient']['id'] == 'oc_fixture'
+
+
+@pytest.mark.parametrize('membership', [True, False])
+def test_check_group_membership_only_reads_target_group(configured_daily, monkeypatch, membership):
+    client, _, _ = configured_daily
+    requested = []
+    def lookup(method, url, **kwargs):
+        requested.append((method, url))
+        return {'data': {'is_in_chat': membership}}
+    monkeypatch.setattr(feishu, 'call', lookup)
+    url = '/api/system/feishu/daily/group-membership'
+    login(client, admin=False)
+    assert client.post(url, json={'chat_id':'oc_test'}).status_code == 403
+    login(client)
+    assert client.post(url, json={'chat_id':'ou_test'}).status_code == 422
+    assert client.post(url, json={'chat_id':'oc_test'}).raise_for_status().json() == {'is_in_chat': membership}
+    assert requested == [('GET', '/im/v1/chats/oc_test/members/is_in_chat')]
+
+
+def test_group_membership_scope_failure_is_distinct_from_absent_bot(configured_daily, monkeypatch):
+    client, _, _ = configured_daily
+    def missing_scope(*args, **kwargs):
+        raise feishu.FeishuAPIError(99991672)
+    monkeypatch.setattr(feishu, 'call', missing_scope)
+    login(client)
+    result = client.post('/api/system/feishu/daily/group-membership', json={'chat_id':'oc_test'})
+    assert result.status_code == 403 and '权限' in result.json()['detail']

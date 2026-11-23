@@ -96,7 +96,6 @@ function updatePortalNavigation(mode) {
   togglePortalSidebar(false);
   if (mode === 'sync') {
     refreshPortalSync();
-    loadSyncFeishuTask();
   }
   if (mode === 'archive') renderPortalArchiveNotice();
 }
@@ -373,10 +372,7 @@ function updatePortalArchive(data) {
   portalText('portalArchiveDescription', `${fmtNumber(data.pending_tasks || 0)} 项待处理，${fmtNumber(data.submitted_tasks || 0)} 项待审核${when ? ` · 上次检测 ${when}` : ''}`);
   portalText('portalPendingTotal', fmtNumber(data.pending_tasks || 0));
   renderPortalArchiveNotice();
-  if (data.scheduler) {
-    portalText('portalArchiveInterval', `每 ${fmtNumber(data.scheduler.interval_seconds || 60)} 秒`);
-    portalText('portalArchiveJobState', data.scheduler.enabled ? '已启用' : '未启用');
-  }
+
 }
 
 function renderPortalArchiveNotice() {
@@ -413,15 +409,6 @@ async function refreshPortalSync() {
   await Promise.allSettled([loadStatus(), loadArchiveOverview(), loadRecent(), loadPortalGovernance()]);
 }
 
-async function runPortalArchiveCheck() {
-  const button = $('portalRunArchiveCheck');
-  button.disabled = true;
-  try {
-    await triggerArchiveCheck();
-    await initHomeDataCockpit();
-  } finally { button.disabled = false; }
-}
-
 async function checkPortalFile() {
   const value = $('portalCheckQuery').value.trim();
   if (!value) return;
@@ -454,6 +441,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (currentNavMode === 'sync' && !document.hidden) refreshPortalSync();
   }, 5000);
   document.addEventListener('keydown', event => {
+    if (document.querySelector('dialog[open]')) return;
     if (event.key === 'Escape') togglePortalSidebar(false);
     if (event.key === '6' && !event.metaKey && !event.ctrlKey && !event.altKey && !['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(event.target.tagName)) switchNavMode('sync');
   });
@@ -465,7 +453,7 @@ function applyPortalUserRole() {
   const admin = !!isAdminUser();
   archiveState.userRole = admin ? 'admin' : 'worker';
   portalText('portalCurrentArchiveRole', currentUser ? `${currentUser.name} · ${admin ? '管理员' : '责任人'}` : '请先登录');
-  document.querySelectorAll('#runCheckBtn, #portalRunArchiveCheck, #subtabRules, [onclick="openCreateRuleModal()"], [onclick="openCreateRuleModalForSelectedNode()"], #portalGovernancePanel').forEach(element => element.classList.toggle('hidden', !admin));
+  document.querySelectorAll('#runCheckBtn, #subtabRules, [onclick="openCreateRuleModal()"], [onclick="openCreateRuleModalForSelectedNode()"], #portalGovernancePanel').forEach(element => element.classList.toggle('hidden', !admin));
   if (!admin && archiveState.currentSubTab === 'rules') switchArchiveSubTab('tasks');
   if (currentNavMode === 'archive') renderArchiveTasks(archiveState.tasks);
   $('portalGovernancePanel')?.classList.toggle('hidden', currentUser?.role !== 'super_admin');
@@ -751,7 +739,7 @@ async function updateDirectoryAccessNotice() {
     const scopes = await api('/api/auth/scopes');
     if (currentUser?.id !== actor) return;
     if (!scopes.unrestricted && !scopes.grants.some(grant => grant.effect === 'allow')) {
-      notice.textContent = '当前账号尚未获授文件目录，请联系超级管理员在「人员权限 → 文件操作权限」中配置。';
+      notice.textContent = '当前账号尚未获授文件目录，请联系超级管理员在「文件权限 → 文件夹授权」中配置。';
       notice.classList.remove('hidden');
     }
   } catch (_) {}

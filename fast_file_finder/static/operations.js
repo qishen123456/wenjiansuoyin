@@ -145,205 +145,216 @@ async function loadBackupPanel(){const panel=$('systemBackupPanel');if(!panel ||
   }catch(e){panel.textContent='备份信息读取失败：'+e.message;}
 }
 
-function feishuDailyDetails(daily, members) {
-  if (!daily) return '';
-  const recipient = daily.recipient || {type:'off', id:'', label:'', source:'environment'};
-  const personal = recipient.type === 'open_id';
-  const group = recipient.type === 'chat_id';
-  const activeMembers = members.filter(member => member.active && member.open_id);
-  const running = daily.task_enabled && (personal || group);
-  const state = !running ? '已暂停' : (daily.configuration_error || daily.report_error) ? '执行异常' : '运行中';
-  const lastSent = daily.last_sent_at
-    ? new Date(daily.last_sent_at * 1000).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai', hour12:false})
-    : '暂无成功记录';
-  const table = daily.report_table_configured ? '报表明细已连接' : '报表明细未连接';
-  const errors = [daily.configuration_error, daily.report_error, daily.table_error, daily.report_table_error].filter(Boolean);
-  const label = personal ? `飞书私聊 · ${recipient.label || recipient.id}`
-    : group ? `指定飞书群 · ${recipient.id}` : '暂无接收人';
-  return `<section class="feishu-daily" id="feishuDailyPanel" aria-labelledby="feishuDailyHeading">
-    <div class="feishu-daily-heading">
-      <div><h4 id="feishuDailyHeading">飞书同步日报</h4>
-        <p>汇总文件更新、索引进展与归档异常，定时推送到飞书。</p></div>
-      <span class="feishu-task-state" data-running="${state === '运行中'}">${esc(state)}</span>
-    </div>
-    <dl class="feishu-task-facts">
-      <div><dt>执行计划 · 北京时间</dt><dd>每天 ${esc(daily.schedule)}</dd></div>
-      <div><dt>下次执行</dt><dd>${esc(daily.next_run || '暂无安排')}</dd></div>
-      <div><dt>最近成功发送</dt><dd>${esc(lastSent)}</dd></div>
-      <div><dt>多维表同步</dt><dd>${esc(table)}</dd></div>
-    </dl>
-    <div class="feishu-recipient-row">
-      <div><span>推送目标</span><strong>${esc(label)}</strong></div>
-      <div id="feishuRecipientActions" class="feishu-recipient-actions">
-        <button id="editFeishuRecipient" type="button" class="btn-archive-primary" aria-controls="feishuDailyRecipientForm">${personal || group ? '编辑任务' : '添加接收人'}</button>
-        ${personal || group ? `<button id="toggleFeishuDailyTask" type="button" class="tree-tool-btn">${running ? '暂停任务' : '恢复任务'}</button>
-          <button id="deleteFeishuRecipient" type="button" class="tree-tool-btn feishu-danger" aria-controls="feishuRecipientRemoval">删除接收人</button>` : ''}
-      </div>
-    </div>
-    <div id="feishuRecipientRemoval" class="feishu-recipient-actions" hidden>
-      <p>确认删除「${esc(label)}」？删除后将停止向该对象发送日报。</p>
-      <button id="confirmFeishuRemoval" type="button" class="tree-tool-btn feishu-danger">确认删除</button>
-      <button id="cancelFeishuRemoval" type="button" class="tree-tool-btn">取消</button>
-    </div>
-    <form id="feishuDailyRecipientForm" hidden>
-      <div class="feishu-daily-controls">
-        <label>每日发送时间（北京时间）<input id="feishuDailyTime" type="time" required step="60" value="${esc(daily.schedule)}"></label>
-        <label>接收方式<select id="feishuDailyRecipientType">
-          <option value="open_id" ${personal ? 'selected' : ''}>个人私聊</option>
-          <option value="chat_id" ${group ? 'selected' : ''}>指定飞书群</option>
-        </select></label>
-        <label id="feishuDailyMemberField" ${personal ? '' : 'hidden'}>飞书成员
-          <select id="feishuDailyMember" ${personal ? 'required' : 'disabled'}>
-            <option value="">${activeMembers.length ? '请选择一位成员' : '请先同步飞书通讯录'}</option>
-            ${personal && !activeMembers.some(member => member.open_id === recipient.id)
-              ? `<option value="${esc(recipient.id)}" selected>${esc(recipient.label || recipient.id)}（当前接收人）</option>` : ''}
-            ${activeMembers.map(member => `<option value="${esc(member.open_id)}" ${personal && member.open_id === recipient.id ? 'selected' : ''}>
-              ${esc([member.name, member.department, member.phone_tail ? '尾号 ' + member.phone_tail : ''].filter(Boolean).join(' · '))}
-            </option>`).join('')}
-          </select>
-        </label>
-        <label id="feishuDailyGroupField" ${group ? '' : 'hidden'}>飞书群标识
-          <input id="feishuDailyGroup" type="text" placeholder="群设置中复制的 oc_ 标识" value="${group ? esc(recipient.id) : ''}" ${group ? 'required' : 'disabled'}>
-        </label>
-        <button id="saveFeishuDailyRecipient" type="submit" class="btn-archive-primary">保存任务</button>
-        <button id="cancelFeishuEdit" type="button" class="tree-tool-btn">取消</button>
-      </div>
-      <div id="feishuDailyLookup" class="feishu-chat-lookup" hidden>
-        <span>在飞书群右上角打开群设置，复制群 ID。</span>
-        <button id="verifyFeishuChat" type="button" class="tree-tool-btn">核对群名</button>
-        <span id="feishuChatFeedback" role="status"></span>
-      </div>
-      <p class="feishu-daily-note">每次定时推送只发给这里指定的人或群。当天已发送时，保存设置后从下一次定时推送生效。</p>
-    </form>
-    <p id="feishuDailySaveStatus" class="feishu-daily-save-status" role="status" aria-live="polite"></p>
-    ${errors.map(error => `<p class="feishu-daily-error" role="status">${esc(error)}</p>`).join('')}
-    ${daily.preview ? `<details class="feishu-daily-preview"><summary>查看日报内容</summary><pre>${esc(daily.preview)}</pre></details>` : ''}
-  </section>`;
+const notificationTasksUrl = '/api/system/feishu/daily/tasks';
+const notificationState = { tasks: [], members: [], request: 0, editing: null, deleting: null, saving: false };
+const notificationDate = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
+});
+
+function notificationTime(value) {
+  if (!value) return '';
+  // The scheduler already formats next_run in Beijing time. Successful sends use Unix seconds.
+  if (typeof value !== 'number') return String(value).replace('T', ' ');
+  return notificationDate.format(new Date(value * 1000));
 }
 
-function wireFeishuDailyRecipient(daily, members) {
-  const form = $('feishuDailyRecipientForm');
-  if (!form) return;
-  const type = $('feishuDailyRecipientType');
-  const member = $('feishuDailyMember');
-  const group = $('feishuDailyGroup');
-  const status = $('feishuDailySaveStatus');
-  const updateFields = () => {
-    const personal = type.value === 'open_id';
-    const isGroup = type.value === 'chat_id';
-    $('feishuDailyMemberField').hidden = member.disabled = !personal;
-    $('feishuDailyGroupField').hidden = group.disabled = !isGroup;
-    member.required = personal;
-    group.required = isGroup;
-    $('feishuDailyLookup').hidden = !isGroup;
-  };
-  const saved = daily.recipient;
-  const actions = $('feishuRecipientActions');
-  const removal = $('feishuRecipientRemoval');
-  const edit = $('editFeishuRecipient');
-  const remove = $('deleteFeishuRecipient');
-  let saving = false;
-  function closeEditor() {
-    if (saving) return;
-    form.hidden = removal.hidden = true;
-    actions.hidden = false;
-    status.textContent = '';
-    edit.focus();
-  }
-  edit.onclick = () => {
-    form.reset();
-    $('feishuChatFeedback').textContent = '';
-    updateFields();
-    actions.hidden = true;
-    form.hidden = false;
-    status.textContent = '';
-    $('feishuDailyTime').focus();
-  };
-  if (remove) remove.onclick = () => {
-    actions.hidden = true;
-    removal.hidden = false;
-    status.textContent = '';
-    $('cancelFeishuRemoval').focus();
-  };
-  $('cancelFeishuRemoval').onclick = $('cancelFeishuEdit').onclick = closeEditor;
-  async function persist(kind, id, changes = {}) {
-    if (saving) return;
-    saving = true;
-    const controls = [...form.elements, ...removal.querySelectorAll('button'), ...actions.querySelectorAll('button')];
-    controls.forEach(control => { control.disabled = true; });
-    status.textContent = kind === 'off' ? '正在删除…' : '正在保存…';
-    try {
-      const result = await api('/api/system/feishu/daily/recipient', {
-        method:'PUT', body:{type:kind, id, expected_id:saved?.id || '', revision:daily.revision, ...changes},
-      });
-      if (!form.isConnected) return;
-      $('feishuDailyPanel').outerHTML = feishuDailyDetails(result, members);
-      wireFeishuDailyRecipient(result, members);
-      $('feishuDailySaveStatus').textContent = kind === 'off' ? '已删除接收人，日报推送已暂停。' : '任务设置已保存';
-      $('editFeishuRecipient').focus({preventScroll:true});
-    } catch (error) {
-      saving = false;
-      controls.forEach(control => { control.disabled = false; });
-      updateFields();
-      status.textContent = error.message;
-    }
-  }
-  const toggle = $('toggleFeishuDailyTask');
-  if (toggle) toggle.onclick = () => persist(saved.type, saved.id, {task_enabled:!daily.task_enabled});
-  $('confirmFeishuRemoval').onclick = () => persist('off', '');
-  const feedback = $('feishuChatFeedback');
-  group.oninput = () => { feedback.textContent = ''; };
-  $('verifyFeishuChat').onclick = async () => {
-    const id = group.value.trim();
-    if (!/^oc_[A-Za-z0-9_-]+$/.test(id)) {
-      feedback.textContent = '请先填写 oc_ 开头的群 ID。';
-      return;
-    }
-    feedback.textContent = '正在核对…';
-    try {
-      const result = await api('/api/system/feishu/daily/verify-chat', {method:'POST', body:{chat_id:id}});
-      if (group.value.trim() === id) feedback.textContent = '飞书群名：' + result.name;
-    } catch (error) {
-      if (group.value.trim() === id) feedback.textContent = error.message;
-    }
-  };
-  type.onchange = updateFields;
-  form.onsubmit = event => {
-    event.preventDefault();
-    if (saving) return;
-    const kind = type.value;
-    const id = kind === 'open_id' ? member.value : group.value.trim();
-    if (kind === 'open_id' && !id) {
-      status.textContent = '请从通讯录选择一位飞书成员。';
-      return;
-    }
-    if (kind === 'chat_id' && !/^oc_[A-Za-z0-9_-]+$/.test(id)) {
-      status.textContent = '请输入以 oc_ 开头的飞书群标识。';
-      return;
-    }
-    if (kind === 'chat_id' && saved?.id !== id &&
-      !window.confirm(`确认将同步日报发给飞书群 ${id}？请先核对群成员范围。`)) return;
-    persist(kind, id, {schedule:$('feishuDailyTime').value, task_enabled:saved?.id ? daily.task_enabled : true});
-  };
+function notificationRow(task) {
+  const group = task.recipient_type === 'chat_id';
+  const privateChat = task.recipient_type === 'open_id';
+  const recipient = task.recipient_label || task.recipient_id || '待设置';
+  const type = group ? '群 ID · …' + task.recipient_id.slice(-8) : privateChat ? '个人私聊' : '';
+  let status = task.enabled ? '已启用' : '已暂停';
+  if (task.enabled && task.error) status = '执行异常';
+  if (!task.recipient_id) status = '待设接收对象';
+  const statusClass = !task.recipient_id || !task.enabled ? '' : task.error ? 'error' : 'on';
+  const action = task.enabled ? 'pause' : 'resume';
+  const original = task.last_sent_at && task.last_sent_to_current === false ? '<small>发往原接收对象</small>' : '';
+  const cmd = (name, label) => '<button type="button" class="table-link" data-task-action="' + name + '">' + label + '</button>';
+  return '<tr data-task-id="' + esc(task.id) + '">' +
+    '<td data-label="任务名称"><strong>' + esc(task.name) + '</strong></td>' +
+    '<td data-label="接收对象">' + esc(recipient) + '<small title="' + esc(task.recipient_id) + '">' + esc(type) + '</small></td>' +
+    '<td data-label="发送计划">每天 ' + esc(task.schedule) + (task.enabled && task.next_run ? '<small>下次 ' + esc(notificationTime(task.next_run)) + '</small>' : '') + '</td>' +
+    '<td data-label="最近发送">' + esc(notificationTime(task.last_sent_at) || '暂无成功记录') + original +
+      (task.error ? '<small class="notification-error">' + esc(task.error) + '</small>' : '') + '</td>' +
+    '<td data-label="状态"><span class="notification-state ' + statusClass + '">' + status + '</span></td>' +
+    '<td data-label="操作"><div class="notification-actions">' + cmd('edit', '编辑') + (task.recipient_id ? cmd(action, task.enabled ? '暂停' : '恢复') : '') +
+      cmd('delete', '删除') + '</div></td></tr>';
 }
 
-function mountFeishuDailyTask(host, daily, members) {
-  if (!daily || !host) return;
-  $('feishuDailyPanel')?.remove();
-  host.innerHTML = feishuDailyDetails(daily, members);
-  wireFeishuDailyRecipient(daily, members);
-}
-
-async function loadSyncFeishuTask() {
-  const host = $('syncFeishuTaskHost');
-  if (!host || currentUser?.role !== 'super_admin') return;
+async function loadNotificationTasks(message = '') {
+  if (currentUser?.role !== 'super_admin' || currentNavMode !== 'notifications') return;
+  const request = ++notificationState.request;
+  const status = $('notificationListStatus');
+  $('newNotificationTask').disabled = true;
+  status.textContent = '正在读取任务…';
   try {
-    const data = await api('/api/system/feishu');
-    if (currentNavMode === 'sync' && data.source === 'feishu') mountFeishuDailyTask(host, data.daily, data.members);
+    const data = await api(notificationTasksUrl);
+    if (request !== notificationState.request || currentNavMode !== 'notifications') return;
+    notificationState.tasks = data.tasks;
+    notificationState.members = data.members || [];
+    $('notificationTaskRows').innerHTML = data.tasks.map(notificationRow).join('') ||
+      '<tr><td colspan="6" class="notification-empty">尚无任务。点击「新建任务」选择接收对象及发送时间。</td></tr>';
+    $('notificationTotal').textContent = data.tasks.length + ' 项';
+    $('notificationPreviewText').textContent = data.preview || '';
+    $('notificationPreview').hidden = !data.preview;
+    $('newNotificationTask').disabled = false;
+    status.textContent = message;
   } catch (error) {
-    if (currentNavMode === 'sync') host.textContent = '日报任务读取失败：' + error.message;
+    if (request !== notificationState.request || currentNavMode !== 'notifications') return;
+    status.textContent = (message ? message + '。' : '') + '列表读取失败，请刷新。' + error.message;
   }
 }
+
+function selectNotificationType() {
+  const group = $('notifyRecipientType').value === 'chat_id';
+  $('notifyMemberField').hidden = group;
+  $('notifyMember').disabled = group;
+  $('notifyGroupField').hidden = !group;
+  $('notifyGroup').disabled = !group;
+  $('notifyGroup').required = group;
+  $('notifyGroupFeedback').textContent = '';
+}
+
+function openNotificationEditor(task = null) {
+  notificationState.editing = task;
+  $('notificationTaskForm').reset();
+  $('notifyFormStatus').textContent = '';
+  $('notifyEditorTitle').textContent = task ? '编辑推送任务' : '新建推送任务';
+  $('notifyName').value = task?.name || '';
+  $('notifyTime').value = task?.schedule || '18:00';
+  $('notifyRecipientType').value = task?.recipient_type === 'chat_id' ? 'chat_id' : 'open_id';
+  $('notifyEnabled').checked = task ? task.enabled : true;
+  const members = notificationState.members.filter(member => member.active && member.open_id);
+  const options = $('notifyMember');
+  options.replaceChildren(new Option(members.length ? '请选择一位成员' : '请先在成员管理同步飞书', ''));
+  const names = new Set(), duplicateNames = new Set();
+  for (const member of members) {
+    if (names.has(member.name)) duplicateNames.add(member.name);
+    names.add(member.name);
+  }
+  for (const member of members) {
+    const label = [member.name || member.open_id, member.department,
+      member.phone_tail && '手机尾号 ' + member.phone_tail,
+      duplicateNames.has(member.name) && '成员 ID …' + member.open_id.slice(-8)
+    ].filter(Boolean).join(' · ');
+    options.add(new Option(label, member.open_id));
+  }
+  if (task?.recipient_type === 'open_id' && task.recipient_id) {
+    if (!members.some(m => m.open_id === task.recipient_id)) {
+      options.add(new Option((task.recipient_label || task.recipient_id) + '（当前接收人）', task.recipient_id));
+    }
+    options.value = task.recipient_id;
+  }
+  $('notifyGroup').value = task?.recipient_type === 'chat_id' ? task.recipient_id : '';
+  selectNotificationType();
+  $('notificationTaskDialog').showModal();
+  $('notifyName').focus();
+}
+
+function taskUpdateBody(task, enabled) {
+  return { name: task.name, schedule: task.schedule, recipient_type: task.recipient_type,
+    recipient_id: task.recipient_id, revision: task.revision, enabled };
+}
+
+async function saveNotificationTask(event) {
+  event.preventDefault();
+  if (notificationState.saving) return;
+  const task = notificationState.editing;
+  const type = $('notifyRecipientType').value;
+  const body = { name: $('notifyName').value.trim(), schedule: $('notifyTime').value,
+    recipient_type: type, recipient_id: (type === 'chat_id' ? $('notifyGroup').value : $('notifyMember').value).trim(),
+    enabled: $('notifyEnabled').checked };
+  const status = $('notifyFormStatus');
+  if (!body.name || !body.recipient_id) { status.textContent = '请填写任务名称并指定接收对象。'; return; }
+  if (task) body.revision = task.revision;
+  notificationState.saving = true;
+  $('notifySave').disabled = $('notifyCancel').disabled = true;
+  status.textContent = '正在保存…';
+  try {
+    await api(task ? notificationTasksUrl + '/' + encodeURIComponent(task.id) : notificationTasksUrl,
+      {method: task ? 'PUT' : 'POST', body});
+    $('notificationTaskDialog').close();
+    await loadNotificationTasks(task ? '任务已更新' : '任务已创建');
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    notificationState.saving = false;
+    $('notifySave').disabled = $('notifyCancel').disabled = false;
+  }
+}
+
+async function checkNotificationGroup() {
+  const id = $('notifyGroup').value.trim();
+  const button = $('notifyCheckGroup');
+  const feedback = $('notifyGroupFeedback');
+  if (!id) { $('notifyGroup').reportValidity(); return; }
+  button.disabled = true;
+  feedback.textContent = '正在检查…';
+  const current = () => $('notifyGroup').value.trim() === id && $('notifyRecipientType').value === 'chat_id';
+  try {
+    const data = await api('/api/system/feishu/daily/group-membership', {method:'POST', body:{chat_id:id}});
+    if (current()) feedback.textContent = data.is_in_chat ? '机器人已在群内，请确认有发言权限。' : '机器人不在群内，请在群设置中添加「文件索引」后再推送。';
+  } catch (error) {
+    if (current()) feedback.textContent = '检查失败：' + error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function handleNotificationRow(event) {
+  const button = event.target.closest('button[data-task-action]');
+  if (!button) return;
+  const row = button.closest('tr');
+  const task = notificationState.tasks.find(item => String(item.id) === row.dataset.taskId);
+  if (!task) return;
+  const action = button.dataset.taskAction;
+  if (action === 'edit') { openNotificationEditor(task); return; }
+  if (action === 'delete') {
+    notificationState.deleting = task;
+    $('notifyDeleteText').textContent = '删除「' + task.name + '」后，此任务将停止向 ' + (task.recipient_type === 'chat_id' ? task.recipient_id : task.recipient_label || task.recipient_id || '当前接收对象') + ' 推送日报。';
+    $('notifyDeleteStatus').textContent = '';
+    $('notificationDeleteDialog').showModal();
+    return;
+  }
+  const buttons = row.querySelectorAll('button');
+  buttons.forEach(item => item.disabled = true);
+  try {
+    await api(notificationTasksUrl + '/' + encodeURIComponent(task.id), {method:'PUT', body:taskUpdateBody(task, action === 'resume')});
+    await loadNotificationTasks(action === 'resume' ? '任务已恢复' : '任务已暂停');
+  } catch (error) {
+    await loadNotificationTasks(error.message);
+  } finally {
+    buttons.forEach(item => item.disabled = false);
+  }
+}
+
+async function deleteNotificationTask() {
+  if ($('notifyConfirmDelete').disabled) return;
+  const task = notificationState.deleting;
+  $('notifyConfirmDelete').disabled = $('notifyCancelDelete').disabled = true;
+  try {
+    await api(notificationTasksUrl + '/' + encodeURIComponent(task.id) + '?revision=' + encodeURIComponent(task.revision), {method:'DELETE'});
+    $('notificationDeleteDialog').close();
+    await loadNotificationTasks('任务已删除');
+  } catch (error) {
+    $('notifyDeleteStatus').textContent = error.message;
+  } finally {
+    $('notifyConfirmDelete').disabled = $('notifyCancelDelete').disabled = false;
+  }
+}
+
+$('newNotificationTask').onclick = () => openNotificationEditor();
+$('refreshNotificationTasks').onclick = () => loadNotificationTasks();
+$('notifyRecipientType').onchange = selectNotificationType;
+$('notifyGroup').oninput = () => { $('notifyGroupFeedback').textContent = ''; };
+$('notifyCheckGroup').onclick = checkNotificationGroup;
+$('notifyCancel').onclick = () => $('notificationTaskDialog').close();
+$('notificationTaskDialog').oncancel = event => { if (notificationState.saving) event.preventDefault(); };
+$('notificationTaskForm').onsubmit = saveNotificationTask;
+$('notificationTaskRows').onclick = handleNotificationRow;
+$('notifyConfirmDelete').onclick = deleteNotificationTask;
+$('notifyCancelDelete').onclick = () => $('notificationDeleteDialog').close();
+$('notificationDeleteDialog').oncancel = event => { if ($('notifyConfirmDelete').disabled) event.preventDefault(); };
 
 const memberFilter = { query:'', source:'', department:'', page:1 };
 const memberRoles = {super_admin:'超级管理员', dept_admin:'部门管理员', user:'普通成员'};

@@ -1563,7 +1563,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 }
 
 </style>
-<link rel="stylesheet" href="/static/portal.css?v=20261123-permission-tabs">
+<link rel="stylesheet" href="/static/portal.css?v=20261123-notification-tasks">
 <link rel="stylesheet" href="/static/ui.css?v=20261108-robot">
 </head>
 <body>
@@ -1649,17 +1649,21 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 </span>
 </button>
 <div class="nav-section-label">管理</div>
-<button class="nav-mode-btn " id="navPermTab" onclick="switchNavMode('permission')" title="人员权限（5）" aria-current="false">
-<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-<use href="#i-users"/>
-</svg>
-<span>人员权限</span>
+<button class="nav-mode-btn" id="navMembersTab" onclick="switchNavMode('members')" title="成员管理（5）" aria-current="false" style="display:none">
+<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg>
+<span>成员管理</span>
 </button>
-<button class="nav-mode-btn " id="navSyncTab" onclick="switchNavMode('sync')" title="索引与同步（6）" aria-current="false">
-<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-<use href="#i-refresh"/>
-</svg>
-<span>索引与同步</span>
+<button class="nav-mode-btn" id="navPermTab" onclick="switchNavMode('access')" title="文件权限" aria-current="false" style="display:none">
+<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-shield-check"/></svg>
+<span>文件权限</span>
+</button>
+<button class="nav-mode-btn" id="navSyncTab" onclick="switchNavMode('sync')" title="文件索引（6）" aria-current="false">
+<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-refresh"/></svg>
+<span>文件索引</span>
+</button>
+<button class="nav-mode-btn" id="navNotificationsTab" onclick="switchNavMode('notifications')" title="推送任务" aria-current="false" style="display:none">
+<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-inbox"/></svg>
+<span>推送任务</span>
 </button>
 </nav>
 <div class="sidebar-bottom">
@@ -2241,23 +2245,78 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
       </div>
     </section>
 
+    <section id="membersView" class="hidden archive-shell" aria-labelledby="membersTitle">
+      <div class="portal-page-heading"><h1 id="membersTitle">成员管理</h1></div>
+      <p id="memberLoadStatus" role="status" hidden></p>
+      <section id="memberPanel" aria-label="成员名单" class="directory-grant-panel"></section>
+    </section>
+
     <section id="permissionView" class="hidden archive-shell">
-      <div class="portal-page-heading"><h1>人员权限</h1></div>
-      <div class="permission-tabs" id="permissionTabs" role="tablist" aria-label="人员权限">
-        <button id="showMemberRoster" role="tab" type="button" data-section="members" aria-controls="memberPanel" aria-selected="false" tabindex="0">成员</button>
-        <button id="showFolderGrants" role="tab" type="button" data-section="grants" aria-controls="directoryGrantPanel" aria-selected="false" tabindex="-1">文件夹授权</button>
+      <div class="portal-page-heading"><h1>文件权限</h1></div>
+      <div class="permission-tabs" id="permissionTabs" role="tablist" aria-label="文件权限">
+        <button id="showFolderGrants" role="tab" type="button" data-section="grants" aria-controls="directoryGrantPanel" aria-selected="true" tabindex="0">文件夹授权</button>
         <button id="showGrantHistory" role="tab" type="button" data-section="audit" aria-controls="permissionAuditPanel" aria-selected="false" tabindex="-1">授权记录</button>
       </div>
       <p id="permissionLoadStatus" role="status" hidden></p>
-      <section id="memberPanel" role="tabpanel" aria-labelledby="showMemberRoster" class="directory-grant-panel" hidden></section>
       <section id="directoryGrantPanel" role="tabpanel" aria-labelledby="showFolderGrants" class="directory-grant-panel" hidden></section>
       <section id="permissionAuditPanel" role="tabpanel" aria-labelledby="showGrantHistory" class="directory-grant-panel" hidden></section>
+    </section>
+
+    <section id="notificationsView" class="hidden archive-shell" aria-labelledby="notificationTitle">
+      <div class="portal-page-heading">
+        <div><h1 id="notificationTitle">推送任务</h1><p>按北京时间，将文件更新和归档异常日报发给指定成员或群。</p></div>
+        <button id="newNotificationTask" type="button" class="portal-button primary" disabled>新建任务</button>
+      </div>
+      <section class="home-panel notification-panel">
+        <div class="home-panel-heading"><h2>定时推送 <span id="notificationTotal"></span></h2>
+          <button id="refreshNotificationTasks" type="button" class="tree-tool-btn">刷新</button></div>
+        <p id="notificationListStatus" role="status"></p>
+        <div class="notification-table-scroll"><table class="portal-table notification-table">
+          <thead><tr><th scope="col">任务名称</th><th scope="col">接收对象</th><th scope="col">发送计划</th>
+            <th scope="col">最近发送</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+          <tbody id="notificationTaskRows"></tbody>
+        </table></div>
+      </section>
+      <details id="notificationPreview" class="home-panel notification-preview" hidden>
+        <summary>查看今日日报内容</summary>
+        <p>同日任务共用首轮推送时的归档明细。</p><pre id="notificationPreviewText"></pre>
+      </details>
+      <dialog id="notificationTaskDialog" class="notification-dialog" aria-labelledby="notifyEditorTitle">
+        <form id="notificationTaskForm">
+          <header><h2 id="notifyEditorTitle">新建推送任务</h2></header>
+          <div class="notification-fields">
+            <label>任务名称<input id="notifyName" maxlength="80" required autocomplete="off" placeholder="例如：运营组晚间日报"></label>
+            <div class="notification-field-pair">
+              <label>接收方式<select id="notifyRecipientType"><option value="open_id">个人私聊</option><option value="chat_id">指定飞书群</option></select></label>
+              <label>每日发送时间（北京时间）<input id="notifyTime" type="time" step="60" required></label>
+            </div>
+            <label id="notifyMemberField">接收成员<select id="notifyMember" required></select></label>
+            <div id="notifyGroupField" hidden>
+              <label>飞书群 ID<input id="notifyGroup" placeholder="oc_…" autocomplete="off" aria-describedby="notifyGroupHelp"></label>
+              <p id="notifyGroupHelp">从飞书群设置复制群 ID。先把「文件索引」机器人添加到群，并允许它发言。</p>
+              <button type="button" id="notifyCheckGroup" class="tree-tool-btn">检查机器人是否在群</button>
+              <p id="notifyGroupFeedback" role="status"></p>
+            </div>
+            <div><label class="notification-checkbox"><input type="checkbox" id="notifyEnabled" aria-describedby="notifyScheduleHint">启用定时发送</label>
+              <p id="notifyScheduleHint">若已过发送时间且该任务今天尚未发送，启用后将在下次调度发送。</p></div>
+            <p id="notifyFormStatus" role="alert"></p>
+          </div>
+          <footer><button id="notifyCancel" type="button" class="portal-button">取消</button>
+            <button id="notifySave" type="submit" class="portal-button primary">保存任务</button></footer>
+        </form>
+      </dialog>
+      <dialog id="notificationDeleteDialog" class="notification-dialog small" aria-labelledby="notifyDeleteTitle">
+        <header><h2 id="notifyDeleteTitle">删除推送任务</h2></header>
+        <div class="notification-fields"><p id="notifyDeleteText"></p><p id="notifyDeleteStatus" role="alert"></p></div>
+        <footer><button id="notifyCancelDelete" type="button" class="portal-button" autofocus>取消</button>
+          <button id="notifyConfirmDelete" type="button" class="portal-button notify-danger">确认删除</button></footer>
+      </dialog>
     </section>
 
     <section id="syncView" class="hidden">
       <div class="portal-page-heading">
 <div>
-<h1>索引与同步</h1>
+<h1>文件索引</h1>
 <p id="portalSyncDescription">查看索引状态与扫描计划。新文件在相应扫描完成后进入检索范围。</p>
 </div>
 <button class="portal-button" onclick="refreshPortalSync()">刷新状态</button>
@@ -2280,13 +2339,12 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 <strong id="portalSyncInterval">—</strong>
 </div>
       </div>
-      <div id="syncFeishuTaskHost"></div>
       <section class="home-panel" id="systemBackupPanel" hidden style="margin-bottom:20px"></section>
       <div class="sync-content-grid">
         <div class="sync-left-column">
 <section class="home-panel">
 <div class="home-panel-heading">
-<h2>后台任务</h2>
+<h2>索引任务</h2>
 <span class="portal-muted">按配置运行</span>
 </div>
 <div class="portal-table-scroll">
@@ -2314,15 +2372,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 <tr>
 <td>
 <b>重建检索索引</b><small>重新生成检索词，完整扫描成功后生效</small></td><td>手动</td><td>按需运行</td><td><button class="table-link" data-scan-button onclick="startScan('rebuild')">重建索引</button></td></tr>
-<tr><td><b>归档检测</b>
-<small>对照规则，生成归档待办</small>
-</td>
-<td id="portalArchiveInterval">—</td>
-<td id="portalArchiveJobState">—</td>
-<td>
-<button class="table-link" id="portalRunArchiveCheck" onclick="runPortalArchiveCheck()">立即运行</button>
-</td>
-</tr>
+
 </tbody>
 </table>
 </div>
@@ -2824,6 +2874,7 @@ function toast(t, type = 'info') {
 const KeyboardManager = {
   init() {
     window.addEventListener('keydown', (e) => {
+      if (document.querySelector('dialog[open]')) return;
       const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
       const isInput = (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select');
 
@@ -2900,7 +2951,7 @@ const KeyboardManager = {
         else if (e.key === '2') { switchNavMode('catalog'); toast('快捷切换：组织架构'); }
         else if (e.key === '3') { switchNavMode('archive'); toast('快捷切换：归档合规'); }
         else if (e.key === '4') { switchNavMode('approval'); toast('快捷切换：下载审批'); }
-        else if (e.key === '5') { switchNavMode('permission'); toast('快捷切换：人员权限'); }
+        else if (e.key === '5' && currentUser?.role === 'super_admin') { switchNavMode('members'); toast('快捷切换：成员管理'); }
       }
     });
   }
@@ -3457,8 +3508,9 @@ function applyUserUI() {
   }
   applyPortalUserRole();
   // 非管理员隐藏"人员与账号权限"入口（该页接口本身也已被后端限制为管理员）
-  const permTab = $('navPermTab');
-  if (permTab) permTab.style.display = currentUser?.role === 'super_admin' ? '' : 'none';
+  for (const id of ['navMembersTab', 'navPermTab', 'navNotificationsTab']) {
+    $(id).style.display = currentUser?.role === 'super_admin' ? '' : 'none';
+  }
   $('openDailyReportAudit').classList.toggle('hidden', !currentUser);
   // 标记当前访问方式（本机 / 公网），供按钮提示与后续样式扩展使用；按钮本身不隐藏
   document.body.classList.toggle('remote-mode', !isLocalHost());
@@ -3503,6 +3555,8 @@ async function doLogin() {
     loadStatus(); loadRecent();
     openDailyUpdateDetails();
     openDailyReportRoute();
+    const tab = new URLSearchParams(location.search).get('tab');
+    if (managementRoutes.has(tab)) switchNavMode(tab);
   } catch (e) {
     $('loginError').textContent = e.message || '登录失败';
   }
@@ -3820,20 +3874,34 @@ let catalogState = {
   expandedPaths: new Set()
 };
 
+const managementRoutes = new Set(['members', 'access', 'permission', 'notifications', 'sync']);
+
 function switchNavMode(mode) {
+  const url = new URL(location.href);
+  if (mode === 'permission') mode = ['grants','audit'].includes(url.searchParams.get('section')) ? 'access' : 'members';
+  if (['members','access','notifications'].includes(mode) && currentUser?.role !== 'super_admin') return;
+  if (managementRoutes.has(mode) || managementRoutes.has(url.searchParams.get('tab'))) {
+    if (mode !== 'access') url.searchParams.delete('section');
+    url.searchParams.set('tab', mode);
+    history.replaceState(history.state, '', url);
+  }
   currentNavMode = mode;
   updatePortalNavigation(mode === 'report-audit' ? 'archive' : mode);
   $('navSearchTab').classList.toggle('active', mode === 'search');
   $('navCatalogTab').classList.toggle('active', mode === 'catalog');
   $('navArchiveTab').classList.toggle('active', mode === 'archive' || mode === 'report-audit');
   $('navApprovalTab')?.classList.toggle('active', mode === 'approval');
-  $('navPermTab')?.classList.toggle('active', mode === 'permission');
+  $('navMembersTab').classList.toggle('active', mode === 'members');
+  $('navPermTab').classList.toggle('active', mode === 'access');
+  $('navNotificationsTab').classList.toggle('active', mode === 'notifications');
   $('searchView').classList.toggle('hidden', mode !== 'search');
   $('catalogView').classList.toggle('hidden', mode !== 'catalog');
   $('archiveView').classList.toggle('hidden', mode !== 'archive');
   $('reportAuditView').classList.toggle('hidden', mode !== 'report-audit');
   $('approvalView')?.classList.toggle('hidden', mode !== 'approval');
-  $('permissionView')?.classList.toggle('hidden', mode !== 'permission');
+  $('membersView').classList.toggle('hidden', mode !== 'members');
+  $('permissionView').classList.toggle('hidden', mode !== 'access');
+  $('notificationsView').classList.toggle('hidden', mode !== 'notifications');
   if (mode === 'catalog') {
     return initCatalogDashboard();
   } else if (mode === 'archive') {
@@ -3842,8 +3910,10 @@ function switchNavMode(mode) {
     return initDailyReportAudit();
   } else if (mode === 'approval') {
     initApprovalCenter();
-  } else if (mode === 'permission') {
+  } else if (mode === 'members' || mode === 'access') {
     initPermissionDashboard();
+  } else if (mode === 'notifications') {
+    loadNotificationTasks();
   }
 }
 
@@ -5049,7 +5119,7 @@ function showPermissionSection(section, updateUrl = false) {
   }
   if (updateUrl) {
     const url = new URL(location.href);
-    url.searchParams.set('tab', 'permission');
+    url.searchParams.set('tab', 'access');
     url.searchParams.set('section', section);
     history.replaceState(history.state, '', url);
   }
@@ -5077,21 +5147,22 @@ permissionTabs.onkeydown = event => {
 
 async function loadPermissionOverview() {
   const request = ++permissionOverviewRequest;
-  const status = $('permissionLoadStatus');
+  const mode = currentNavMode;
+  const status = $(mode === 'members' ? 'memberLoadStatus' : 'permissionLoadStatus');
   try {
     status.hidden = true;
     const res = await api('/api/system/permissions?include_daily=false');
-    if (!res.ok || request !== permissionOverviewRequest || currentNavMode !== 'permission') return;
+    if (!res.ok || request !== permissionOverviewRequest || currentNavMode !== mode) return;
     permState.users = res.users || [];
     permState.directory = res.directory || {source:'local', members:[], summary:{}};
-    renderMemberPanel();
+    if (mode === 'members') { renderMemberPanel(); return; }
     $('directoryGrantPanel').replaceChildren();
     const requested = new URLSearchParams(location.search).get('section');
     const known = [...permissionTabs.querySelectorAll('[role="tab"]')].some(tab => tab.dataset.section === requested);
-    showPermissionSection(permState.section || (known ? requested : 'members'));
+    showPermissionSection(known ? requested : permState.section || 'grants');
   } catch (error) {
     if (request !== permissionOverviewRequest) return;
-    status.textContent = '人员权限加载失败：' + error.message;
+    status.textContent = '加载失败：' + error.message;
     status.hidden = false;
   }
 }
@@ -5532,12 +5603,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     openDailyReportRoute();
   } else if (tab === 'updates') {
     openDailyUpdateDetails();
-  } else if (tab === 'sync') {
-    switchNavMode('sync');
+  } else if (managementRoutes.has(tab)) {
+    switchNavMode(tab);
   } else if (tab === 'approval') {
     switchNavMode('approval');
-  } else if (tab === 'permission' && isAdminUser()) {
-    switchNavMode('permission');
   } else if (tab === 'catalog' || testScene === 'catalog' || testScene === 'catalog_today') {
     switchNavMode('catalog');
     if (testScene === 'catalog_today') {
@@ -6034,8 +6103,8 @@ document.addEventListener('keydown', (e) => {
 
 
 </script>
-<script src="/static/portal.js?v=20261123-permission-tabs"></script>
-<script src="/static/operations.js?v=20261123-permission-tabs"></script>
+<script src="/static/portal.js?v=20261123-notification-tasks"></script>
+<script src="/static/operations.js?v=20261123-notification-tasks"></script>
 <script src="/static/robot-drag.js?v=20261108"></script>
 </body>
 </html>
