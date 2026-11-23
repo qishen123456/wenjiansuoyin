@@ -1,5 +1,6 @@
-"""Feishu enterprise app. Bind imported open_ids explicitly to local accounts."""
+"""Feishu enterprise login, directory matching, and notifications."""
 import json
+import logging
 import os
 import secrets
 import time
@@ -17,7 +18,9 @@ import directory_access
 import feishu_identity
 
 BASE = 'https://open.feishu.cn/open-apis'
+logger = logging.getLogger(__name__)
 _sync_lock = threading.Lock()
+_LOGIN_SYNC_INTERVAL = 60
 
 
 def app_credentials_configured():
@@ -196,7 +199,7 @@ def directory_snapshot(conn, *, include_stored=False):
     }
 
 
-def linked_identities(conn, *, demo, user_id=None):
+def linked_identities(conn, *, demo, user_id=None, open_id=None):
     """Read presentation fields for active, eligible Feishu associations."""
     if not app_credentials_configured():
         return {}
@@ -211,6 +214,9 @@ def linked_identities(conn, *, demo, user_id=None):
     if user_id is not None:
         query += ' AND u.id=?'
         params.append(user_id)
+    if open_id is not None:
+        query += ' AND f.open_id=?'
+        params.append(open_id)
     return {row['id']: dict(row) for row in conn.execute(query, params)}
 
 
@@ -259,6 +265,47 @@ def _sync_directory(app):
         conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_last_sync',?)",(str(time.time()),))
         conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_sync_scope',?)", (coverage,))
     return {'users': len(members), 'departments': len(departments), 'matched': matched}
+
+
+def _refresh_directory_for_login(app):
+    # A valid OAuth identity may trigger a refresh, but concurrent logins share one attempt.
+    if not _sync_lock.acquire(blocking=False):
+        return
+    try:
+        with app.db_session() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            last = conn.execute("SELECT value FROM app_meta WHERE key='feishu_login_sync_attempt'").fetchone()
+            now = time.time()
+            if last and now - float(last[0]) < _LOGIN_SYNC_INTERVAL:
+                return
+            conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_login_sync_attempt',?)", (str(now),))
+        try:
+            _sync_directory(app)
+        except HTTPException as exc:
+            logger.warning('Feishu directory refresh at login failed (status %s, provider code %s)',
+                           exc.status_code, getattr(exc, 'code', None))
+    finally:
+        _sync_lock.release()
+
+
+def _unmatched_login(conn, identity):
+    profile = conn.execute('SELECT match_status FROM feishu_member_profiles WHERE open_id=?', (identity,)).fetchone()
+    message = {
+        'review': '平台已找到候选账号。请让超级管理员在「成员管理」核对候选账号并点击「确认关联」。',
+        'no_account': '请联系平台管理员，在「成员管理」为你的平台账号填写与飞书通讯录一致的手机号。',
+        'no_phone': '飞书通讯录未返回你的手机号。请联系平台管理员检查应用的通讯录权限。',
+        'conflict': '身份对应了多个候选记录。请联系平台管理员核对手机号和已有账号关联。',
+        'disabled': '匹配到的平台账号已停用。请联系平台管理员。',
+        'inactive': '当前飞书成员不可用。请联系平台管理员核对通讯录。',
+    }.get(profile[0] if profile else '', '请稍后重新登录，或请平台管理员检查通讯录授权范围和平台账号手机号。')
+    response = HTMLResponse(
+        '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>请核对平台账号</title><main style="font:16px system-ui;max-width:480px;margin:15vh auto;padding:24px">'
+        f'<h1>飞书身份尚未匹配</h1><p>{message}</p><a href="/">返回平台</a></main></html>',
+        status_code=403, headers={'Cache-Control': 'no-store'})
+    response.delete_cookie('ff_feishu_state')
+    return response
 
 
 def deliver_notices(app):
@@ -386,29 +433,22 @@ def register(app):
         if not user_token:
             raise HTTPException(502, '飞书登录未返回用户凭据，请重新登录。')
         identity = (call('GET', '/authen/v1/user_info', token=user_token).get('data') or {}).get('open_id')
-        if not identity:
+        if not isinstance(identity, str) or not identity:
             raise HTTPException(502, '无法读取飞书身份，请检查应用授权。')
         with app.db_session() as conn:
+            recognized = linked_identities(conn, demo=app.DEMO_MODE, open_id=identity)
+        if not recognized:
+            _refresh_directory_for_login(app)
+        with app.db_session() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            row = conn.execute("""SELECT u.id FROM system_users u JOIN feishu_members m ON u.feishu_id=m.open_id
-                LEFT JOIN feishu_member_profiles p ON p.open_id=m.open_id
-                WHERE m.open_id=? AND m.active=1 AND u.status='active'
-                  AND ((p.local_user_id=u.id AND p.match_status='matched')
-                       OR (? AND u.feishu_binding_source IN ('','manual')))""", (identity, app.DEMO_MODE)).fetchone()
-            if not row:
-                denied = HTMLResponse(
-                    '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
-                    '<meta name="viewport" content="width=device-width,initial-scale=1">'
-                    '<title>请核对平台账号</title><main style="font:16px system-ui;max-width:480px;margin:15vh auto;padding:24px">'
-                    '<h1>飞书身份尚未匹配</h1><p>请联系平台管理员同步通讯录，并核对平台账号的手机号。'
-                    '管理员账号匹配后还需要确认关联。</p><a href="/">返回平台</a></main></html>',
-                    status_code=403, headers={'Cache-Control': 'no-store'})
-                denied.delete_cookie('ff_feishu_state')
-                return denied
+            matches = linked_identities(conn, demo=app.DEMO_MODE, open_id=identity)
+            if len(matches) != 1:
+                return _unmatched_login(conn, identity)
+            user_id = next(iter(matches))
             session=secrets.token_urlsafe(48)
             ttl=int(app.SESSION_TTL_HOURS*3600)
             conn.execute("INSERT INTO login_sessions(token,user_id,created_at,expires_at,auth_source) VALUES(?,?,?,?,'feishu')",
-                         (session, row[0], time.time(), time.time()+ttl))
+                         (session, user_id, time.time(), time.time()+ttl))
         report_date = clean_report_date(login_state['report_date'])
         destination = '/'
         if report_date:

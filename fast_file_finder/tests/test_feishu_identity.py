@@ -8,8 +8,10 @@ def setup_feishu(monkeypatch, people):
     monkeypatch.setenv('FEISHU_APP_SECRET', 'synthetic-secret')
     monkeypatch.setenv('FEISHU_REDIRECT_URI', 'http://testserver/integrations/feishu/callback')
     monkeypatch.setattr(app, 'DIRECTORY_ACL_ENABLED', True)
+    calls = []
 
     def request(method, path, **kwargs):
+        calls.append((method, path))
         if path.endswith('tenant_access_token/internal'):
             return {'tenant_access_token': 'test'}
         if path.endswith('/0/children'):
@@ -28,6 +30,7 @@ def setup_feishu(monkeypatch, people):
         raise AssertionError(path)
 
     monkeypatch.setattr(feishu, 'call', request)
+    return calls
 
 
 def oauth(client, open_id):
@@ -44,6 +47,63 @@ def add_grant(client, root, subject_type, key, folder, **permissions):
         'permissions': permissions,
     })
     assert response.status_code == 200, response.text
+
+
+def test_first_feishu_login_matches_existing_account_and_uses_directory_identity(foundation, monkeypatch):
+    client, _, _ = foundation
+    calls = setup_feishu(monkeypatch, [
+        {'open_id': 'ou_first', 'name': '飞书姓名', 'mobile': '+86 (138) 0010-0004',
+         'department_ids': ['od_ledger'], 'job_title': '成本会计'},
+    ])
+
+    response = oauth(client, 'ou_first')
+    assert response.status_code == 307 and response.headers['location'] == '/'
+    user = client.get('/api/auth/me').json()['user']
+    assert user['id'] == 4 and user['role'] == 'user'
+    assert user['name'] == '飞书姓名' and user['identity_source'] == 'feishu'
+    assert user['department'] == '飞书财务部 / 利润组' and user['job_title'] == '成本会计'
+
+    client.cookies.clear()
+    assert oauth(client, 'ou_first').status_code == 307
+    assert calls.count(('POST', '/auth/v3/tenant_access_token/internal')) == 1
+
+
+def test_first_feishu_login_prepares_review_for_administrator_without_a_session(foundation, monkeypatch):
+    client, _, _ = foundation
+    setup_feishu(monkeypatch, [
+        {'open_id': 'ou_first_admin', 'mobile': '13800100001', 'department_ids': ['0']},
+    ])
+
+    assert oauth(client, 'ou_first_admin').status_code == 403
+    assert 'ff_session' not in client.cookies
+    login(client)
+    member, = client.get('/api/system/feishu').json()['members']
+    assert member['local_user_id'] == 1 and member['match_status'] == 'review'
+    assert member['bound_user_id'] is None
+    client.post('/api/system/feishu/bind', json={'user_id': 1, 'open_id': 'ou_first_admin'}).raise_for_status()
+    client.cookies.clear()
+    assert oauth(client, 'ou_first_admin').status_code == 307
+    assert client.get('/api/auth/me').json()['user']['role'] == 'super_admin'
+
+
+def test_failed_first_logins_cannot_override_conflicts_or_repeat_the_directory_refresh(foundation, monkeypatch):
+    client, _, _ = foundation
+    with app.db_session() as conn:
+        conn.execute("UPDATE system_users SET feishu_binding_source='blocked' WHERE id=5")
+    calls = setup_feishu(monkeypatch, [
+        {'open_id': 'ou_conflict_one', 'mobile': '13800100004', 'department_ids': ['od_ledger']},
+        {'open_id': 'ou_conflict_two', 'mobile': '+8613800100004', 'department_ids': ['od_ledger']},
+        {'open_id': 'ou_blocked', 'mobile': '13800100005', 'department_ids': ['0']},
+    ])
+
+    for identity in ('ou_conflict_one', 'ou_conflict_two', 'ou_blocked', 'ou_outside', 'ou_conflict_one'):
+        assert oauth(client, identity).status_code == 403
+        assert 'ff_session' not in client.cookies
+    assert calls.count(('POST', '/auth/v3/tenant_access_token/internal')) == 1
+    with app.db_session() as conn:
+        results = conn.execute('SELECT open_id,match_status FROM feishu_member_profiles')
+        assert dict(results) == {'ou_conflict_one': 'conflict', 'ou_conflict_two': 'conflict', 'ou_blocked': 'review'}
+        assert conn.execute("SELECT count(*) FROM system_users WHERE feishu_id<>''").fetchone()[0] == 0
 
 
 def test_phone_matching_drives_department_and_job_access_then_revokes_on_change(foundation, monkeypatch):
