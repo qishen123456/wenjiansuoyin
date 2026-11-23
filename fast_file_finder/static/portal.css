@@ -2722,3 +2722,36 @@ button:disabled {
 .login-password-form .modal-input{height:41px;min-width:0;margin:0 0 4px;border-radius:7px;padding:0 11px;font-size:13px;border:1px solid var(--line-strong)}
 .login-password-form button{width:100%;min-height:41px;margin-top:3px;border-radius:7px;font-size:13px}
 .login-error{color:var(--danger);font-size:12px;margin-top:9px;min-height:16px}
+
+/* 日预警明细 */
+.report-archive-actions,.report-audit-toolbar,.report-audit-filters { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.report-audit-panel { border:1px solid #e5e7eb; border-radius:12px; background:#fff; overflow:hidden; }
+.report-audit-toolbar { padding:14px 16px; border-bottom:1px solid #e8edf4; gap:14px; }
+.report-audit-date { display:inline-flex; align-items:center; gap:8px; color:#52647d; font-size:12px; font-weight:600; }
+.report-audit-date input { min-height:36px; padding:5px 9px; border:1px solid #dce3ef; border-radius:7px; color:#263755; background:#fff; font:inherit; }
+.report-audit-filters button { display:inline-flex; align-items:center; gap:6px; min-height:34px; padding:4px 10px; border:1px solid transparent; border-radius:7px; background:#f5f7fb; color:#52647d; font:inherit; font-size:12px; cursor:pointer; }
+.report-audit-filters button[aria-pressed=true] { background:#eef3ff; border-color:#cad8f4; color:#204694; font-weight:600; }
+.report-audit-filters button span { min-width:1ch; color:inherit; font-variant-numeric:tabular-nums; }
+.report-audit-download { margin-left:auto; text-decoration:none; }
+.report-audit-table-wrap { overflow-x:auto; }
+.report-audit-table { width:100%; min-width:965px; border-collapse:collapse; }
+.report-audit-table th { background:#fafbfe; color:#52647d; font-size:11px; font-weight:600; text-align:left; padding:11px 12px; white-space:nowrap; }
+.report-audit-table td { border-top:1px solid #edf0f5; padding:10px 12px; vertical-align:top; font-size:12px; color:#33435d; }
+.report-audit-table tr:hover td { background:#fcfdff; }
+.report-audit-table .report-audit-time,.report-audit-table .report-audit-number { white-space:nowrap; font-variant-numeric:tabular-nums; }
+.report-audit-table .report-audit-number { text-align:center; font-weight:600; }
+.report-audit-name { min-width:145px; }
+.report-audit-name strong { display:block; font-weight:650; overflow-wrap:anywhere; }
+.report-audit-name small { display:block; max-width:275px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:3px; color:#7888a0; }
+.report-audit-reason { min-width:145px; overflow-wrap:anywhere; }
+.report-audit-state { display:inline-flex; align-items:center; min-height:22px; padding:2px 7px; border-radius:5px; font-weight:600; white-space:nowrap; }
+.report-audit-state.is-normal { color:#206142; background:#eaf5ee; }
+.report-audit-state.is-abnormal { color:#9b2a2d; background:#fff0ef; }
+.report-audit-state.is-pending { color:#6a5326; background:#f9f3e6; }
+.report-audit-table .report-audit-empty,.report-audit-message { text-align:center; padding:24px; color:#62748e; }
+.report-audit-message { font-size:13px; }
+@media(max-width:700px) {
+  .report-audit-heading { align-items:flex-start; flex-wrap:wrap; }
+  .report-audit-download { margin-left:0; }
+  .report-audit-toolbar { gap:10px; }
+}

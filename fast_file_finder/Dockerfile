@@ -36,7 +36,7 @@ RUN groupadd --gid ${APP_GID} appgrp \
     && mkdir -p /app/data \
     && chown -R appuser:appgrp /app
 
-COPY --chown=appuser:appgrp app.py governance.py directory_access.py demo_data.py archive_schedule.py demo_approvals.py scan_pipeline.py limited_preview.py file_management.py media_preview.py feishu_integration.py feishu_identity.py feishu_daily.py /app/
+COPY --chown=appuser:appgrp app.py governance.py directory_access.py demo_data.py archive_schedule.py demo_approvals.py scan_pipeline.py limited_preview.py file_management.py media_preview.py feishu_integration.py feishu_identity.py feishu_daily.py feishu_report_bitable.py report_daily.py /app/
 COPY --chown=appuser:appgrp static /app/static
 
 # 容器内默认路径；生产用 compose/环境变量覆盖。
@@ -71,7 +71,7 @@ FROM base AS dev
 COPY dev-requirements.txt ./dev-requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r dev-requirements.txt
-COPY app.py governance.py directory_access.py demo_data.py archive_schedule.py demo_approvals.py scan_pipeline.py limited_preview.py file_management.py media_preview.py feishu_integration.py feishu_identity.py feishu_daily.py /app/
+COPY app.py governance.py directory_access.py demo_data.py archive_schedule.py demo_approvals.py scan_pipeline.py limited_preview.py file_management.py media_preview.py feishu_integration.py feishu_identity.py feishu_daily.py feishu_report_bitable.py report_daily.py /app/
 COPY static /app/static
 COPY tests /app/tests
 RUN mkdir -p /app/data

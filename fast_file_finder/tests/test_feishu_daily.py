@@ -85,7 +85,8 @@ def test_daily_sheet_is_retried_without_changing_batch_or_repeating_messages(con
     assert '今日暂无扫描记录' in message
     assert '归档检测：' in message
     card = json.loads(messages[0]['json']['content'])
-    assert card['body']['elements'][-1]['behaviors'][0]['default_url'] == 'https://fixture.feishu.cn/base/fixture'
+    assert any(element.get('behaviors', [{}])[0].get('default_url') == 'https://fixture.feishu.cn/base/fixture'
+               for element in card['body']['elements'])
     assert '首个报表.csv' not in message
     assert daily.status(app)['table_pending'] == 0
     assert daily.status(app)['table_error'] == ''
@@ -179,7 +180,9 @@ def test_personal_card_links_to_pinned_date_and_is_sent_only_once(configured_dai
     assert payload['receive_id'] == 'ou_fixture'
     card = json.loads(payload['content'])
     link = card['body']['elements'][1]['behaviors'][0]['default_url']
-    assert link == f'https://assets.example.test/?tab=updates&date={day}'
+    assert link == f'https://assets.example.test/?tab=report-audit&date={day}'
+    assert card['body']['elements'][-1]['behaviors'][0]['default_url'] == (
+        f'https://assets.example.test/reports/daily/abnormal.csv?date={day}')
     assert '更新清单.csv' not in card_text(payload)
     assert '今日更新：1 份文件' in card_text(payload)
     login(client)
@@ -188,3 +191,42 @@ def test_personal_card_links_to_pinned_date_and_is_sent_only_once(configured_dai
     }).json()
     assert listing['total_candidates'] == 1
     assert listing['results'][0]['name'] == '更新清单.csv'
+
+
+def test_daily_card_has_three_links_and_uses_one_snapshot(configured_daily, monkeypatch):
+    import report_daily
+
+    _, root, _ = configured_daily
+    monkeypatch.delenv('FEISHU_DAILY_CHAT_ID')
+    monkeypatch.setenv('FEISHU_DAILY_OPEN_ID', 'ou_fixture')
+    monkeypatch.setenv('FEISHU_DAILY_SYSTEM_URL', 'https://assets.example.test')
+    monkeypatch.setenv('FEISHU_REPORT_BTABLE_APP_TOKEN', 'bascn_fixture')
+    monkeypatch.setenv('FEISHU_REPORT_BTABLE_TABLE_ID', 'tbl_fixture')
+    base_url = 'https://fixture.feishu.cn/base/fixture?table=tbl_fixture'
+    monkeypatch.setenv('FEISHU_REPORT_BTABLE_URL', base_url)
+    now = datetime.now(daily.ZONE)
+    day = now.date().isoformat()
+    row = {
+        'rule_id': 8, 'report_name': '业务日报', 'rule_name': '例行检测', 'status': 'abnormal',
+        'status_label': '异常', 'update_count': 0, 'last_updated': '', 'deadline': '',
+        'reason': '到期未更新', 'owner': '业务组', 'directory': '华东', 'target_path': str(root / '华东'),
+    }
+    with app.db_session() as conn:
+        daily.report_daily.save(conn, app.root_scope_key(), now.timestamp(), [row])
+    copies = []
+    monkeypatch.setattr(daily.feishu_report_bitable, 'publish',
+                        lambda db, config, date, rows, token, **kwargs: copies.extend(rows))
+    cards = []
+    monkeypatch.setattr(feishu, 'call',
+                        lambda method, path, **request: cards.append(json.loads(request['json']['content'])))
+    assert daily.send_now(app) == 'sent'
+    contents = cards[0]['body']['elements']
+    buttons = {item['text']['content']:item['behaviors'][0]['default_url'] for item in contents if item['tag'] == 'button'}
+    assert buttons == {
+        '查看系统明细': f'https://assets.example.test/?tab=report-audit&date={day}',
+        '打开飞书多维表': base_url,
+        '下载异常清单': f'https://assets.example.test/reports/daily/abnormal.csv?date={day}',
+    }
+    assert copies == [row]
+    assert '1 条异常' in contents[0]['content']
+    assert cards[0]['header']['template'] == 'orange'

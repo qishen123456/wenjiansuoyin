@@ -46,6 +46,7 @@ import media_preview
 import feishu_integration
 import feishu_identity
 import feishu_daily
+import report_daily
 import sys
 from collections import OrderedDict
 from starlette.concurrency import run_in_threadpool
@@ -442,6 +443,7 @@ def init_db() -> None:
         conn.execute("PRAGMA journal_mode=WAL")
         governance.initialize(conn)
         feishu_daily.initialize(conn)
+        report_daily.initialize(conn)
         feishu_integration.initialize(conn)
         feishu_identity.initialize(conn)
         directory_access.initialize(conn)
@@ -1064,11 +1066,15 @@ def home(request: Request) -> str:
     page = _read_static_html("index.html")
     if feishu_integration.configured():
         page = page.replace('data-feishu-login hidden', 'data-feishu-login', 1)
-        if request.query_params.get('tab') == 'updates':
+        tab = request.query_params.get('tab')
+        if tab in {'updates', 'report-audit'}:
             report_date = feishu_integration.clean_report_date(request.query_params.get('date', ''))
             if report_date:
-                page = page.replace('href="/integrations/feishu/login"',
-                                    f'href="/integrations/feishu/login?report_date={report_date}"', 1)
+                route = f'/integrations/feishu/login?report_date={report_date}'
+                if tab == 'report-audit':
+                    view = 'exceptions' if request.query_params.get('download') == 'abnormal' else 'audit'
+                    route += '&amp;report_view=' + view
+                page = page.replace('href="/integrations/feishu/login"', f'href="{route}"', 1)
     return page
 
 
@@ -3069,10 +3075,12 @@ def _archive_rule_evidence(conn, target_path: str, period_days: int = 7, now: fl
         condition += " AND instr(lower(name),lower(?))>0"
         params.append(keyword)
     args = [root_scope_key(),*params]
+    today_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     row = conn.execute(f"""SELECT count(*) AS total,
         coalesce(sum(CASE WHEN size>0 THEN 1 ELSE 0 END),0) AS nonempty,
-        coalesce(sum(CASE WHEN size=0 AND mtime>=? AND mtime<=? THEN 1 ELSE 0 END),0) AS empty_due
-        FROM files WHERE root_key=? AND {condition}""", [window_start,now,*args]).fetchone()
+        coalesce(sum(CASE WHEN size=0 AND mtime>=? AND mtime<=? THEN 1 ELSE 0 END),0) AS empty_due,
+        coalesce(sum(CASE WHEN mtime>=? AND mtime<=? THEN 1 ELSE 0 END),0) AS today_updated
+        FROM files WHERE root_key=? AND {condition}""", [window_start,now,today_start,now,*args]).fetchone()
     latest = conn.execute(f"""SELECT name,mtime FROM files WHERE root_key=? AND size>0
         AND {condition} AND mtime<=? ORDER BY mtime DESC LIMIT 1""", [*args,now]).fetchone()
     latest_time = latest['mtime'] if latest else 0
@@ -3117,6 +3125,7 @@ def _archive_rule_evidence(conn, target_path: str, period_days: int = 7, now: fl
             "reason_code":'empty_delivery' if empty_failure else 'missing_update' if state=='overdue' else state,
             "path":path,"directory_display":_relative_catalog_path(path,_catalog_root_path()) or '根目录',
             "matched_files":row['total'],"nonempty_files":row['nonempty'],"empty_due_files":row['empty_due'],
+            "today_updated":row['today_updated'],
             "latest_time":latest_time,"latest_name":latest['name'] if latest else '',
             "window_start":window_start,"expected_at":deadline.timestamp() if deadline else None,
             "expected_at_display":deadline.strftime('%Y-%m-%d %H:%M') if deadline else '',
@@ -3199,12 +3208,18 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
     tasks_updated = 0
     overdue_rules = 0
     rule_issues = []
+    policy = directory_access.current.get()
+    full_scope = policy is None or policy.super_admin
+    daily_rows = []
+    local_now = datetime.fromtimestamp(now, demo_data.ZONE)
 
     for rule in rules:
         r_id = rule["id"]
         r_name = rule["name"]
         evidence = _assess_archive_rule(conn,rule,now)
         target_path = evidence["path"]
+        if full_scope:
+            daily_rows.append(report_daily.row_for_rule(rule, evidence, _catalog_root_path(), local_now))
         if evidence["state"] not in {"healthy", "overdue"}:
             rule_issues.append({"rule_id": r_id, "state": evidence["state"], "reason": evidence["reason"]})
             conn.execute("UPDATE archive_rules SET last_checked_at=? WHERE id=?", (now, r_id))
@@ -3278,9 +3293,10 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
 
         conn.execute("UPDATE archive_rules SET last_checked_at = ? WHERE id = ?", (now, r_id))
 
-    policy = directory_access.current.get()
-    if feishu_daily.enabled() and (policy is None or policy.super_admin):
-        feishu_daily.record_check(conn, root_scope_key(), now, len(rules), overdue_rules, rule_issues)
+    if full_scope:
+        report_daily.save(conn, root_scope_key(), now, daily_rows)
+        if feishu_daily.enabled():
+            feishu_daily.record_check(conn, root_scope_key(), now, len(rules), overdue_rules, rule_issues)
 
     return {
         "tasks_created": tasks_created,
@@ -4322,6 +4338,7 @@ def delete_directory_grant(grant_id: int, request: Request) -> dict[str, Any]:
 
 file_management.register(sys.modules[__name__])
 feishu_integration.register(sys.modules[__name__])
+report_daily.register(sys.modules[__name__])
 
 
 async def not_found_handler(request: Request, exc: Exception):

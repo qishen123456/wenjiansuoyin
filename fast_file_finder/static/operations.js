@@ -153,7 +153,7 @@ function feishuDailyDetails(daily) {
   const table = daily.table_configured
     ? (daily.table_pending ? `${daily.table_pending} 条待写入` : '无待写入记录')
     : '未配置数据表';
-  const errors = [daily.configuration_error, daily.report_error, daily.table_error].filter(Boolean);
+  const errors = [daily.configuration_error, daily.report_error, daily.table_error, daily.report_table_error].filter(Boolean);
   return `<details class="feishu-daily">
     <summary>同步日预警 · ${daily.enabled ? '已启用' : '未启用'}</summary>
     ${daily.enabled ? `<dl><div><dt>发送时间</dt><dd>${esc(daily.schedule)}（北京时间）</dd></div>

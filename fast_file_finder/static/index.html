@@ -1563,7 +1563,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 }
 
 </style>
-<link rel="stylesheet" href="/static/portal.css?v=20261123-feishu-login">
+<link rel="stylesheet" href="/static/portal.css?v=20261123-report-audit">
 <link rel="stylesheet" href="/static/ui.css?v=20261108-robot">
 </head>
 <body>
@@ -2088,7 +2088,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
     </section>
 
     <!-- 视图 3：归档合规时效监控 (完整保留) -->
-    <section id="archiveView" class="hidden archive-shell"><div class="portal-page-heading"><div><h1>归档合规</h1><p id="portalArchiveDescription">查看归档待办、审核凭证与管理监控规则。</p></div><span class="portal-rule-rate" id="portalArchiveRate">当前规则达标率：待核验</span></div><div id="portalArchiveNotice" class="portal-notice hidden"></div>
+    <section id="archiveView" class="hidden archive-shell"><div class="portal-page-heading"><div><h1>归档合规</h1><p id="portalArchiveDescription">查看归档待办、审核凭证与管理监控规则。</p></div><div class="report-archive-actions"><span class="portal-rule-rate" id="portalArchiveRate">当前规则达标率：待核验</span><button type="button" class="portal-button hidden" id="openDailyReportAudit" onclick="switchNavMode('report-audit')">日报明细</button></div></div><div id="portalArchiveNotice" class="portal-notice hidden"></div>
       <!-- 顶部 5 大合规统筹指标 -->
       <div class="catalog-overview-grid">
         <div class="catalog-kpi-card">
@@ -2192,6 +2192,36 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
             <tbody id="archiveRulesTableBody">
               <tr><td colspan="6" style="text-align:center;padding:40px;color:#71717A">加载规则中…</td></tr>
             </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+
+    <section id="reportAuditView" class="hidden archive-shell" aria-labelledby="reportAuditTitle">
+      <div class="portal-page-heading report-audit-heading">
+        <div><h1 id="reportAuditTitle">报表更新明细</h1><p>按北京时间查看各监控报表的每日更新与检测结果。</p></div>
+        <button type="button" class="portal-button" onclick="switchNavMode('archive')">返回归档合规</button>
+      </div>
+      <div class="report-audit-panel">
+        <div class="report-audit-toolbar">
+          <label class="report-audit-date" for="reportAuditDate">检测日期<input type="date" id="reportAuditDate" onchange="changeDailyReportDate()"></label>
+          <div class="report-audit-filters" role="group" aria-label="检测状态">
+            <button type="button" data-report-audit-status="all" aria-pressed="true" onclick="setDailyReportStatus('all')">全部 <span>—</span></button>
+            <button type="button" data-report-audit-status="normal" aria-pressed="false" onclick="setDailyReportStatus('normal')">正常 <span>—</span></button>
+            <button type="button" data-report-audit-status="abnormal" aria-pressed="false" onclick="setDailyReportStatus('abnormal')">异常 <span>—</span></button>
+            <button type="button" data-report-audit-status="pending" aria-pressed="false" onclick="setDailyReportStatus('pending')">待检测 <span>—</span></button>
+          </div>
+          <a id="reportAuditDownload" class="portal-button report-audit-download" href="/reports/daily/abnormal.csv"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>下载异常清单</a>
+        </div>
+        <div id="reportAuditMessage" class="report-audit-message hidden" role="status" aria-live="polite"></div>
+        <div class="report-audit-table-wrap">
+          <table class="report-audit-table" aria-label="当日报表检测明细">
+            <thead><tr>
+              <th scope="col">报表 / 监控规则</th><th scope="col">日期</th><th scope="col">状态</th><th scope="col">更新数量</th>
+              <th scope="col">最近更新</th><th scope="col">检测截止</th><th scope="col">责任人</th><th scope="col">检测说明</th>
+            </tr></thead>
+            <tbody id="reportAuditTableBody"></tbody>
           </table>
         </div>
       </div>
@@ -3468,6 +3498,7 @@ function applyUserUI() {
   // 非管理员隐藏"人员与账号权限"入口（该页接口本身也已被后端限制为管理员）
   const permTab = $('navPermTab');
   if (permTab) permTab.style.display = currentUser?.role === 'super_admin' ? '' : 'none';
+  $('openDailyReportAudit').classList.toggle('hidden', !currentUser);
   // 标记当前访问方式（本机 / 公网），供按钮提示与后续样式扩展使用；按钮本身不隐藏
   document.body.classList.toggle('remote-mode', !isLocalHost());
 }
@@ -3510,6 +3541,7 @@ async function doLogin() {
 
     loadStatus(); loadRecent();
     openDailyUpdateDetails();
+    openDailyReportRoute();
   } catch (e) {
     $('loginError').textContent = e.message || '登录失败';
   }
@@ -3829,25 +3861,148 @@ let catalogState = {
 
 function switchNavMode(mode) {
   currentNavMode = mode;
-  updatePortalNavigation(mode);
+  updatePortalNavigation(mode === 'report-audit' ? 'archive' : mode);
   $('navSearchTab').classList.toggle('active', mode === 'search');
   $('navCatalogTab').classList.toggle('active', mode === 'catalog');
-  $('navArchiveTab').classList.toggle('active', mode === 'archive');
+  $('navArchiveTab').classList.toggle('active', mode === 'archive' || mode === 'report-audit');
   $('navApprovalTab')?.classList.toggle('active', mode === 'approval');
   $('navPermTab')?.classList.toggle('active', mode === 'permission');
   $('searchView').classList.toggle('hidden', mode !== 'search');
   $('catalogView').classList.toggle('hidden', mode !== 'catalog');
   $('archiveView').classList.toggle('hidden', mode !== 'archive');
+  $('reportAuditView').classList.toggle('hidden', mode !== 'report-audit');
   $('approvalView')?.classList.toggle('hidden', mode !== 'approval');
   $('permissionView')?.classList.toggle('hidden', mode !== 'permission');
   if (mode === 'catalog') {
     return initCatalogDashboard();
   } else if (mode === 'archive') {
     return initArchiveDashboard();
+  } else if (mode === 'report-audit') {
+    return initDailyReportAudit();
   } else if (mode === 'approval') {
     initApprovalCenter();
   } else if (mode === 'permission') {
     initPermissionDashboard();
+  }
+}
+
+// 日预警按报表核对，和文件搜索的更新列表分别保留。
+const reportAudit = { date: '', status: 'all', request: 0 };
+
+function beijingReportDate() {
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone:'Asia/Shanghai', year:'numeric', month:'2-digit', day:'2-digit',
+  }).formatToParts(new Date());
+  const date = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return [date.year, date.month, date.day].join('-');
+}
+
+function isReportAuditDate(day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day.startsWith('0000')) return false;
+  const parsed = new Date(day + 'T00:00:00.000Z');
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === day;
+}
+
+function openDailyReportRoute() {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get('tab') !== 'report-audit' || !currentUser) return;
+  const requested = url.searchParams.get('date') || '';
+  reportAudit.date = isReportAuditDate(requested) ? requested : beijingReportDate();
+  reportAudit.status = 'all';
+  const download = url.searchParams.get('download') === 'abnormal';
+  if (download) {
+    url.searchParams.delete('download');
+    history.replaceState(history.state, '', url);
+  }
+  switchNavMode('report-audit');
+  if (download) $('reportAuditDownload').click();
+}
+
+function initDailyReportAudit() {
+  if (!currentUser) return;
+  const input = $('reportAuditDate');
+  input.max = beijingReportDate();
+  if (!reportAudit.date) reportAudit.date = input.max;
+  input.value = reportAudit.date;
+  return loadDailyReportAudit();
+}
+
+function changeDailyReportDate() {
+  const input = $('reportAuditDate');
+  if (!isReportAuditDate(input.value) || input.value > input.max) {
+    input.value = reportAudit.date;
+    return;
+  }
+  reportAudit.date = input.value;
+  const url = new URL(window.location.href);
+  if (url.searchParams.get('tab') === 'report-audit') {
+    url.searchParams.set('date', reportAudit.date);
+    history.replaceState(history.state, '', url);
+  }
+  loadDailyReportAudit();
+}
+
+function setDailyReportStatus(status) {
+  reportAudit.status = status;
+  loadDailyReportAudit();
+}
+
+function reportAuditTime(value) {
+  if (!value) return '—';
+  if (typeof value === 'number') return fmtDate(value).full;
+  return String(value).replace('T', ' ');
+}
+
+function renderDailyReportRows(rows, date) {
+  const tbody = $('reportAuditTableBody');
+  if (!rows.length) {
+    const text = reportAudit.status === 'all' ? '当天暂无检测明细' : '当前状态下暂无报表';
+    tbody.innerHTML = '<tr><td class="report-audit-empty" colspan="8">' + text + '</td></tr>';
+    return;
+  }
+  const statusClass = { normal:'normal', abnormal:'abnormal', pending:'pending' };
+  tbody.innerHTML = rows.map(row => {
+    const name = row.report_name || row.rule_name || '—';
+    const secondary = [row.rule_name && row.rule_name !== name ? row.rule_name : '', row.directory].filter(Boolean).join(' · ');
+    const status = Object.hasOwn(statusClass, row.status) ? statusClass[row.status] : 'pending';
+    return '<tr><td class="report-audit-name"><strong>' + esc(name) + '</strong>'
+      + (secondary ? '<small title="' + esc(secondary) + '">' + esc(secondary) + '</small>' : '')
+      + '</td><td class="report-audit-time">' + esc(row.date || date) + '</td><td>'
+      + '<span class="report-audit-state is-' + status + '">' + esc(row.status_label || '待检测') + '</span></td>'
+      + '<td class="report-audit-number">' + esc(fmtNumber(row.update_count)) + '</td>'
+      + '<td class="report-audit-time">' + esc(reportAuditTime(row.last_updated)) + '</td>'
+      + '<td class="report-audit-time">' + esc(reportAuditTime(row.deadline)) + '</td>'
+      + '<td>' + esc(row.owner || '—') + '</td><td class="report-audit-reason">' + esc(row.reason || '—') + '</td></tr>';
+  }).join('');
+}
+
+async function loadDailyReportAudit() {
+  if (!currentUser) return;
+  const request = ++reportAudit.request;
+  const params = new URLSearchParams({ date:reportAudit.date, status:reportAudit.status });
+  const message = $('reportAuditMessage');
+  const tbody = $('reportAuditTableBody');
+  const filters = $('reportAuditView').querySelectorAll('[data-report-audit-status]');
+  $('reportAuditDownload').href = '/reports/daily/abnormal.csv?' + new URLSearchParams({ date:reportAudit.date });
+  for (const button of filters) {
+    button.setAttribute('aria-pressed', String(button.dataset.reportAuditStatus === reportAudit.status));
+  }
+  message.classList.add('hidden');
+  tbody.innerHTML = '<tr><td class="report-audit-empty" colspan="8">正在读取报表明细…</td></tr>';
+  try {
+    const data = await api('/api/reports/daily?' + params);
+    if (request !== reportAudit.request) return;
+    for (const button of filters) {
+      const key = button.dataset.reportAuditStatus;
+      button.querySelector('span').textContent = fmtNumber(data.counts?.[key === 'all' ? 'total' : key]);
+    }
+    renderDailyReportRows(data.rows || [], data.date || reportAudit.date);
+  } catch (error) {
+    if (request !== reportAudit.request) return;
+    tbody.innerHTML = '';
+    for (const button of filters) button.querySelector('span').textContent = '—';
+    message.textContent = error.message || '暂时无法读取报表明细';
+    message.classList.remove('hidden');
   }
 }
 
@@ -5441,7 +5596,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   const tab = urlParams.get('tab');
   const testScene = urlParams.get('test_scene');
 
-  if (tab === 'updates') {
+  if (tab === 'report-audit') {
+    openDailyReportRoute();
+  } else if (tab === 'updates') {
     openDailyUpdateDetails();
   } else if (tab === 'sync') {
     switchNavMode('sync');
@@ -5946,7 +6103,7 @@ document.addEventListener('keydown', (e) => {
 
 </script>
 <script src="/static/portal.js?v=20261123-feishu-identity"></script>
-<script src="/static/operations.js?v=20261123-feishu-card"></script>
+<script src="/static/operations.js?v=20261123-report-audit"></script>
 <script src="/static/robot-drag.js?v=20261108"></script>
 </body>
 </html>

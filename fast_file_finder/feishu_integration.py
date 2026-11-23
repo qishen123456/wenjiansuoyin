@@ -80,7 +80,7 @@ def initialize(conn):
         department TEXT NOT NULL, active INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS feishu_departments(open_id TEXT PRIMARY KEY, name TEXT NOT NULL, parent TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS feishu_login_states(nonce TEXT PRIMARY KEY, expires REAL NOT NULL,
-        report_date TEXT NOT NULL DEFAULT '');
+        report_date TEXT NOT NULL DEFAULT '', report_view TEXT NOT NULL DEFAULT '');
     CREATE TABLE IF NOT EXISTS feishu_notices(event_key TEXT PRIMARY KEY, recipient TEXT NOT NULL, body TEXT NOT NULL,
         sent INTEGER NOT NULL DEFAULT 0);
     """)
@@ -88,6 +88,8 @@ def initialize(conn):
     columns = {row[1] for row in conn.execute('PRAGMA table_info(feishu_login_states)')}
     if 'report_date' not in columns:
         conn.execute("ALTER TABLE feishu_login_states ADD COLUMN report_date TEXT NOT NULL DEFAULT ''")
+    if 'report_view' not in columns:
+        conn.execute("ALTER TABLE feishu_login_states ADD COLUMN report_view TEXT NOT NULL DEFAULT ''")
 
 
 def clean_report_date(value):
@@ -318,14 +320,15 @@ def register(app):
         return {'configured':configured()}
 
     @app.app.get('/integrations/feishu/login')
-    def begin_login(report_date: str = ""):
+    def begin_login(report_date: str = "", report_view: str = ""):
         if not configured():
             raise HTTPException(503,'飞书登录未配置。')
         nonce = secrets.token_urlsafe(32)
         with app.db_session() as conn:
             conn.execute('DELETE FROM feishu_login_states WHERE expires<?',(time.time(),))
-            conn.execute('INSERT INTO feishu_login_states(nonce,expires,report_date) VALUES(?,?,?)',
-                         (nonce, time.time()+300, clean_report_date(report_date)))
+            view = report_view if report_view in {'audit', 'exceptions'} else ''
+            conn.execute('INSERT INTO feishu_login_states(nonce,expires,report_date,report_view) VALUES(?,?,?,?)',
+                         (nonce, time.time()+300, clean_report_date(report_date), view))
         redirect = os.environ['FEISHU_REDIRECT_URI']
         response = RedirectResponse('https://accounts.feishu.cn/open-apis/authen/v1/authorize?'+urlencode({
             'client_id':os.environ['FEISHU_APP_ID'],'redirect_uri':redirect,'response_type':'code','state':nonce}))
@@ -339,7 +342,7 @@ def register(app):
             raise HTTPException(403,'登录请求无效，请重新发起。')
         with app.db_session() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            login_state = conn.execute('SELECT report_date FROM feishu_login_states WHERE nonce=? AND expires>?',
+            login_state = conn.execute('SELECT report_date,report_view FROM feishu_login_states WHERE nonce=? AND expires>?',
                                        (state, time.time())).fetchone()
             if login_state is None:
                 raise HTTPException(403, '登录请求已使用或过期。')
@@ -375,7 +378,13 @@ def register(app):
             conn.execute("INSERT INTO login_sessions(token,user_id,created_at,expires_at,auth_source) VALUES(?,?,?,?,'feishu')",
                          (session, row[0], time.time(), time.time()+ttl))
         report_date = clean_report_date(login_state['report_date'])
-        destination = '/?' + urlencode({'tab':'updates','date':report_date}) if report_date else '/'
+        destination = '/'
+        if report_date:
+            if login_state['report_view'] == 'exceptions':
+                destination = '/reports/daily/abnormal.csv?' + urlencode({'date':report_date})
+            else:
+                tab = 'report-audit' if login_state['report_view'] == 'audit' else 'updates'
+                destination = '/?' + urlencode({'tab':tab,'date':report_date})
         response = RedirectResponse(destination)
         response.delete_cookie('ff_feishu_state')
         response.set_cookie('ff_session',session,max_age=ttl,httponly=True,samesite='lax',secure=os.environ['FEISHU_REDIRECT_URI'].startswith('https:'))

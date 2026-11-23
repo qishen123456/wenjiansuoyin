@@ -63,6 +63,21 @@ def test_feishu_sync_bind_login_and_state_replay(foundation,monkeypatch):
     assert client.get('/integrations/feishu/callback',params=params).status_code==403
     assert client.post('/api/system/feishu/sync').status_code==403
 
+    client.post('/api/auth/logout')
+    csv_path = '/reports/daily/abnormal.csv?date=' + day
+    landing = client.get(csv_path, follow_redirects=False)
+    page = client.get(landing.headers['location']).text
+    assert f'href="/integrations/feishu/login?report_date={day}&amp;report_view=exceptions"' in page
+    login_redirect = client.get('/integrations/feishu/login', params={
+        'report_date': day, 'report_view': 'exceptions',
+    }, follow_redirects=False)
+    assert login_redirect.status_code == 307
+    callback = client.get('/integrations/feishu/callback', params={
+        'state': client.cookies['ff_feishu_state'], 'code': 'synthetic',
+    }, follow_redirects=False)
+    assert callback.status_code == 307 and callback.headers['location'] == csv_path
+    assert client.get(csv_path).headers['content-disposition'].startswith('attachment;')
+
 
 def test_notice_delivery_uses_binding_and_deduplicates(foundation,monkeypatch):
     client,root,add=foundation
