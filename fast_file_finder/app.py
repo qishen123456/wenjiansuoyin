@@ -44,6 +44,7 @@ import limited_preview
 import file_management
 import media_preview
 import feishu_integration
+import feishu_daily
 import sys
 from collections import OrderedDict
 from starlette.concurrency import run_in_threadpool
@@ -207,6 +208,12 @@ def _archive_scheduler_loop() -> None:
                 _archive_scheduler_info["auto_resolved_total"] += res.get("tasks_auto_resolved", 0)
         except Exception as exc:
             logger.warning("Background archive compliance check error: %s", exc)
+            if feishu_daily.enabled():
+                try:
+                    with db_session() as conn:
+                        feishu_daily.record_check_failure(conn, root_scope_key(), time.time())
+                except Exception:
+                    logger.exception("Could not record Feishu daily archive check status")
         try:
             feishu_integration.deliver_notices(sys.modules[__name__])
         except Exception:
@@ -256,6 +263,10 @@ async def lifespan(_app: FastAPI):
 
     scheduler_thread = threading.Thread(target=_archive_scheduler_loop, daemon=True, name="ArchiveScheduler")
     scheduler_thread.start()
+    feishu_daily_stop = threading.Event()
+    if feishu_daily.enabled():
+        threading.Thread(target=feishu_daily.loop, args=(sys.modules[__name__], feishu_daily_stop),
+                         daemon=True, name="FeishuDaily").start()
     threading.Thread(target=file_management.backup_loop, args=(sys.modules[__name__],),
                      daemon=True, name='DatabaseBackup').start()
 
@@ -270,6 +281,7 @@ async def lifespan(_app: FastAPI):
     finally:
         _archive_scheduler_stop.set()
         _auto_scan_stop.set()
+        feishu_daily_stop.set()
 
 
 app = FastAPI(title="企业文件检索与轻量 BI 分析中心", version="0.3.0", lifespan=lifespan)
@@ -429,6 +441,7 @@ def init_db() -> None:
         # WAL is a database-level setting. Do it once at startup, not on every request.
         conn.execute("PRAGMA journal_mode=WAL")
         governance.initialize(conn)
+        feishu_daily.initialize(conn)
         directory_access.initialize(conn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS files (
@@ -737,6 +750,7 @@ def update_index_file(
     scan_id: str | None = None,
     known_rows: dict | None = None,
     force: bool = False,
+    track_addition: bool = True,
 ) -> str:
     """Upsert one file and stamp it for the current scan generation."""
     path_str = str(file_path.resolve(strict=False)) if known_rows is None else os.path.normpath(str(file_path))
@@ -780,6 +794,12 @@ def update_index_file(
         )
         file_id = cur.lastrowid
         action = "indexed"
+        if track_addition and feishu_daily.enabled():
+            config = feishu_daily.settings()
+            relative = _relative_catalog_path(path_str, _catalog_root_path())
+            if not config.error and relative and not any(term in relative for term in SENSITIVE_DIRS):
+                feishu_daily.record_file(conn, root_key=root_key, relative=relative, name=name, ext=ext,
+                                         added_at=now, config=config)
     conn.execute("INSERT INTO file_fts(rowid,name,name_grams,path_grams) VALUES(?,?,?,?)",
                  (file_id, name, grams_text(name), grams_text(parent)))
     return action
@@ -907,6 +927,9 @@ def _scan_worker(lock_already_acquired: bool = False, mode: str = 'full', target
             known = {r['path']:r for r in conn.execute('SELECT id,path,size,mtime,ctime,name,root_key FROM files')}
             unseen = {path for path,row in known.items() if row["root_key"]==root_key
                       and (not scoped or directory_access.within(directory_access.normalise(path), directory_access.normalise(root)))}
+            # The first completed inventory is a baseline, not a daily delivery.
+            track_additions = bool(feishu_daily.enabled() and conn.execute(
+                "SELECT 1 FROM app_meta WHERE key='indexed_root' AND value=?", (root_key,)).fetchone())
             if rebuilding:
                 conn.execute("BEGIN IMMEDIATE")
                 conn.execute("DELETE FROM file_fts")
@@ -936,7 +959,8 @@ def _scan_worker(lock_already_acquired: bool = False, mode: str = 'full', target
                 if filename.startswith('~$'):_scan_exclude('temporary');continue
                 if any(t in filename for t in SENSITIVE_DIRS):_scan_exclude('sensitive_name');continue
                 if ALLOWED_EXTENSIONS and fp.suffix.lower() not in ALLOWED_EXTENSIONS:_scan_exclude('unsupported_format');continue
-                action=update_index_file(conn,fp,event[2],root_key=root_key,scan_id=scan_id,known_rows=known,force=rebuilding)
+                action = update_index_file(conn, fp, event[2], root_key=root_key, scan_id=scan_id,
+                                           known_rows=known, force=rebuilding, track_addition=track_additions)
                 unseen.discard(os.path.normpath(str(fp)))
                 _scan_state_increment('seen');_scan_state_increment(action)
                 processed+=1
@@ -3138,6 +3162,7 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
     tasks_created = 0
     tasks_auto_resolved = 0
     tasks_updated = 0
+    overdue_rules = 0
     rule_issues = []
 
     for rule in rules:
@@ -3187,6 +3212,7 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
                 """, (now, latest_name, now, active_task["id"]))
                 tasks_auto_resolved += 1
         else:
+            overdue_rules += 1
             if p_type == 'daily' or evidence.get('schedule'):
                 overdue_days = max(1, int(evidence['overdue_seconds']//86400)+1)
             elif latest_time > 0:
@@ -3216,6 +3242,10 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
                 tasks_created += 1
 
         conn.execute("UPDATE archive_rules SET last_checked_at = ? WHERE id = ?", (now, r_id))
+
+    policy = directory_access.current.get()
+    if feishu_daily.enabled() and (policy is None or policy.super_admin):
+        feishu_daily.record_check(conn, root_scope_key(), now, len(rules), overdue_rules, rule_issues)
 
     return {
         "tasks_created": tasks_created,

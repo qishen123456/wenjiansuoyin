@@ -2672,3 +2672,16 @@ button:disabled {
 
 .operation-input{display:block;width:100%;box-sizing:border-box;margin:10px 0 18px;border:1px solid #dce2ed;border-radius:8px;padding:12px;background:white;color:#33435d;font:inherit}
 #systemBackupPanel p{font-size:12px;line-height:1.8;color:#738198}#systemBackupPanel .grant-audit button{float:right}
+
+/* Feishu daily digest status in the administrator panel */
+.feishu-daily{border:1px solid #e0e7f2;border-radius:12px;padding:14px 16px;margin:12px 0 18px;background:#f8faff;color:#263755}
+.feishu-daily-heading{display:flex;align-items:center;gap:10px}
+.feishu-daily-heading h4{font-size:14px;margin:0}
+.feishu-daily-heading span{font-size:11px;border:1px solid #dce5f5;border-radius:20px;padding:2px 8px}
+.feishu-daily dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px;margin:12px 0}
+.feishu-daily dt,.feishu-daily p{font-size:12px;color:#536583}
+.feishu-daily dd{font-size:13px;font-weight:600;margin:3px 0 0}
+.feishu-daily details{font-size:12px}
+.feishu-daily summary{cursor:pointer;width:fit-content;color:#244c9c}
+.feishu-daily pre{font:inherit;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0}
+.feishu-daily .feishu-daily-error{color:#963a2b}

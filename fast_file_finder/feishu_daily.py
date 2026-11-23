@@ -1,0 +1,299 @@
+"""Publish daily index additions and a summary to configured Feishu resources."""
+from dataclasses import dataclass
+from datetime import datetime, time as wall_time, timedelta
+import hashlib
+import json
+import logging
+import os
+import re
+import time
+from urllib.parse import quote, urlsplit
+import uuid
+
+from fastapi import HTTPException
+
+from demo_data import ZONE
+import feishu_integration as feishu
+
+logger = logging.getLogger(__name__)
+SHEETS = {'.xlsx', '.xls', '.xlsm', '.xlsb', '.csv', '.tsv', '.ods'}
+RULE_ERRORS = {'invalid_path', 'no_files', 'no_content', 'calendar_unavailable'}
+SCAN_PHASE = {'complete': '已完成', 'partial': '部分完成', 'error': '失败'}
+BATCH_SIZE = 100
+MAX_BATCHES_PER_TICK = 5
+
+
+def enabled():
+    return os.getenv('FEISHU_DAILY_ENABLED', 'false').strip().lower() == 'true'
+
+
+@dataclass(frozen=True)
+class Settings:
+    active: bool
+    report_time: str
+    chat: str
+    app_token: str
+    table: str
+    table_url: str
+    error: str
+
+    @property
+    def table_key(self):
+        if not (self.app_token and self.table):
+            return ''
+        return hashlib.sha256(f'{os.getenv("FEISHU_APP_ID", "")}:{self.app_token}:{self.table}'.encode()).hexdigest()
+
+
+def settings():
+    chat = os.getenv('FEISHU_DAILY_CHAT_ID', '').strip()
+    token = os.getenv('FEISHU_DAILY_BTABLE_APP_TOKEN', '').strip()
+    table = os.getenv('FEISHU_DAILY_BTABLE_TABLE_ID', '').strip()
+    url = os.getenv('FEISHU_DAILY_BTABLE_URL', '').strip()
+    report_time = os.getenv('FEISHU_DAILY_TIME', '18:00').strip()
+    error = ''
+    if bool(token) != bool(table):
+        error = '请同时配置多维表格的应用标识和数据表标识。'
+    elif not (chat or table):
+        error = '请配置日报接收群或新增文件数据表。'
+    elif not feishu.app_credentials_configured():
+        error = '请先配置飞书企业应用的 ID 和密钥。'
+    elif not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', report_time):
+        error = '日报发送时间应使用 HH:MM 格式。'
+    if url:
+        try:
+            parsed = urlsplit(url)
+            host = parsed.hostname or ''
+            safe = (parsed.scheme == 'https' and not parsed.username and not parsed.password
+                    and (host == 'feishu.cn' or host.endswith('.feishu.cn')))
+        except ValueError:
+            safe = False
+        if not safe:
+            error = '多维表格链接应使用飞书的 HTTPS 地址。'
+    return Settings(enabled(), report_time, chat, token, table, url, error)
+
+
+def initialize(conn):
+    conn.execute("""CREATE TABLE IF NOT EXISTS feishu_daily_files (
+        id INTEGER PRIMARY KEY, root_key TEXT NOT NULL, day TEXT NOT NULL, item_key TEXT NOT NULL,
+        name TEXT NOT NULL, ext TEXT NOT NULL, directory TEXT NOT NULL, added_at REAL NOT NULL,
+        table_key TEXT NOT NULL, batch_id TEXT, published_at REAL,
+        UNIQUE(root_key, day, item_key)
+    )""")
+    conn.execute("""CREATE INDEX IF NOT EXISTS idx_feishu_daily_files_pending
+        ON feishu_daily_files(root_key, table_key, published_at, id)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS feishu_daily_reports (
+        root_key TEXT NOT NULL, day TEXT NOT NULL, chat TEXT NOT NULL, send_key TEXT NOT NULL,
+        body TEXT NOT NULL, prepared_at REAL NOT NULL, sent_at REAL,
+        PRIMARY KEY(root_key, day)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS feishu_daily_checks (
+        root_key TEXT PRIMARY KEY, checked_at REAL NOT NULL, checked_rules INTEGER NOT NULL,
+        overdue_rules INTEGER NOT NULL, rule_errors INTEGER NOT NULL
+    )""")
+
+
+def record_file(conn, *, root_key, relative, name, ext, added_at, config):
+    if not root_key or not relative:
+        return
+    day = datetime.fromtimestamp(added_at, ZONE).date().isoformat()
+    key = hashlib.sha256(f'{root_key}\0{day}\0{relative}'.encode('utf-8')).hexdigest()
+    conn.execute("""INSERT OR IGNORE INTO feishu_daily_files
+        (root_key,day,item_key,name,ext,directory,added_at,table_key) VALUES (?,?,?,?,?,?,?,?)""",
+        (root_key, day, key, name, ext, relative.rpartition('/')[0], added_at, config.table_key))
+
+
+def record_check(conn, root_key, now, checked_rules, overdue_rules, issues):
+    if not root_key:
+        return
+    conn.execute("""INSERT INTO feishu_daily_checks VALUES (?,?,?,?,?)
+        ON CONFLICT(root_key) DO UPDATE SET checked_at=excluded.checked_at,
+        checked_rules=excluded.checked_rules, overdue_rules=excluded.overdue_rules,
+        rule_errors=excluded.rule_errors WHERE excluded.checked_at>=feishu_daily_checks.checked_at""",
+        (root_key, now, checked_rules, overdue_rules, sum(issue['state'] in RULE_ERRORS for issue in issues)))
+
+
+def record_check_failure(conn, root_key, now):
+    conn.execute("INSERT OR REPLACE INTO app_meta VALUES (?,?)", (f'feishu_daily_check_failed:{root_key}', str(now)))
+
+
+def _table_batch(conn, root_key, table_key):
+    """Persist the membership and idempotency token before handing the batch to Feishu."""
+    conn.execute('BEGIN IMMEDIATE')
+    pending = conn.execute("""SELECT batch_id FROM feishu_daily_files
+        WHERE root_key=? AND table_key=? AND published_at IS NULL AND batch_id IS NOT NULL
+        ORDER BY id LIMIT 1""", (root_key, table_key)).fetchone()
+    if pending:
+        batch_id = pending['batch_id']
+        return batch_id, conn.execute("""SELECT * FROM feishu_daily_files
+            WHERE root_key=? AND table_key=? AND batch_id=? ORDER BY id""",
+            (root_key, table_key, batch_id)).fetchall()
+    rows = conn.execute("""SELECT * FROM feishu_daily_files
+        WHERE root_key=? AND table_key=? AND published_at IS NULL AND batch_id IS NULL
+        ORDER BY id LIMIT ?""", (root_key, table_key, BATCH_SIZE)).fetchall()
+    if not rows:
+        return '', []
+    batch_id = str(uuid.uuid4())
+    conn.executemany('UPDATE feishu_daily_files SET batch_id=? WHERE id=?', [(batch_id, row['id']) for row in rows])
+    return batch_id, rows
+
+
+def _file_fields(row):
+    return {'日期': row['day'], '文件名': row['name'], '文件格式': row['ext'].lstrip('.').upper(),
+            '相对目录': row['directory'] or '根目录',
+            '首次入库时间': datetime.fromtimestamp(row['added_at'], ZONE).strftime('%Y-%m-%d %H:%M:%S'),
+            '条目标识': row['item_key']}
+
+
+def _publish_files(app, config, root_key, get_token):
+    endpoint = f'/bitable/v1/apps/{quote(config.app_token, safe="")}/tables/{quote(config.table, safe="")}/records/batch_create'
+    for _ in range(MAX_BATCHES_PER_TICK):
+        with app.db_session() as conn:
+            batch_id, rows = _table_batch(conn, root_key, config.table_key)
+        if not rows:
+            return
+        feishu.call('POST', endpoint, token=get_token(), params={'client_token': batch_id},
+                    json={'records': [{'fields': _file_fields(row)} for row in rows]})
+        with app.db_session() as conn:
+            conn.execute('UPDATE feishu_daily_files SET published_at=? WHERE batch_id=?', (time.time(), batch_id))
+
+
+def _summary(app, conn, root_key, today, config):
+    rows = conn.execute("""SELECT ext, count(*) AS total FROM feishu_daily_files
+        WHERE root_key=? AND day=? GROUP BY ext""", (root_key, today.isoformat())).fetchall()
+    files = sum(row['total'] for row in rows)
+    sheets = sum(row['total'] for row in rows if row['ext'] in SHEETS)
+    # Scan history stores naive timestamps in the service's timezone. Convert
+    # the Shanghai day boundaries to that timezone before asking SQLite.
+    start = datetime.combine(today, wall_time.min, ZONE).timestamp()
+    end = datetime.combine(today + timedelta(days=1), wall_time.min, ZONE).timestamp()
+    start_local = datetime.fromtimestamp(start).isoformat(timespec='seconds')
+    end_local = datetime.fromtimestamp(end).isoformat(timespec='seconds')
+    latest = conn.execute("""SELECT phase, finished_at, counts_json FROM index_scan_runs
+        WHERE root_key=? AND finished_at>=? AND finished_at<?
+        ORDER BY finished_at DESC, id DESC LIMIT 1""", (root_key, start_local, end_local)).fetchone()
+    running = app._scan_state_snapshot()
+    if running['running'] and running.get('root_key') == root_key:
+        progress = f'正在扫描，已检查 {running["seen"]} 个文件'
+        counts = running
+    elif latest:
+        counts = json.loads(latest['counts_json'])
+        clock = datetime.fromisoformat(latest['finished_at']).astimezone(ZONE).strftime('%H:%M')
+        progress = f'{SCAN_PHASE.get(latest["phase"], "状态未知")}（{clock}）'
+    else:
+        counts = None
+        progress = '今日暂无扫描记录'
+    lines = [f'文件资产同步日报 · {today:%Y-%m-%d}（北京时间）', f'索引扫描：{progress}',
+             f'今日新入索引：{files} 份文件（其中表格 {sheets} 份）']
+    if counts is not None:
+        if latest and not running['running']:
+            lines.append(f'本次扫描检查 {counts.get("seen", 0)} 个文件，更新 {counts.get("updated", 0)} 份已有文件')
+        lines.append(f'本次扫描访问异常：{counts.get("errors", 0)} 个文件 / {counts.get("directory_errors", 0)} 个目录')
+
+    check = conn.execute('SELECT * FROM feishu_daily_checks WHERE root_key=? AND checked_at>=? AND checked_at<?',
+                         (root_key, start, end)).fetchone()
+    failed = conn.execute('SELECT value FROM app_meta WHERE key=?', (f'feishu_daily_check_failed:{root_key}',)).fetchone()
+    failure_time = float(failed[0]) if failed else 0
+    if start <= failure_time < end and (not check or failure_time > check['checked_at']):
+        lines.append('归档检测：最近一次执行失败，请到系统查看')
+    elif check:
+        lines.append(f'归档检测：已检查 {check["checked_rules"]} 条规则，'
+                     f'逾期未交 {check["overdue_rules"]} 条，无法核验 {check["rule_errors"]} 条')
+    else:
+        lines.append('归档检测：今日暂无检测记录')
+
+    if config.table_key:
+        outstanding = conn.execute("""SELECT count(*) FROM feishu_daily_files
+            WHERE root_key=? AND day=? AND table_key=? AND published_at IS NULL""",
+            (root_key, today.isoformat(), config.table_key)).fetchone()[0]
+        lines.append(f'新增清单：{outstanding} 条待同步，稍后自动补写' if outstanding else '新增清单：可在多维表按日期查看')
+        if config.table_url:
+            lines.append(config.table_url)
+    return '\n'.join(lines)
+
+
+def _send_report(app, config, root_key, now, get_token):
+    if now.strftime('%H:%M') < config.report_time:
+        return
+    day = now.date().isoformat()
+    with app.db_session() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        report = conn.execute('SELECT * FROM feishu_daily_reports WHERE root_key=? AND day=?', (root_key, day)).fetchone()
+        if not report:
+            body = _summary(app, conn, root_key, now.date(), config)
+            conn.execute('INSERT INTO feishu_daily_reports VALUES (?,?,?,?,?,?,NULL)',
+                         (root_key, day, config.chat, str(uuid.uuid4()), body, now.timestamp()))
+            report = conn.execute('SELECT * FROM feishu_daily_reports WHERE root_key=? AND day=?', (root_key, day)).fetchone()
+    if report['sent_at']:
+        return
+    if report['chat'] != config.chat:
+        raise HTTPException(409, '今日已有待确认的日报，接收群配置已变化。')
+    # Feishu guarantees UUID deduplication for one hour.
+    if now.timestamp() - report['prepared_at'] >= 55 * 60:
+        raise HTTPException(502, '今日推送未确认，请先检查飞书接收群。')
+    feishu.call('POST', '/im/v1/messages', token=get_token(), params={'receive_id_type': 'chat_id'},
+                json={'receive_id': config.chat, 'msg_type': 'text', 'uuid': report['send_key'],
+                      'content': json.dumps({'text': report['body']}, ensure_ascii=False)})
+    with app.db_session() as conn:
+        conn.execute('UPDATE feishu_daily_reports SET sent_at=? WHERE root_key=? AND day=?',
+                     (time.time(), root_key, day))
+
+
+def publish(app, now=None):
+    config = settings()
+    root_key = app.root_scope_key()
+    if not config.active or config.error or not root_key:
+        return
+    token = None
+
+    def get_token():
+        nonlocal token
+        if not token:
+            token = feishu.tenant_token()
+        return token
+
+    jobs = []
+    if config.table_key:
+        jobs.append(('table', lambda: _publish_files(app, config, root_key, get_token)))
+    if config.chat:
+        jobs.append(('report', lambda: _send_report(app, config, root_key,
+                                                    (now or datetime.now(ZONE)).astimezone(ZONE), get_token)))
+    for job, action in jobs:
+        key = f'feishu_daily_error:{job}:{root_key}'
+        try:
+            action()
+        except HTTPException as exc:
+            with app.db_session() as conn:
+                conn.execute('INSERT OR REPLACE INTO app_meta VALUES (?,?)', (key, str(exc.detail)))
+        else:
+            with app.db_session() as conn:
+                conn.execute('DELETE FROM app_meta WHERE key=?', (key,))
+
+
+def loop(app, stop):
+    while not stop.is_set():
+        try:
+            publish(app)
+        except Exception:
+            logger.exception('Could not publish Feishu daily sync data')
+        stop.wait(60)
+
+
+def status(app):
+    config = settings()
+    root_key = app.root_scope_key()
+    day = datetime.now(ZONE).date()
+    with app.db_session() as conn:
+        errors = [conn.execute('SELECT value FROM app_meta WHERE key=?', (f'feishu_daily_error:{job}:{root_key}',)).fetchone()
+                  for job in ('table', 'report')]
+        report = conn.execute('SELECT sent_at FROM feishu_daily_reports WHERE root_key=? AND day=?',
+                              (root_key, day.isoformat())).fetchone()
+        pending = conn.execute("""SELECT count(*) FROM feishu_daily_files
+            WHERE root_key=? AND table_key=? AND published_at IS NULL""",
+            (root_key, config.table_key)).fetchone()[0] if config.table_key else 0
+        preview = _summary(app, conn, root_key, day, config) if config.active and not config.error and root_key else ''
+    return {'enabled': config.active, 'configuration_error': config.error if config.active else '',
+            'schedule': config.report_time, 'chat_configured': bool(config.chat),
+            'table_configured': bool(config.table_key), 'table_pending': pending,
+            'report_sent_at': (report['sent_at'] or 0) if report else 0,
+            'table_error': errors[0][0] if errors[0] else '', 'report_error': errors[1][0] if errors[1] else '',
+            'preview': preview}

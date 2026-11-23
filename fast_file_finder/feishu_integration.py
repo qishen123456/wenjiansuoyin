@@ -15,8 +15,12 @@ import directory_access
 BASE = 'https://open.feishu.cn/open-apis'
 
 
+def app_credentials_configured():
+    return all(os.getenv(k, '').strip() for k in ('FEISHU_APP_ID', 'FEISHU_APP_SECRET'))
+
+
 def configured():
-    return all(os.getenv(k) for k in ('FEISHU_APP_ID', 'FEISHU_APP_SECRET', 'FEISHU_REDIRECT_URI'))
+    return app_credentials_configured() and bool(os.getenv('FEISHU_REDIRECT_URI', '').strip())
 
 
 def call(method, path, *, token=None, **kwargs):
@@ -27,13 +31,13 @@ def call(method, path, *, token=None, **kwargs):
         data = response.json()
     except (httpx.HTTPError, ValueError):
         raise HTTPException(502, '飞书接口暂不可用，请检查应用配置和网络。')
-    if data.get('code', 0) != 0 or data.get('error'):
+    if not isinstance(data, dict) or data.get('code', 0) != 0 or data.get('error'):
         raise HTTPException(502, '飞书拒绝了请求，请检查应用权限和授权范围。')
     return data
 
 
 def tenant_token():
-    if not configured():
+    if not app_credentials_configured():
         raise HTTPException(503, '请先配置飞书企业应用。')
     data = call('POST', '/auth/v3/tenant_access_token/internal', json={
         'app_id': os.environ['FEISHU_APP_ID'], 'app_secret': os.environ['FEISHU_APP_SECRET']})
@@ -183,7 +187,12 @@ def register(app):
         data=call('POST','/authen/v2/oauth/token',json={'grant_type':'authorization_code','code':code,
             'client_id':os.environ['FEISHU_APP_ID'],'client_secret':os.environ['FEISHU_APP_SECRET'],
             'redirect_uri':os.environ['FEISHU_REDIRECT_URI']})
-        identity=call('GET','/authen/v1/user_info',token=data['access_token'])['data']['open_id']
+        user_token = data.get('access_token')
+        if not user_token:
+            raise HTTPException(502, '飞书登录未返回用户凭据，请重新登录。')
+        identity = (call('GET', '/authen/v1/user_info', token=user_token).get('data') or {}).get('open_id')
+        if not identity:
+            raise HTTPException(502, '无法读取飞书身份，请检查应用授权。')
         with app.db_session() as conn:
             row=conn.execute("""SELECT u.id FROM system_users u JOIN feishu_members m ON u.feishu_id=m.open_id
                 WHERE m.open_id=? AND m.active=1 AND u.status='active'""",(identity,)).fetchone()
@@ -203,7 +212,8 @@ def register(app):
         with app.db_session() as conn:
             rows=conn.execute('SELECT * FROM feishu_members ORDER BY department,name').fetchall()
             stamp=conn.execute("SELECT value FROM app_meta WHERE key='feishu_last_sync'").fetchone()
-        return {'configured':configured(),'members':[dict(r) for r in rows],'last_sync':float(stamp[0]) if stamp else 0}
+        return {'configured': configured(), 'members': [dict(r) for r in rows],
+                'last_sync': float(stamp[0]) if stamp else 0, 'daily': app.feishu_daily.status(app)}
 
     @app.app.post('/api/system/feishu/sync')
     def sync(request: Request):

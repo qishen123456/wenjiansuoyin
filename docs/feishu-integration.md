@@ -1,0 +1,19 @@
+# 飞书登录、同步日报与新增清单
+
+## 配置
+
+1. 在飞书开放平台创建并发布企业自建应用，设置可用范围。启用机器人并加入指定内部群。
+2. 将 `FEISHU_APP_ID`、`FEISHU_APP_SECRET` 放入服务环境。将完整 HTTPS 回调地址 `https://你的域名/integrations/feishu/callback` 同时写入 `FEISHU_REDIRECT_URI` 和飞书后台的重定向 URL 白名单。应用需能读取登录用户身份及授权范围内的部门和人员。
+3. 超级管理员打开平台的人员权限页，点击「同步通讯录」，然后给本地账号绑定对应飞书成员。登录页会显示飞书登录入口。飞书登录使用已绑定账号的角色与目录授权。
+4. 在受限共享的多维表格建一张「每日新增文件」数据表，添加六个**文本**字段。主字段可用「文件名」，其余为「日期」「文件格式」「相对目录」「首次入库时间」「条目标识」。让应用具备数据表编辑权限，并在开放平台开通写入记录权限。
+5. 配置 `FEISHU_DAILY_CHAT_ID`（接收群的 `oc_...` 标识）、`FEISHU_DAILY_BTABLE_APP_TOKEN` 和 `FEISHU_DAILY_BTABLE_TABLE_ID`。若填写 `FEISHU_DAILY_BTABLE_URL`，日报会附上这个飞书链接。提醒只发到指定群，群内应只包含有权了解数据源全局统计的成员。
+6. 设置 `FEISHU_DAILY_ENABLED=true`，重启服务。`FEISHU_DAILY_TIME` 缺省为北京时间 18:00。可以只配置群或只配置数据表。容器使用仓库根目录的 `.env`，裸跑 Python 时通过服务环境传入，或填写 `fast_file_finder/.env`。
+
+[获取飞书访问凭证](https://open.feishu.cn/document/server-docs/api-call-guide/calling-process/get-access-token?lang=zh-CN) · [机器人发消息](https://open.feishu.cn/document/server-docs/im-v1/message/create) · [多维表格批量新增记录](https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-record/batch_create)
+
+## 统计与归档
+
+- 新增按文件首次写入当前索引的北京时间归档。普通内容更新、重复扫描与同日同一路径重新入索引均不重复计数。新数据源首次全盘扫描用于建立基线，存量文件不进入日报。启用前的历史索引不回填。
+- 日报展示发送时的扫描进度、今日新增文件数和其中的表格数。归档检测按规则统计逾期和无法核验，技术执行失败单独提示。休息日暂停和未到首次检测节点不算异常。
+- 当天的文件在同一张多维表里逐批追加，按「日期」分组即可回看。发送日报之后，新入库文件继续落表。清单发送文件名、格式、相对目录与入库时间等索引信息，文件原件、文件内容和服务器绝对路径不随清单发送。用飞书自身的共享设置控制清单可见范围。
+- 任务约每分钟检查一次。写表失败保留待写入记录并重试。日报当天到点推送，异常时在飞书消息幂等窗口内重试。管理员可在人员权限页查看发送、待写入和失败状态。部署多个实例时，应让一个实例负责日报发布。

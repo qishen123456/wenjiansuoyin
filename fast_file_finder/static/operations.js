@@ -154,7 +154,24 @@ async function loadFeishuPanel(){
   if(!panel || currentUser?.role!=='super_admin') return;
   try{
     const status=await api('/api/system/feishu');
-    panel.innerHTML='<h3>飞书企业应用</h3>';
+    panel.innerHTML='<div class="home-panel-heading"><h3>飞书企业应用</h3><button type="button" id="refreshFeishu" class="tree-tool-btn">刷新状态</button></div>';
+    $('refreshFeishu').onclick=loadFeishuPanel;
+    const daily=status.daily;
+    if(daily){
+      const reportState=daily.chat_configured
+        ? (daily.report_sent_at ? `已发送 · ${portalMonitorTime(daily.report_sent_at)}` : '今日尚未发送')
+        : '未配置接收群';
+      const tableState=daily.table_configured
+        ? (daily.table_pending ? `${daily.table_pending} 条待写入` : '无待写入记录')
+        : '未配置数据表';
+      const errors=[daily.configuration_error, daily.report_error, daily.table_error].filter(Boolean);
+      panel.insertAdjacentHTML('beforeend', `<section class="feishu-daily" aria-label="同步日报">
+        <div class="feishu-daily-heading"><h4>同步日报</h4><span>${daily.enabled ? '已启用' : '未启用'}</span></div>
+        ${daily.enabled ? `<dl><div><dt>发送时间</dt><dd>${esc(daily.schedule)}（北京时间）</dd></div><div><dt>日报状态</dt><dd>${esc(reportState)}</dd></div><div><dt>多维表清单</dt><dd>${esc(tableState)}</dd></div></dl>
+        ${errors.map(msg=>`<p class="feishu-daily-error" role="status">${esc(msg)}</p>`).join('')}
+        ${daily.preview ? `<details><summary>查看今日数据</summary><pre>${esc(daily.preview)}</pre></details>` : ''}` : '<p>在服务环境中配置接收群和多维表格，启用后按日期归档新增文件。</p>'}
+      </section>`);
+    }
     if(!status.configured){
       panel.insertAdjacentHTML('beforeend','<p>尚未配置企业应用。请在服务环境中设置应用 ID、密钥与登录回调地址，再同步通讯录。</p>');
       return;
