@@ -210,7 +210,7 @@ def _archive_scheduler_loop() -> None:
                 _archive_scheduler_info["auto_resolved_total"] += res.get("tasks_auto_resolved", 0)
         except Exception as exc:
             logger.warning("Background archive compliance check error: %s", exc)
-            if feishu_daily.enabled():
+            if feishu_daily.enabled() or feishu_integration.app_credentials_configured():
                 try:
                     with db_session() as conn:
                         feishu_daily.record_check_failure(conn, root_scope_key(), time.time())
@@ -265,7 +265,7 @@ async def lifespan(_app: FastAPI):
     scheduler_thread = threading.Thread(target=_archive_scheduler_loop, daemon=True, name="ArchiveScheduler")
     scheduler_thread.start()
     feishu_daily_stop = threading.Event()
-    if feishu_daily.enabled():
+    if feishu_daily.enabled() or feishu_integration.app_credentials_configured():
         threading.Thread(target=feishu_daily.loop, args=(sys.modules[__name__], feishu_daily_stop),
                          daemon=True, name="FeishuDaily").start()
     threading.Thread(target=file_management.backup_loop, args=(sys.modules[__name__],),
@@ -813,10 +813,10 @@ def update_index_file(
         )
         file_id = cur.lastrowid
         action = "indexed"
-        if track_addition and feishu_daily.enabled():
+        if track_addition and (feishu_daily.enabled() or feishu_integration.app_credentials_configured()):
             config = feishu_daily.settings(conn, root_key)
             relative = _relative_catalog_path(path_str, _catalog_root_path())
-            if not config.error and relative and not any(term in relative for term in SENSITIVE_DIRS):
+            if config.active and not config.error and relative and not any(term in relative for term in SENSITIVE_DIRS):
                 feishu_daily.record_file(conn, root_key=root_key, relative=relative, name=name, ext=ext,
                                          added_at=now, config=config)
     conn.execute("INSERT INTO file_fts(rowid,name,name_grams,path_grams) VALUES(?,?,?,?)",
@@ -947,7 +947,7 @@ def _scan_worker(lock_already_acquired: bool = False, mode: str = 'full', target
             unseen = {path for path,row in known.items() if row["root_key"]==root_key
                       and (not scoped or directory_access.within(directory_access.normalise(path), directory_access.normalise(root)))}
             # The first completed inventory is a baseline, not a daily delivery.
-            track_additions = bool(feishu_daily.enabled() and conn.execute(
+            track_additions = bool(feishu_daily.settings(conn, root_key).active and conn.execute(
                 "SELECT 1 FROM app_meta WHERE key='indexed_root' AND value=?", (root_key,)).fetchone())
             if rebuilding:
                 conn.execute("BEGIN IMMEDIATE")
@@ -3295,7 +3295,7 @@ def run_archive_compliance_check(conn) -> dict[str, Any]:
 
     if full_scope:
         report_daily.save(conn, root_scope_key(), now, daily_rows)
-        if feishu_daily.enabled():
+        if feishu_daily.settings(conn, root_scope_key()).active:
             feishu_daily.record_check(conn, root_scope_key(), now, len(rules), overdue_rules, rule_issues)
 
     return {

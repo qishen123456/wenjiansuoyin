@@ -325,3 +325,47 @@ def test_removing_recipient_skips_future_sends_and_preserves_concurrent_edits(co
     assert client.get('/api/system/feishu').json()['daily']['recipient']['type'] == 'off'
     restored = client.put(url, json={'type':'open_id', 'id':'ou_replacement', 'expected_id':''})
     assert restored.raise_for_status().json()['recipient']['type'] == 'open_id'
+
+
+def test_daily_task_uses_saved_time_pause_and_resume(configured_daily, monkeypatch):
+    client, _, _ = configured_daily
+    login(client)
+    monkeypatch.setenv('FEISHU_DAILY_ENABLED', 'false')
+    sent = []
+    monkeypatch.setattr(feishu, 'call', lambda method, path, **kw: sent.append(kw['json']['receive_id']))
+    url = '/api/system/feishu/daily/recipient'
+    target = {'type':'chat_id', 'id':'oc_fixture'}
+    assert client.put(url, json={**target, 'schedule':'24:15'}).status_code == 422
+    config = client.put(url, json={**target, 'schedule':'19:15', 'task_enabled':True, 'revision':0}).raise_for_status().json()
+    assert config['schedule'] == '19:15' and config['task_enabled'] and config['next_run']
+    cutoff = datetime.combine(datetime.now(daily.ZONE).date(), daily.wall_time(19, 15), daily.ZONE)
+    daily.publish(app, cutoff - timedelta(minutes=1))
+    assert not sent
+    assert client.put(url, json={**target, 'task_enabled':False, 'revision':0}).status_code == 409
+    paused = client.put(url, json={**target, 'task_enabled':False, 'revision':config['revision']}).raise_for_status().json()
+    assert not paused['task_enabled'] and not paused['next_run'] and paused['recipient']['id'] == target['id']
+    daily.publish(app, cutoff)
+    assert not sent
+    resumed = client.put(url, json={**target, 'task_enabled':True, 'revision':paused['revision']}).raise_for_status().json()
+    assert resumed['schedule'] == '19:15'
+    daily.publish(app, cutoff + timedelta(minutes=1))
+    daily.publish(app, cutoff + timedelta(minutes=2))
+    assert sent == ['oc_fixture']
+    assert daily.status(app)['last_sent_at'] > 0
+
+
+def test_admin_can_lookup_group_without_sending_or_changing_task(configured_daily, monkeypatch):
+    client, _, _ = configured_daily
+    path = '/api/system/feishu/daily/verify-chat'
+    requested = []
+    def lookup(method, url, **kwargs):
+        requested.append((method, url))
+        return {'data':{'name':'测试工作群','chat_mode':'group'}}
+    monkeypatch.setattr(feishu, 'call', lookup)
+    login(client, admin=False)
+    assert client.post(path, json={'chat_id':'oc_test'}).status_code == 403
+    login(client)
+    assert client.post(path, json={'chat_id':'ou_test'}).status_code == 422
+    assert client.post(path, json={'chat_id':'oc_test'}).raise_for_status().json() == {'name':'测试工作群'}
+    assert requested == [('GET', '/im/v1/chats/oc_test')]
+    assert daily.status(app)['recipient']['id'] == 'oc_fixture'

@@ -48,6 +48,8 @@ class Settings:
     report_url: str
     error: str
     recipient_source: str
+    task_enabled: bool
+    revision: float
 
     @property
     def recipient(self):
@@ -69,7 +71,7 @@ def _application_id():
 
 
 def _stored_recipient(conn, root_key):
-    return conn.execute("""SELECT recipient_type, recipient_id FROM feishu_daily_recipients
+    return conn.execute("""SELECT recipient_type, recipient_id, schedule, task_enabled, updated_at FROM feishu_daily_recipients
                            WHERE root_key=? AND app_id=?""",
                         (root_key, _application_id())).fetchone()
 
@@ -89,6 +91,11 @@ def settings(conn=None, root_key=''):
     table = os.getenv('FEISHU_DAILY_BTABLE_TABLE_ID', '').strip()
     url = os.getenv('FEISHU_DAILY_BTABLE_URL', '').strip()
     report_time = os.getenv('FEISHU_DAILY_TIME', '18:00').strip()
+    task_enabled = enabled()
+    if saved:
+        report_time = saved['schedule'] or report_time
+        if saved['task_enabled'] is not None:
+            task_enabled = bool(saved['task_enabled'])
     report_base = os.getenv('FEISHU_REPORT_BTABLE_APP_TOKEN', '').strip()
     report_table = os.getenv('FEISHU_REPORT_BTABLE_TABLE_ID', '').strip()
     report_url = os.getenv('FEISHU_REPORT_BTABLE_URL', '').strip()
@@ -132,11 +139,12 @@ def settings(conn=None, root_key=''):
                 raise ValueError
         except ValueError:
             error = '更新明细需配置系统的 HTTP 或 HTTPS 入口地址。'
-    return Settings(enabled(), report_time, chat, open_id, token, table, url, system_url,
-                    report_base, report_table, report_url, error, 'system' if saved else 'environment')
+    return Settings(enabled() or task_enabled, report_time, chat, open_id, token, table, url, system_url,
+                    report_base, report_table, report_url, error, 'system' if saved else 'environment',
+                    task_enabled, saved['updated_at'] if saved else 0.0)
 
 
-def set_recipient(app, user_id, kind, recipient_id, *, expected_id=None):
+def set_recipient(app, user_id, kind, recipient_id, *, expected_id=None, schedule=None, task_enabled=None, revision=None):
     root_key = app.root_scope_key()
     if not root_key or not feishu.app_credentials_configured():
         raise HTTPException(422, '请先配置文件目录和飞书应用。')
@@ -148,19 +156,25 @@ def set_recipient(app, user_id, kind, recipient_id, *, expected_id=None):
         raise HTTPException(422, '请选择飞书成员或填写指定飞书群的 ID。')
     with _recipient_lock, app.db_session() as conn:
         conn.execute('BEGIN IMMEDIATE')
-        if expected_id is not None and settings(conn, root_key).recipient != expected_id:
+        current = settings(conn, root_key)
+        if revision is not None and current.revision != revision:
+            raise HTTPException(409, '任务配置已更新，请刷新页面后重试。')
+        if expected_id is not None and current.recipient != expected_id:
             raise HTTPException(409, '接收人已被修改，请刷新页面后重试。')
-        if kind == 'open_id':
+        pausing_current = task_enabled is False and recipient_id == current.recipient
+        if kind == 'open_id' and not pausing_current:
             member = _member(conn, recipient_id)
             legacy_open_id = os.getenv('FEISHU_DAILY_OPEN_ID', '').strip()
             if not ((member and member['active']) or (member is None and recipient_id == legacy_open_id)):
                 raise HTTPException(422, '请选择已同步的在职飞书成员。')
         conn.execute("""INSERT INTO feishu_daily_recipients
-            (root_key, app_id, recipient_type, recipient_id, updated_at, updated_by) VALUES (?,?,?,?,?,?)
+            (root_key, app_id, recipient_type, recipient_id, updated_at, updated_by, schedule, task_enabled) VALUES (?,?,?,?,?,?,?,?)
             ON CONFLICT(root_key, app_id) DO UPDATE SET
                 recipient_type=excluded.recipient_type, recipient_id=excluded.recipient_id,
-                updated_at=excluded.updated_at, updated_by=excluded.updated_by""",
-            (root_key, _application_id(), kind, recipient_id, time.time(), user_id))
+                updated_at=excluded.updated_at, updated_by=excluded.updated_by,
+                schedule=coalesce(excluded.schedule, feishu_daily_recipients.schedule),
+                task_enabled=coalesce(excluded.task_enabled, feishu_daily_recipients.task_enabled)""",
+            (root_key, _application_id(), kind, recipient_id, time.time(), user_id, schedule, task_enabled))
     return status(app)
 
 
@@ -171,6 +185,11 @@ def initialize(conn):
         recipient_id TEXT NOT NULL, updated_at REAL NOT NULL, updated_by INTEGER NOT NULL,
         PRIMARY KEY(root_key, app_id)
     )""")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(feishu_daily_recipients)")}
+    if 'schedule' not in columns:
+        conn.execute('ALTER TABLE feishu_daily_recipients ADD COLUMN schedule TEXT')
+    if 'task_enabled' not in columns:
+        conn.execute('ALTER TABLE feishu_daily_recipients ADD COLUMN task_enabled INTEGER')
     conn.execute("""CREATE TABLE IF NOT EXISTS feishu_daily_files (
         id INTEGER PRIMARY KEY, root_key TEXT NOT NULL, day TEXT NOT NULL, item_key TEXT NOT NULL,
         name TEXT NOT NULL, ext TEXT NOT NULL, directory TEXT NOT NULL, added_at REAL NOT NULL,
@@ -364,7 +383,7 @@ def _send_report(app, root_key, now, get_token, *, immediate=False):
         with app.db_session() as conn:
             conn.execute('BEGIN IMMEDIATE')
             config = settings(conn, root_key)
-            if not config.active or config.error or not config.recipient:
+            if not config.task_enabled or config.error or not config.recipient:
                 return 'disabled'
             if not immediate and now.strftime('%H:%M') < config.report_time:
                 return
@@ -417,7 +436,7 @@ def send_now(app):
     root_key = app.root_scope_key()
     with app.db_session() as conn:
         config = settings(conn, root_key)
-    if not config.active or config.error or not config.recipient or not root_key:
+    if not config.task_enabled or config.error or not config.recipient or not root_key:
         raise HTTPException(422, config.error or '请先启用日报并配置接收对象和文件根目录。')
     now = datetime.now(ZONE)
     if config.report_url:
@@ -443,9 +462,9 @@ def publish(app, now=None):
     if config.table_key:
         jobs.append(('table', lambda: _publish_files(app, config, root_key, get_token)))
     now = (now or datetime.now(ZONE)).astimezone(ZONE)
-    if config.report_url and now.strftime('%H:%M') >= config.report_time:
+    if config.task_enabled and config.report_url and now.strftime('%H:%M') >= config.report_time:
         jobs.append(('report_table', lambda: _publish_report_table(app, config, root_key, now, get_token)))
-    if config.recipient:
+    if config.task_enabled and config.recipient:
         jobs.append(('report', lambda: _send_report(app, root_key, now, get_token)))
     for job, action in jobs:
         key = f'feishu_daily_error:{job}:{root_key}'
@@ -470,7 +489,8 @@ def loop(app, stop):
 
 def status(app):
     root_key = app.root_scope_key()
-    day = datetime.now(ZONE).date()
+    now = datetime.now(ZONE)
+    day = now.date()
     with app.db_session() as conn:
         config = settings(conn, root_key)
         if config.open_id:
@@ -486,11 +506,22 @@ def status(app):
                   for job in ('table', 'report', 'report_table')]
         report = conn.execute('SELECT sent_at FROM feishu_daily_reports WHERE root_key=? AND day=?',
                               (root_key, day.isoformat())).fetchone()
+        last = conn.execute('SELECT MAX(sent_at) FROM feishu_daily_reports WHERE root_key=?',
+                            (root_key,)).fetchone()[0]
         pending = conn.execute("""SELECT count(*) FROM feishu_daily_files
             WHERE root_key=? AND table_key=? AND published_at IS NULL""",
             (root_key, config.table_key)).fetchone()[0] if config.table_key else 0
         preview = _summary(app, conn, root_key, day, config)[0] if config.active and not config.error and root_key else ''
-    return {'enabled': config.active, 'configuration_error': config.error if config.active else '',
+    next_run = ''
+    if config.task_enabled and config.recipient and not config.error:
+        hour, minute = map(int, config.report_time.split(':'))
+        due = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if report and report['sent_at']:
+            due += timedelta(days=1)
+        next_run = '等待调度' if due <= now else due.strftime('%Y-%m-%d %H:%M')
+    return {'enabled': config.active, 'task_enabled': config.task_enabled,
+            'revision': config.revision, 'next_run': next_run, 'last_sent_at': last or 0,
+            'configuration_error': config.error if config.active else '',
             'schedule': config.report_time, 'chat_configured': bool(config.chat), 'recipient': recipient,
             'recipient_type': config.recipient_type if config.recipient else '',
             'report_table_configured': bool(config.report_url),

@@ -315,10 +315,17 @@ class Binding(BaseModel):
     open_id: str
 
 
+class ChatLookup(BaseModel):
+    chat_id: str = Field(max_length=128, pattern=r'^oc_[A-Za-z0-9_-]+$')
+
+
 class DailyRecipient(BaseModel):
     type: Literal['open_id', 'chat_id', 'off']
     id: str = Field(default='', max_length=128)
     expected_id: str | None = Field(default=None, max_length=128)
+    schedule: str | None = Field(default=None, pattern=r'^(?:[01][0-9]|2[0-3]):[0-5][0-9]$')
+    task_enabled: bool | None = None
+    revision: float | None = None
 
 
 def register(app):
@@ -405,10 +412,26 @@ def register(app):
         return {**snapshot, 'configured': configured(), 'demo_mode': app.DEMO_MODE,
                 'daily': app.feishu_daily.status(app)}
 
+    @app.app.post('/api/system/feishu/daily/verify-chat')
+    def verify_chat(body: ChatLookup, request: Request):
+        app._require_super_admin(request)
+        try:
+            result = call('GET', '/im/v1/chats/' + body.chat_id, token=tenant_token())
+        except FeishuAPIError as exc:
+            if exc.code == 99991672:
+                raise HTTPException(403, '应用缺少读取群信息权限，请在飞书群设置中核对群 ID。') from exc
+            raise
+        info = result.get('data') or {}
+        if info.get('chat_mode') not in {'group', 'topic'} or not info.get('name'):
+            raise HTTPException(422, '飞书没有返回可核对的群名称。')
+        return {'name': info['name']}
+
     @app.app.put('/api/system/feishu/daily/recipient')
     def update_daily_recipient(body: DailyRecipient, request: Request):
         actor = app._require_super_admin(request)
-        return app.feishu_daily.set_recipient(app, actor['id'], body.type, body.id, expected_id=body.expected_id)
+        return app.feishu_daily.set_recipient(app, actor['id'], body.type, body.id, expected_id=body.expected_id,
+                                              schedule=body.schedule, task_enabled=body.task_enabled,
+                                              revision=body.revision)
 
     @app.app.post('/api/system/feishu/sync')
     def sync(request: Request):

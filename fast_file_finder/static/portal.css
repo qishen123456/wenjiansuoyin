@@ -2701,6 +2701,17 @@ button:disabled {
 .feishu-daily pre{font:inherit;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0}
 .feishu-daily .feishu-daily-error{color:#963a2b}
 
+.feishu-daily{background:#fff;padding:20px;border-color:#dbe3ed}
+.feishu-daily-heading{justify-content:space-between;align-items:flex-start}
+.feishu-daily-heading h4{font-size:17px;line-height:1.4}
+.feishu-daily-heading p{margin:5px 0 0}
+.feishu-daily-heading .feishu-task-state{white-space:nowrap;padding:3px 9px;background:#f1f4f8}
+.feishu-daily-heading .feishu-task-state[data-running=true]{background:#edf7f0;border-color:#cce6d5;color:#23613e}
+.feishu-daily .feishu-task-facts{background:#f6f8fb;border-radius:8px;margin:16px 0 8px;padding:12px 15px}
+.feishu-recipient-row{border-top:0}
+.feishu-daily form{margin-top:12px}
+.feishu-chat-lookup{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:#536583;font-size:12px;margin-top:10px}
+#syncFeishuTaskHost .feishu-daily{margin:0 0 20px}
 .permission-roster-tabs{display:flex;gap:8px;margin:0 0 12px;flex-wrap:wrap}
 .permission-roster-tabs button{border:1px solid #dce3ef;border-radius:8px;background:#fff;padding:8px 14px;color:#52647d;font:inherit;font-size:13px;cursor:pointer}
 .permission-roster-tabs button[aria-pressed=true]{color:#204694;border-color:#b7c9ed;background:#eef3ff;font-weight:600}

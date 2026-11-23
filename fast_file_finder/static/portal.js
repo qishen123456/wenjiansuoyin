@@ -94,7 +94,10 @@ function updatePortalNavigation(mode) {
     button.setAttribute('aria-current', button.getAttribute('onclick').includes(`'${mode}'`) ? 'page' : 'false');
   });
   togglePortalSidebar(false);
-  if (mode === 'sync') refreshPortalSync();
+  if (mode === 'sync') {
+    refreshPortalSync();
+    loadSyncFeishuTask();
+  }
   if (mode === 'archive') renderPortalArchiveNotice();
 }
 
