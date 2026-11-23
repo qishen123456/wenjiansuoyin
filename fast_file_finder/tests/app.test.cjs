@@ -4,6 +4,79 @@ const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+test('password visibility follows the control and resets between login sessions', () => {
+  const source = readFileSync(join(__dirname, '../static/app.js'), 'utf8');
+  const password = { type: 'password', value: 'fixture', focus() { focused = this; } };
+  const phone = { value: 'admin', focus() { focused = this; } };
+  const toggle = { setAttribute(name, value) { this[name] = value; } };
+  const overlay = { style: { display: 'none' } };
+  const background = { inert: false };
+  overlay.parentElement = { children: [background, overlay] };
+  const nodes = { loginPassword: password, loginPhone: phone, loginPasswordToggle: toggle, loginOverlay: overlay };
+  let focused;
+  const context = { $: id => nodes[id], window: {}, currentUser: null };
+  vm.runInNewContext(source.slice(source.indexOf('const loginBackground ='),
+    source.indexOf('async function checkAuth(')), context);
+
+  context.showLoginOverlay();
+  assert.equal(focused, password);
+  context.setLoginPasswordVisibility(true);
+  assert.equal(password.type, 'text');
+  assert.equal(toggle['aria-pressed'], 'true');
+  assert.equal(password.value, 'fixture');
+  context.hideLoginOverlay();
+  assert.equal(password.type, 'password');
+  assert.equal(toggle['aria-pressed'], 'false');
+  assert.equal(background.inert, false);
+  context.showLoginOverlay();
+  assert.equal(password.type, 'password');
+  assert.equal(focused, password);
+});
+
+test('login blocks overlapping requests and restores the submit button for retry', async () => {
+  const source = readFileSync(join(__dirname, '../static/app.js'), 'utf8');
+  const nodes = {
+    loginPhone: { value: 'admin' }, loginPassword: { value: '' },
+    loginError: { textContent: '' }, loginSubmit: { disabled: false, textContent: '登录' },
+  };
+  const pending = [];
+  let completed = false;
+  const context = {
+    $: id => nodes[id], currentUser: null, window: {},
+    api: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    hideLoginOverlay: () => { completed = true; },
+    applyUserUI() {}, showHomeCockpit() {}, initHomeDataCockpit() {},
+    loadArchiveOverview() {}, loadStatus() {}, loadRecent() {},
+  };
+  vm.runInNewContext(source.slice(source.indexOf('async function doLogin('),
+    source.indexOf('async function doLogout(')), context);
+
+  await context.doLogin();
+  assert.equal(pending.length, 0);
+  assert.equal(nodes.loginSubmit.disabled, false);
+
+  nodes.loginPassword.value = 'fixture';
+  const failed = context.doLogin();
+  assert.equal(nodes.loginSubmit.disabled, true);
+  assert.equal(nodes.loginSubmit.textContent, '正在登录…');
+  await context.doLogin();
+  assert.equal(pending.length, 1);
+  pending[0].reject(new Error('账号或密码不正确'));
+  await failed;
+  assert.equal(nodes.loginError.textContent, '账号或密码不正确');
+  assert.equal(nodes.loginSubmit.disabled, false);
+  assert.equal(nodes.loginSubmit.textContent, '登录');
+
+  const retry = context.doLogin();
+  assert.equal(pending.length, 2);
+  pending[1].resolve({ user: { role: 'super_admin' } });
+  await retry;
+  assert.equal(completed, true);
+  assert.equal(nodes.loginPassword.value, '');
+  assert.equal(nodes.loginSubmit.disabled, false);
+  assert.equal(nodes.loginSubmit.textContent, '登录');
+});
+
 test('opening a file from approval details dismisses the modal covering the reader', () => {
   const source = readFileSync(join(__dirname, '../static/app.js'), 'utf8');
   const start = source.indexOf('function closeApprovalDetail(');

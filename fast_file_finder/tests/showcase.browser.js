@@ -45,6 +45,47 @@
   nav('sync');click('[data-action="sync"]');assert(text().includes('检查完成'),'index check reports current demo files');
   nav('backup');click('[data-restore]');click('#confirmDialog button[value="confirm"]');await tick();
   nav('archive');assert(!document.querySelector('[data-complete="archive-1"]').disabled,'snapshot restores earlier task state');
+  // Feishu scenes share the simulated identity, directory, grants, and task history.
+  const form=id=>document.getElementById(id);
+  const select=(field,value)=>{field.value=value;field.dispatchEvent(new Event('change',{bubbles:true}));};
+  nav('feishu-login');
+  form('feishuLoginForm').requestSubmit();
+  assert(text().includes('许言')&&text().includes('只读成员')&&document.getElementById('demoToast').textContent.includes('已开通'),'first Feishu demo authorization opens a synthetic ordinary account');
+  click('#sceneContent [data-scene="feishu-members"]');
+  click('[data-feishu-action="sync"]');
+  assert(text().includes('4 位成员')&&text().includes('交付专员'),'simulated contact sync exposes members and jobs');
+  const grant=form('feishuGrantForm');
+  select(grant.elements.type,'job');select(grant.elements.subject,'交付支持 / 交付专员');
+  select(grant.elements.folder,'归档材料');select(grant.elements.access,'write');grant.requestSubmit();
+  assert([...document.querySelectorAll('#feishuAccessList li')].some(row=>row.textContent.includes('归档材料阅读与维护')),'the signed-in member receives the matching job grant');
+  select(document.getElementById('feishuAccessPerson'),'feishu-finance');
+  assert([...document.querySelectorAll('#feishuAccessList li')].some(row=>row.textContent.includes('归档材料未授权')),'different departments cannot use this job grant');
+  nav('feishu-push');
+  const task=form('feishuTaskForm');task.elements.name.value='浏览器验收日报';task.elements.recipient.value='feishu-finance';task.elements.time.value='14:10';task.requestSubmit();
+  const row='[data-task-row="notify-2"]';
+  assert(document.querySelector(row).textContent.includes('林晓')&&document.querySelector(row).textContent.includes('14:10'),'daily task saves a synchronized recipient and schedule');
+  click(`${row} [data-feishu-action="toggle"]`);assert(document.querySelector(row).textContent.includes('已暂停'),'pause updates the delivery plan');
+  click(`${row} [data-feishu-action="edit"]`);form('feishuTaskForm').elements.time.value='15:20';form('feishuTaskForm').requestSubmit();
+  assert(document.querySelector(row).textContent.includes('15:20'),'existing task schedule can be edited');
+  click(`${row} [data-feishu-action="send"]`);
+  assert(document.querySelector('#confirmDialog').open&&!document.querySelector(row).textContent.includes('模拟投递'),'manual send waits for explicit confirmation');
+  click('#confirmDialog button[value="confirm"]');
+  assert(document.querySelector(row).textContent.includes('模拟投递'),'confirmed send leaves a local receipt');
+  click(`${row} [data-feishu-action="delete"]`);click('#confirmDialog button[value="confirm"]');
+  assert(!document.querySelector(row),'deleting a simulated task only removes the chosen row');
+  click('#sceneContent [data-scene="feishu-reports"]');
+  click('[data-report-status="missing"]');
+  assert(document.querySelectorAll('#sceneContent tbody tr').length===1&&text().includes('项目交付凭证'),'report status filters records for the selected date');
+  select(document.getElementById('feishuReportDay'),'2026-11-12');
+  assert(document.querySelectorAll('#sceneContent tbody tr').length===1&&text().includes('季度经营报告'),'changing report date keeps the status filter and updates records');
+  const originalCreateURL=URL.createObjectURL;let exported;
+  try {
+    URL.createObjectURL=blob=>{exported=blob;return originalCreateURL.call(URL,blob);};
+    click('[data-feishu-action="export"]');
+    const csv=await exported.text();
+    assert(csv.includes('2026-11-12')&&csv.includes('季度经营报告')&&!csv.includes('项目交付凭证'),'export contains the selected date and only abnormal records');
+  } finally { URL.createObjectURL=originalCreateURL; }
+  nav('archive');
   // Escape after a prior confirmation must never reset current state.
   click('[data-complete="archive-1"]');click('#resetDemo');document.getElementById('confirmDialog').dispatchEvent(new Event('cancel'));document.getElementById('confirmDialog').close();await tick();
   assert(location.hash==='#archive'&&document.querySelector('[data-complete="archive-1"]').disabled,'canceling reset preserves current state');
@@ -67,6 +108,7 @@
   assert(resources.every(url=>!new URL(url).pathname.startsWith('/api/')),'demo never calls business APIs');
   assert(errors.length===0,`no uncaught browser errors (${errors.length})`);
   click('#resetDemo');click('#confirmDialog button[value="confirm"]');await tick();
+  nav('feishu-login');assert(Boolean(form('feishuLoginForm')),'reset clears the simulated Feishu authorization');
   nav('search');document.getElementById('searchQuery').value='local-proof';document.getElementById('searchQuery').dispatchEvent(new Event('input',{bubbles:true}));
   assert(document.querySelectorAll('#searchResults tbody tr').length===0&&document.querySelectorAll('.file-tab').length===0,'reset clears uploaded files and readers');
   nav('overview');return {passed:checks.length,checks};

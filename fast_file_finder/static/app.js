@@ -661,6 +661,13 @@ function isAdminUser() {
 
 const loginBackground = new Set();
 
+function setLoginPasswordVisibility(visible) {
+  const password = $('loginPassword');
+  if (!password) return;
+  password.type = visible ? 'text' : 'password';
+  $('loginPasswordToggle')?.setAttribute('aria-pressed', String(visible));
+}
+
 function showLoginOverlay() {
   currentUser = null;
   const overlay = $('loginOverlay');
@@ -672,12 +679,14 @@ function showLoginOverlay() {
       loginBackground.add(sibling);
     }
   }
+  setLoginPasswordVisibility(false);
   overlay.style.display = 'flex';
-  const feishu = overlay.querySelector('[data-feishu-login]:not([hidden]) a');
-  (feishu || ($('loginPhone').value ? $('loginPassword') : $('loginPhone'))).focus();
+  const phone = $('loginPhone');
+  (phone.value ? $('loginPassword') : phone).focus();
 }
 
 function hideLoginOverlay() {
+  setLoginPasswordVisibility(false);
   const overlay = $('loginOverlay');
   if (overlay) overlay.style.display = 'none';
   for (const sibling of loginBackground) sibling.inert = false;
@@ -745,13 +754,19 @@ function openDailyUpdateDetails() {
 }
 
 async function doLogin() {
+  const submitButton = $('loginSubmit');
+  if (submitButton.disabled) return;
   const phone = $('loginPhone').value.trim();
   const password = $('loginPassword').value.trim();
   $('loginError').textContent = '';
   if (!phone || !password) { $('loginError').textContent = '请输入手机号和密码'; return; }
+  const submitLabel = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = '正在登录…';
   try {
     const res = await api('/api/auth/login', { method: 'POST', body: { phone, password } });
     currentUser = res.user;
+    $('loginPassword').value = '';
     hideLoginOverlay();
     applyUserUI();
     showHomeCockpit();
@@ -762,6 +777,9 @@ async function doLogin() {
     loadStatus(); loadRecent();
   } catch (e) {
     $('loginError').textContent = e.message || '登录失败';
+  } finally {
+    submitButton.textContent = submitLabel;
+    submitButton.disabled = false;
   }
 }
 
@@ -2740,6 +2758,9 @@ document.addEventListener('click', (e) => {
 
 /* 页面加载初始化 */
 window.addEventListener('DOMContentLoaded', async () => {
+  $('loginPasswordToggle')?.addEventListener('click', () => {
+    setLoginPasswordVisibility($('loginPassword').type === 'password');
+  });
   // Remove legacy persisted passwords; the existing HttpOnly session cookie handles sign-in.
   try { localStorage.removeItem('ff_saved_login'); } catch {}
   const authenticated = await checkAuth();

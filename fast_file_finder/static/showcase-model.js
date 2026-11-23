@@ -17,6 +17,30 @@
   const csvCurrent = '供应商,服务内容,结算金额（元）,核对状态\n供应商 A,系统维护,96000,已核对\n供应商 B,数据服务,128000,已核对\n供应商 C,交付支持,76000,待补材料\n合计,,300000,模拟数据\n';
   const csvPrevious = '供应商,服务内容,结算金额（元）,核对状态\n供应商 A,系统维护,96000,已核对\n供应商 B,数据服务,128000,待核对\n供应商 C,交付支持,76000,待补材料\n合计,,300000,模拟数据\n';
 
+  function seedFeishu() {
+    return {
+      sessionId: null,
+      syncedAt: '',
+      people: [
+        { id: 'feishu-admin', memberId: 'member-1', name: '演示管理员', department: '系统管理', job: '系统管理员' },
+        { id: 'feishu-finance', memberId: 'member-2', name: '林晓', department: '财务分析', job: '结算专员' },
+        { id: 'feishu-operations', memberId: 'member-3', name: '陈宁', department: '业务运营', job: '运营专员' },
+        { id: 'feishu-new', memberId: null, name: '许言', department: '交付支持', job: '交付专员' },
+      ],
+      groups: [{ id: 'group-operations', name: '运营日报群' }, { id: 'group-finance', name: '财务核对群' }],
+      grants: [{ type: 'department', subject: '业务运营', folder: '经营分析', access: 'read' }],
+      tasks: [{ id: 'notify-1', name: '经营文件归档日报', recipient: 'group-operations', time: '09:00', enabled: true, lastSent: '' }],
+      reports: [
+        { date: '2026-11-13', title: '供应商结算明细', owner: '财务分析', status: 'updated', updated: '08:40', fileId: 'file-5' },
+        { date: '2026-11-13', title: '项目交付凭证', owner: '交付支持', status: 'missing', updated: '', fileId: 'file-7' },
+        { date: '2026-11-13', title: '季度经营报告', owner: '业务运营', status: 'waiting', updated: '', fileId: 'file-1' },
+        { date: '2026-11-12', title: '供应商结算明细', owner: '财务分析', status: 'updated', updated: '08:50', fileId: 'file-5' },
+        { date: '2026-11-12', title: '项目交付凭证', owner: '交付支持', status: 'updated', updated: '09:10', fileId: 'file-7' },
+        { date: '2026-11-12', title: '季度经营报告', owner: '业务运营', status: 'missing', updated: '', fileId: 'file-1' },
+      ],
+    };
+  }
+
   function seedState() {
     const modified = '2026-11-13T01:30:00.000Z';
     const file = (id, name, folder, tags, fields) => ({
@@ -58,6 +82,7 @@
         { id: 'member-2', name: '林晓', department: '财务分析', role: 'editor' },
         { id: 'member-3', name: '陈宁', department: '业务运营', role: 'viewer' },
       ],
+      feishu: seedFeishu(),
       backups: [],
     };
   }
@@ -66,6 +91,7 @@
     let state = seedState();
     let nextFile = 9;
     let nextBackup = 1;
+    let nextFeishuTask = 2;
     const get = id => state.files.find(file => file.id === String(id)) || null;
     const required = (items, id, label) => {
       const item = items.find(entry => entry.id === String(id));
@@ -143,6 +169,93 @@
       return member;
     }
 
+    function signInWithFeishu(id) {
+      const person = required(state.feishu.people, id, '演示飞书身份');
+      const created = person.memberId === null;
+      if (created) {
+        person.memberId = person.id;
+        state.members.push({ id: person.memberId, name: person.name, department: person.department, role: 'viewer' });
+      }
+      state.feishu.sessionId = person.id;
+      return { person, created };
+    }
+
+    function signOutOfFeishu() {
+      state.feishu.sessionId = null;
+    }
+
+    function syncFeishuDirectory() {
+      state.feishu.syncedAt = timestamp();
+      return state.feishu.people.length;
+    }
+
+    function listGrantSubjects(type) {
+      if (!state.feishu.syncedAt) return [];
+      if (type === 'department') return [...new Set(state.feishu.people.map(person => person.department))];
+      if (type === 'job') return [...new Set(state.feishu.people.map(person => `${person.department} / ${person.job}`))];
+      return [];
+    }
+
+    function setFeishuGrant({ type, subject, folder, access }) {
+      if (!listGrantSubjects(type).includes(subject)) throw new Error('请先同步通讯录，再选择授予对象');
+      if (!state.files.some(file => file.folder === folder)) throw new Error('请先选择受控目录');
+      if (!['read', 'write', 'none'].includes(access)) throw new Error('请选择目录权限');
+      const rules = state.feishu.grants;
+      const index = rules.findIndex(rule => rule.type === type && rule.subject === subject && rule.folder === folder);
+      if (index !== -1) rules.splice(index, 1);
+      if (access !== 'none') rules.push({ type, subject, folder, access });
+    }
+
+    function feishuAccess(id) {
+      const person = required(state.feishu.people, id, '演示飞书成员');
+      const isAdmin = state.members.some(member => member.id === person.memberId && member.role === 'admin');
+      return [...new Set(state.files.map(file => file.folder))].map(folder => {
+        if (isAdmin) return { folder, access: 'write' };
+        const rules = state.feishu.grants.filter(rule => rule.folder === folder && (
+          (rule.type === 'department' && rule.subject === person.department) ||
+          (rule.type === 'job' && rule.subject === `${person.department} / ${person.job}`)
+        ));
+        const access = person.memberId ? (rules.find(rule => rule.access === 'write') || rules[0])?.access : null;
+        return { folder, access: access || 'none' };
+      });
+    }
+
+    function feishuRecipients() {
+      const { groups, people, syncedAt } = state.feishu;
+      return [...groups, ...(syncedAt ? people : [])];
+    }
+
+    function saveFeishuTask({ id, name, recipient, time, enabled }) {
+      name = String(name || '').trim();
+      if (!name || name.length > 80) throw new Error('请填写 1–80 字的任务名称');
+      required(feishuRecipients(), recipient, '接收对象');
+      if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error('请选择有效的推送时间');
+      const task = id ? required(state.feishu.tasks, id, '推送任务') : { id: `notify-${nextFeishuTask++}`, lastSent: '' };
+      if (!id) {
+        if (state.feishu.tasks.length >= 20) throw new Error('本次演示最多保留 20 条推送任务');
+        state.feishu.tasks.push(task);
+      }
+      Object.assign(task, { name, recipient, time, enabled: Boolean(enabled) });
+      return task;
+    }
+
+    function toggleFeishuTask(id) {
+      const task = required(state.feishu.tasks, id, '推送任务');
+      task.enabled = !task.enabled;
+      return task;
+    }
+
+    function removeFeishuTask(id) {
+      const task = required(state.feishu.tasks, id, '推送任务');
+      state.feishu.tasks.splice(state.feishu.tasks.indexOf(task), 1);
+    }
+
+    function simulateFeishuSend(id) {
+      const task = required(state.feishu.tasks, id, '推送任务');
+      task.lastSent = timestamp();
+      return task;
+    }
+
     function createBackup() {
       const { backups, ...data } = state;
       const backup = {
@@ -180,12 +293,15 @@
       state = seedState();
       nextFile = 9;
       nextBackup = 1;
+      nextFeishuTask = 2;
       return state;
     }
 
     return Object.freeze({
       get state() { return state; }, list, get, addFile, replaceFile, reset,
       completeArchive, decideApproval, setMemberRole, createBackup, restoreBackup, findForQuestion,
+      signInWithFeishu, signOutOfFeishu, syncFeishuDirectory, listGrantSubjects, setFeishuGrant, feishuAccess,
+      feishuRecipients, saveFeishuTask, toggleFeishuTask, removeFeishuTask, simulateFeishuSend,
     });
   }
 

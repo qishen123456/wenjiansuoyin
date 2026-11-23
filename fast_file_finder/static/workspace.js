@@ -236,10 +236,8 @@
       await window.search?.(1);
     }
     if (version !== sessionVersion) return;
-    // Presentation links can open a panel, never submit or mutate a file.
-    const panel = params.get('panel');
-    if (mode === 'search' && panel === 'ai') window.toggleAIChat?.(true);
-    if (mode === 'catalog' && panel === 'upload') window.uploadToFolder?.();
+    // Upload starts from the toolbar after the user chooses a folder.
+    if (mode === 'search' && params.get('panel') === 'ai') window.toggleAIChat?.(true);
   }
 
   document.querySelectorAll('.workspace-nav-trigger').forEach(button => {

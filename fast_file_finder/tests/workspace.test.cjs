@@ -396,14 +396,20 @@ test('app navigation preserves await semantics, avoids repeat sync initializatio
   assert.equal(app.ids.searchView.classList.contains('hidden'), true);
 });
 
-test('showcase links only open allowed panels once on their matching page', async () => {
-  for (const [query, expected] of [['?view=search&panel=ai','ai'], ['?view=catalog&panel=upload','upload'], ['?view=archive&panel=upload',null], ['?view=search&panel=delete',null]]) {
+test('only the search AI panel can open from a workspace link', async () => {
+  for (const [query, page, expected] of [
+    ['?view=search&panel=ai', 'search', ['ai']],
+    ['?view=catalog&panel=upload', 'catalog', []],
+    ['?view=archive&panel=upload', 'archive', []],
+    ['?view=search&panel=delete', 'search', []],
+  ]) {
     const app = createWorkspace({query});
     const opened = [];
     app.context.toggleAIChat = value => { assert.equal(value,true); opened.push('ai'); };
     app.context.uploadToFolder = () => opened.push('upload');
     await app.workspace.restoreRoute(); await app.workspace.restoreRoute();
-    assert.deepEqual(opened, expected ? [expected] : []);
+    assert.equal(app.workspace.isPageActive(page), true);
+    assert.deepEqual(opened, expected);
   }
 });
 

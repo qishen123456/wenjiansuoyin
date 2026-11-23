@@ -95,3 +95,51 @@ test('the local assistant extracts supported intent and returns real matching fi
   demo.addFile({ name: '新客户合同.txt', size: 10 });
   assert.equal(demo.findForQuestion('找新客户合同').files.length, 1);
 });
+
+test('first Feishu demo login provisions the ordinary account once and does not share state', () => {
+  const demo = createDemo();
+  assert.throws(() => demo.signInWithFeishu('unknown'), /演示飞书身份不存在/);
+  const first = demo.signInWithFeishu('feishu-new');
+  assert.equal(first.created, true);
+  assert.equal(demo.state.members.find(member => member.id === first.person.memberId).role, 'viewer');
+  assert.equal(demo.signInWithFeishu('feishu-new').created, false);
+  assert.equal(demo.state.members.filter(member => member.id === first.person.memberId).length, 1);
+  demo.signOutOfFeishu();
+  assert.equal(demo.state.feishu.sessionId, null);
+  assert.equal(createDemo().state.feishu.people.at(-1).memberId, null);
+});
+
+test('Feishu demo grants require directory sync and match the selected department or its specific job', () => {
+  const demo = createDemo();
+  const grant = { type: 'job', subject: '财务分析 / 结算专员', folder: '供应商结算', access: 'write' };
+  const access = (person, folder) => demo.feishuAccess(person).find(item => item.folder === folder).access;
+  assert.throws(() => demo.setFeishuGrant(grant), /请先同步通讯录/);
+  assert.equal(demo.syncFeishuDirectory(), 4);
+  demo.setFeishuGrant(grant);
+  assert.equal(access('feishu-finance', grant.folder), 'write');
+  assert.equal(access('feishu-operations', grant.folder), 'none');
+  assert.equal(access('feishu-operations', '经营分析'), 'read');
+  demo.setFeishuGrant({ ...grant, access: 'none' });
+  assert.equal(access('feishu-finance', grant.folder), 'none');
+});
+
+test('Feishu demo push tasks validate the recipient and time and participate in backup and reset', () => {
+  const demo = createDemo();
+  const input = { name: '会议资料日报', recipient: 'feishu-finance', time: '09:30', enabled: true };
+  assert.throws(() => demo.saveFeishuTask(input), /接收对象不存在/);
+  demo.syncFeishuDirectory();
+  assert.throws(() => demo.saveFeishuTask({ ...input, time: '27:15' }), /推送时间/);
+  const task = demo.saveFeishuTask(input);
+  demo.toggleFeishuTask(task.id);
+  assert.equal(task.enabled, false);
+  demo.simulateFeishuSend(task.id);
+  assert.ok(task.lastSent);
+  const backup = demo.createBackup();
+  demo.removeFeishuTask(task.id);
+  assert.equal(demo.state.feishu.tasks.length, 1);
+  demo.restoreBackup(backup.id);
+  assert.equal(demo.state.feishu.tasks.length, 2);
+  demo.reset();
+  assert.equal(demo.state.feishu.tasks.length, 1);
+  assert.equal(demo.state.feishu.syncedAt, '');
+});

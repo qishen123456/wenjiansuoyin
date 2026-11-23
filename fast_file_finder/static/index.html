@@ -7,8 +7,8 @@
 
 <link rel="stylesheet" href="/static/theme.css?v=20261112-pine">
 <link rel="stylesheet" href="/static/base.css?v=20261112-pine">
-<link rel="stylesheet" href="/static/portal.css?v=20261124-feishu-workspace">
-<link rel="stylesheet" href="/static/ui.css?v=20261112-pine">
+<link rel="stylesheet" href="/static/portal.css?v=20261124-feishu-login">
+<link rel="stylesheet" href="/static/ui.css?v=20261124-feishu-login">
 </head>
 <body class="workspace-app">
 
@@ -1239,22 +1239,60 @@
 
   <!-- 登录遮罩与下载弹窗 -->
   <div id="loginOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="loginTitle" style="display:none">
-    <section class="modal-card login-card">
-      <span aria-hidden="true" class="login-brand-mark">EA</span>
-      <h1 id="loginTitle">企业文件资产智能检索中心</h1>
-      <div class="login-feishu-method" data-feishu-login hidden>
-        <a id="feishuLoginLink" class="login-feishu-button" href="/integrations/feishu/login">飞书登录</a>
-        <div class="login-divider">或使用账号密码</div>
+    <section class="login-shell">
+      <div class="login-brand">
+        <span class="login-brand-icon" aria-hidden="true"><svg class="icon"><use href="#i-folder-open"/></svg></span>
+        <div class="login-brand-body">
+          <p class="login-brand-title">企业文件<br>资产中心</p>
+          <p class="login-brand-caption">搜索共享盘文件，在线预览文档，按权限申请下载。</p>
+        </div>
       </div>
-      <form class="login-password-form" onsubmit="event.preventDefault();doLogin()">
-        <label for="loginPhone">手机号</label>
-        <input id="loginPhone" class="modal-input" type="tel" placeholder="员工手机号 / 账号" autocomplete="username" value="13800100001">
-        <label for="loginPassword">密码</label>
-        <input id="loginPassword" class="modal-input" type="password" placeholder="请输入密码" autocomplete="current-password" autocapitalize="off" spellcheck="false" value="">
-        <button class="btn-action-primary" type="submit">使用账号密码登录</button>
-      </form>
-      <div id="loginError" class="login-error" role="status" aria-live="polite"></div>
-      <a class="login-showcase-link" href="/showcase">返回演示总览</a>
+      <div class="login-auth">
+        <a class="login-showcase-link" href="/showcase">
+          <svg class="icon" aria-hidden="true"><use href="#i-chevron-left"/></svg>返回演示总览
+        </a>
+        <div class="login-auth-content">
+          <h1 id="loginTitle">登录工作台</h1>
+          <form class="login-password-form" onsubmit="event.preventDefault();doLogin()">
+            <div class="login-field">
+              <label for="loginPhone">手机号或账号</label>
+              <input id="loginPhone" type="tel" autocomplete="username" value="13800100001">
+            </div>
+            <div class="login-field">
+              <label for="loginPassword">密码</label>
+              <div class="login-password-input">
+                <input id="loginPassword" type="password" placeholder="请输入密码" autocomplete="current-password" autocapitalize="off" spellcheck="false" value="">
+                <button id="loginPasswordToggle" class="login-password-toggle" type="button" aria-controls="loginPassword" aria-pressed="false" aria-label="显示密码">
+                  <svg class="icon login-eye" aria-hidden="true"><use href="#i-eye"/></svg>
+                  <svg class="icon login-eye-off" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 3l18 18M10.6 10.7a2 2 0 0 0 2.7 2.7M9.3 5.5A11 11 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-2.5 3.1M6.1 6.9C3.6 8.5 2 12 2 12s4 7 10 7a10 10 0 0 0 4.9-1.3"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div id="loginError" class="login-error" role="status"></div>
+            <button id="loginSubmit" class="login-submit" type="submit">使用账号密码登录</button>
+          </form>
+          <div class="login-alternative">
+            <p class="login-divider">其他登录方式</p>
+            <div class="login-feishu-method" data-feishu-login hidden>
+              <a id="feishuLoginLink" class="login-feishu-button" href="/integrations/feishu/login">
+                <span class="login-provider-icon"><img src="/static/feishu-login-icon.png" width="26" height="26" alt=""></span>
+                <span>飞书登录</span>
+              </a>
+              <p class="login-method-note">已获授权的飞书成员首次登录可开通账号</p>
+            </div>
+            <div class="login-feishu-method" data-feishu-unconfigured>
+              <span class="login-feishu-unavailable">
+                <span class="login-provider-icon"><img src="/static/feishu-login-icon.png" width="26" height="26" alt=""></span>
+                <span>飞书登录暂未启用</span>
+              </span>
+              <p class="login-method-note">当前环境尚未配置企业飞书</p>
+              <a class="login-demo-link" href="/showcase#feishu-login">查看飞书演示</a>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -1276,10 +1314,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261124-feishu-workspace"></script>
+<script src="/static/app.js?v=20261124-feishu-login"></script>
 <script src="/static/portal.js?v=20261124-feishu-workspace"></script>
 <script src="/static/operations.js?v=20261124-feishu-workspace"></script>
-<script src="/static/workspace.js?v=20261124-feishu-workspace"></script>
+<script src="/static/workspace.js?v=20261124-upload-entry"></script>
 <script src="/static/robot-drag.js?v=20261108"></script>
 </body>
 </html>

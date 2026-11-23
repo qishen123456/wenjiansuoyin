@@ -1069,6 +1069,7 @@ def home(request: Request) -> str:
     page = _read_static_html("index.html")
     if feishu_integration.configured():
         page = page.replace('data-feishu-login hidden', 'data-feishu-login', 1)
+        page = page.replace('data-feishu-unconfigured>', 'data-feishu-unconfigured hidden>', 1)
         tab = request.query_params.get('tab')
         if tab in {'updates', 'report-audit'}:
             report_date = feishu_integration.clean_report_date(request.query_params.get('date', ''))

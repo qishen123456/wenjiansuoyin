@@ -90,10 +90,6 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 .toast-container{max-width:calc(100vw - 32px)}
 .portal-demo-banner{border-color:#e8e9e4;background:#f6f7f59c;color:#4f9678;border-radius:8px;font-size:11px;padding:8px 12px}
 .portal-demo-banner small{font-size:11px;color:#a4aa9e}
-#loginOverlay .modal-card{box-shadow:0 26px 100px #23443625;border-radius:20px;padding:34px 30px!important}
-#loginOverlay .modal-input{height:42px!important;font-size:13px!important;border-radius:9px!important;background:#fbfbfa}
-#loginOverlay .btn-action-primary{height:42px!important;border-radius:9px!important;margin-top:2px}
-#loginOverlay #loginError{line-height:1.7}
 @media(max-width:720px){.home-panel{padding:18px}.asset-overview{border-radius:15px}.asset-trend svg{height:143px}.trend-readout{flex-wrap:wrap;gap:5px}.trend-footnote{font-size:11px}.modal-card{max-width:calc(100vw - 28px);border-radius:14px}.modal-body{padding:18px}.modal-header,.modal-footer{padding:15px 18px}.overview-secondary{font-size:25px}#catalogView .catalog-table tr:hover td{background:transparent}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}button,a,input,select,textarea,.trend-point{transition:none!important}}
 .trend-month-picker{display:none;border:1px solid #9fbca626;background:#1f3c30;color:#c0d3c4;border-radius:5px;padding:4px 7px;font-size:11px;outline:none}
