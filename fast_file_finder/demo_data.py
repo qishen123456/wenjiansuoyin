@@ -83,12 +83,16 @@ def report_content(day, domain, report, seed):
         writer.writerow([*row,'模拟演示数据'])
     return output.getvalue().encode('utf-8-sig')
 
+def business_now() -> datetime:
+    return datetime.now(ZONE)
+
+
 def reports_for(root: Path, today: date, excluded_terms=()):
     domains=sorted(path for path in root.iterdir() if path.is_dir() and not path.is_symlink()
                    and len(path.name)>3 and path.name[:2].isdigit() and path.name[2]=='-'
                    and not any(term in path.name for term in excluded_terms))
     # Cap planned times to the current hour, never manufacturing a future update.
-    wall_time=datetime.now(ZONE).replace(minute=0,second=0,microsecond=0)
+    wall_time=business_now().replace(minute=0,second=0,microsecond=0)
     current=datetime.combine(today,wall_time.time(),tzinfo=ZONE).timestamp()
     for domain in domains:
         code=domain.name[:2];low,high,names=PROFILES.get(code,(1,4,('业务明细日报','经营费用明细')))

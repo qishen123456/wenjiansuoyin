@@ -872,10 +872,10 @@ def _seed_demo_monitors(conn, root: Path) -> None:
 
 
 def _ensure_demo_data(today: date | None = None) -> dict[str, Any]:
-    """Refresh actual demo reports before the first API read each local day."""
+    """Refresh demo reports on the first API read of each Shanghai business day."""
     if not DEMO_MODE:
         return {}
-    today = today or date.today()
+    today = today or demo_data.business_now().date()
     key = f'{root_scope_key()}|{today.isoformat()}|{demo_data.VERSION}'
     if _demo_state.get('key') == key:
         return _demo_state

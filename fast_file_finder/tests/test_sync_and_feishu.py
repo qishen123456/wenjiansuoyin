@@ -1,3 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+
 from test_product_foundation import foundation, login
 import app as application
 import feishu_integration as feishu
@@ -81,12 +84,24 @@ def test_feishu_sync_bind_login_and_state_replay(foundation,monkeypatch):
 
 def test_notice_delivery_uses_binding_and_deduplicates(foundation,monkeypatch):
     client,root,add=foundation
-    fid=add()
-    monkeypatch.setenv('FEISHU_NOTIFY_ENABLED','true')
-    monkeypatch.setattr(feishu,'configured',lambda:True)
-    monkeypatch.setattr(feishu,'tenant_token',lambda:'test')
-    sent=[]
-    monkeypatch.setattr(feishu,'call',lambda method,path,**kwargs:sent.append(kwargs['json']['receive_id']))
+    fid = add()
+    deliver = feishu.deliver_notices
+    # Drive both delivery attempts explicitly, independently of the scheduler tick.
+    monkeypatch.setattr(feishu, 'deliver_notices', lambda app: None)
+    monkeypatch.setenv('FEISHU_NOTIFY_ENABLED', 'true')
+    monkeypatch.setattr(feishu, 'configured', lambda: True)
+    monkeypatch.setattr(feishu, 'tenant_token', lambda: 'test')
+    first_send = Event()
+    finish_send = Event()
+    sent = []
+
+    def send(method, path, **kwargs):
+        sent.append(kwargs['json']['receive_id'])
+        if len(sent) == 1:
+            first_send.set()
+            assert finish_send.wait(5)
+
+    monkeypatch.setattr(feishu, 'call', send)
     with application.db_session() as conn:
         conn.execute("INSERT INTO feishu_members VALUES ('ou_test','测试负责人','测试部门',1)")
         conn.execute("INSERT INTO feishu_member_profiles VALUES ('ou_test','0001','','',1,'matched')")
@@ -94,9 +109,16 @@ def test_notice_delivery_uses_binding_and_deduplicates(foundation,monkeypatch):
         conn.execute("INSERT OR REPLACE INTO app_meta VALUES('feishu_notify_since','0')")
     login(client,admin=False)
     client.post('/api/downloads/requests',json={'file_id':fid,'reason':'测试'})
-    feishu.deliver_notices(application)
-    feishu.deliver_notices(application)
-    assert sent==['ou_test']
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first_attempt = pool.submit(deliver, application)
+        try:
+            assert first_send.wait(5)
+            deliver(application)
+        finally:
+            finish_send.set()
+        first_attempt.result(timeout=5)
+    deliver(application)
+    assert sent == ['ou_test']
 
 
 def test_sync_uses_explicit_contacts_when_root_not_authorized(foundation, monkeypatch):

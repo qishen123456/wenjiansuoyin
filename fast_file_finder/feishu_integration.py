@@ -20,6 +20,7 @@ import feishu_identity
 BASE = 'https://open.feishu.cn/open-apis'
 logger = logging.getLogger(__name__)
 _sync_lock = threading.Lock()
+_notice_lock = threading.Lock()
 _LOGIN_SYNC_INTERVAL = 60
 # Allow several first logins to share a recent directory check without storing phones for unused accounts.
 _login_candidates = None
@@ -336,6 +337,15 @@ def _unmatched_login(conn, identity):
 def deliver_notices(app):
     if os.getenv('FEISHU_NOTIFY_ENABLED','false').lower() != 'true' or not configured():
         return
+    if not _notice_lock.acquire(blocking=False):
+        return
+    try:
+        _deliver_pending_notices(app)
+    finally:
+        _notice_lock.release()
+
+
+def _deliver_pending_notices(app):
     with app.db_session() as conn:
         users = conn.execute("""SELECT u.* FROM system_users u JOIN feishu_members f ON u.feishu_id=f.open_id
             LEFT JOIN feishu_member_profiles p ON p.open_id=f.open_id

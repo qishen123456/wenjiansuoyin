@@ -1,7 +1,7 @@
 """Demo reports remain real, scoped and current without mutating user-owned files."""
 import importlib.util
 import json
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, timezone
 from pathlib import Path
 import pytest
 
@@ -24,38 +24,39 @@ def demo(foundation,monkeypatch):
 
 
 def count_for_day(day):
-    start=datetime.combine(day,datetime.min.time()).timestamp()
-    end=datetime.combine(day+timedelta(days=1),datetime.min.time()).timestamp()
+    start=datetime.combine(day,datetime.min.time(),tzinfo=demo_data.ZONE).timestamp()
+    end=datetime.combine(day+timedelta(days=1),datetime.min.time(),tzinfo=demo_data.ZONE).timestamp()
     with application.db_session() as conn:
         return conn.execute('SELECT count(*) FROM files WHERE root_key=? AND mtime>=? AND mtime<?',(application.root_scope_key(),start,end)).fetchone()[0]
 
 
-def test_daily_reports_are_real_nonempty_and_idempotent(demo):
+def test_daily_reports_are_real_nonempty_and_idempotent(demo, monkeypatch):
     client,root,add=demo
-    today=date.today()
-    application._ensure_demo_data(today)
+    instant = datetime(2026, 11, 23, 16, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(demo_data, 'business_now', lambda: instant.astimezone(demo_data.ZONE))
+    today = date(2026, 11, 24)
+    application._ensure_demo_data()
     reports=list(root.rglob('*.csv'))
     assert reports and count_for_day(today)>0
     assert all(path.stat().st_size>0 for path in reports)
     assert '模拟演示数据' in reports[0].read_text(encoding='utf-8-sig')
     timestamps={str(path):path.stat().st_mtime_ns for path in reports}
     application._demo_state.clear()  # Simulate restarting the service on the same day.
-    application._ensure_demo_data(today)
+    application._ensure_demo_data()
     assert timestamps=={str(path):path.stat().st_mtime_ns for path in reports}
     assert application._demo_state['created']==0
 
 
 def test_opening_api_after_midnight_refreshes_demo_and_prunes_old_reports(demo,monkeypatch):
     client,root,add=demo
-    today=date.today()
-    application._ensure_demo_data(today)
+    instant = datetime(2026, 11, 23, 15, 59, tzinfo=timezone.utc)
+    monkeypatch.setattr(demo_data, 'business_now', lambda: instant.astimezone(demo_data.ZONE))
+    today = date(2026, 11, 23)
+    application._ensure_demo_data()
     oldest=[p for p in root.rglob('*.csv') if (today-timedelta(days=6)).isoformat() in p.name]
     assert oldest
     tomorrow=today+timedelta(days=1)
-    class Tomorrow(date):
-        @classmethod
-        def today(cls): return tomorrow
-    monkeypatch.setattr(application,'date',Tomorrow)
+    instant += timedelta(minutes=2)  # Beijing crossed midnight; UTC is still November 23.
     assert client.get('/api/catalog/overview').status_code==200
     assert count_for_day(tomorrow)>0
     assert all(not p.exists() for p in oldest)
