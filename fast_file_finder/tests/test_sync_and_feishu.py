@@ -50,11 +50,15 @@ def test_feishu_sync_bind_login_and_state_replay(foundation,monkeypatch):
     assert client.post('/api/system/feishu/bind',json={'user_id':4,'open_id':'ou_fixture'}).status_code==200
     assert client.post('/api/system/feishu/bind',json={'user_id':5,'open_id':'ou_fixture'}).status_code==409
     client.post('/api/auth/logout')
-    response=client.get('/integrations/feishu/login',follow_redirects=False)
+    day = '2026-11-23'
+    page = client.get('/?tab=updates&date=' + day).text
+    assert 'href="/integrations/feishu/login?report_date=' + day + '"' in page
+    response=client.get('/integrations/feishu/login',params={'report_date':day},follow_redirects=False)
     state=client.cookies['ff_feishu_state']
     params={'state':state,'code':'synthetic'}
     assert response.status_code==307
-    assert client.get('/integrations/feishu/callback',params=params,follow_redirects=False).status_code==307
+    callback = client.get('/integrations/feishu/callback',params=params,follow_redirects=False)
+    assert callback.status_code == 307 and callback.headers['location'] == '/?tab=updates&date=' + day
     assert client.get('/api/auth/me').json()['user']['id']==4
     assert client.get('/integrations/feishu/callback',params=params).status_code==403
     assert client.post('/api/system/feishu/sync').status_code==403

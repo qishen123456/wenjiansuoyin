@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import time
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 import uuid
 
 from fastapi import HTTPException
@@ -32,10 +32,20 @@ class Settings:
     active: bool
     report_time: str
     chat: str
+    open_id: str
     app_token: str
     table: str
     table_url: str
+    system_url: str
     error: str
+
+    @property
+    def recipient(self):
+        return self.open_id or self.chat
+
+    @property
+    def recipient_type(self):
+        return 'open_id' if self.open_id else 'chat_id'
 
     @property
     def table_key(self):
@@ -46,15 +56,20 @@ class Settings:
 
 def settings():
     chat = os.getenv('FEISHU_DAILY_CHAT_ID', '').strip()
+    open_id = os.getenv('FEISHU_DAILY_OPEN_ID', '').strip()
     token = os.getenv('FEISHU_DAILY_BTABLE_APP_TOKEN', '').strip()
     table = os.getenv('FEISHU_DAILY_BTABLE_TABLE_ID', '').strip()
     url = os.getenv('FEISHU_DAILY_BTABLE_URL', '').strip()
     report_time = os.getenv('FEISHU_DAILY_TIME', '18:00').strip()
     error = ''
-    if bool(token) != bool(table):
+    if chat and open_id:
+        error = '请在接收群和个人接收账号中选择一个。'
+    elif open_id and not re.fullmatch(r'ou_[A-Za-z0-9_-]+', open_id):
+        error = '个人接收账号应填写该应用的飞书 open_id。'
+    elif bool(token) != bool(table):
         error = '请同时配置多维表格的应用标识和数据表标识。'
-    elif not (chat or table):
-        error = '请配置日报接收群或新增文件数据表。'
+    elif not (chat or open_id or table):
+        error = '请配置日报接收人、接收群或新增文件数据表。'
     elif not feishu.app_credentials_configured():
         error = '请先配置飞书企业应用的 ID 和密钥。'
     elif not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', report_time):
@@ -69,7 +84,18 @@ def settings():
             safe = False
         if not safe:
             error = '多维表格链接应使用飞书的 HTTPS 地址。'
-    return Settings(enabled(), report_time, chat, token, table, url, error)
+    system_url = os.getenv('FEISHU_DAILY_SYSTEM_URL', '').strip()
+    if not system_url:
+        system_url = os.getenv('FEISHU_REDIRECT_URI', '').strip().removesuffix('/integrations/feishu/callback')
+    if system_url:
+        try:
+            link = urlsplit(system_url)
+            if (link.scheme not in ('http', 'https') or not link.hostname or link.username or link.password
+                    or link.query or link.fragment):
+                raise ValueError
+        except ValueError:
+            error = '更新明细需配置系统的 HTTP 或 HTTPS 入口地址。'
+    return Settings(enabled(), report_time, chat, open_id, token, table, url, system_url, error)
 
 
 def initialize(conn):
@@ -166,6 +192,9 @@ def _summary(app, conn, root_key, today, config):
     # the Shanghai day boundaries to that timezone before asking SQLite.
     start = datetime.combine(today, wall_time.min, ZONE).timestamp()
     end = datetime.combine(today + timedelta(days=1), wall_time.min, ZONE).timestamp()
+    updated = conn.execute(
+        'SELECT count(*) FROM files WHERE root_key=? AND mtime>=? AND mtime<?', (root_key, start, end)
+    ).fetchone()[0]
     start_local = datetime.fromtimestamp(start).isoformat(timespec='seconds')
     end_local = datetime.fromtimestamp(end).isoformat(timespec='seconds')
     latest = conn.execute("""SELECT phase, finished_at, counts_json FROM index_scan_runs
@@ -182,9 +211,11 @@ def _summary(app, conn, root_key, today, config):
     else:
         counts = None
         progress = '今日暂无扫描记录'
-    lines = [f'文件资产同步日报 · {today:%Y-%m-%d}（北京时间）', f'索引扫描：{progress}',
-             f'今日新入索引：{files} 份文件（其中表格 {sheets} 份）']
+    lines = [f'文件同步日预警 · {today:%Y-%m-%d}（北京时间）', f'今日更新：{updated} 份文件',
+             f'今日新入索引：{files} 份文件（其中表格 {sheets} 份）', f'索引扫描：{progress}']
+    attention = bool(latest and latest['phase'] in ('partial', 'error'))
     if counts is not None:
+        attention |= bool(counts.get('errors') or counts.get('directory_errors'))
         if latest and not running['running']:
             lines.append(f'本次扫描检查 {counts.get("seen", 0)} 个文件，更新 {counts.get("updated", 0)} 份已有文件')
         lines.append(f'本次扫描访问异常：{counts.get("errors", 0)} 个文件 / {counts.get("directory_errors", 0)} 个目录')
@@ -194,8 +225,10 @@ def _summary(app, conn, root_key, today, config):
     failed = conn.execute('SELECT value FROM app_meta WHERE key=?', (f'feishu_daily_check_failed:{root_key}',)).fetchone()
     failure_time = float(failed[0]) if failed else 0
     if start <= failure_time < end and (not check or failure_time > check['checked_at']):
+        attention = True
         lines.append('归档检测：最近一次执行失败，请到系统查看')
     elif check:
+        attention |= bool(check['overdue_rules'] or check['rule_errors'])
         lines.append(f'归档检测：已检查 {check["checked_rules"]} 条规则，'
                      f'逾期未交 {check["overdue_rules"]} 条，无法核验 {check["rule_errors"]} 条')
     else:
@@ -208,34 +241,73 @@ def _summary(app, conn, root_key, today, config):
         lines.append(f'新增清单：{outstanding} 条待同步，稍后自动补写' if outstanding else '新增清单：可在多维表按日期查看')
         if config.table_url:
             lines.append(config.table_url)
-    return '\n'.join(lines)
+    return '\n'.join(lines), attention
 
 
-def _send_report(app, config, root_key, now, get_token):
-    if now.strftime('%H:%M') < config.report_time:
+def _report_card(body, attention, day, config):
+    title, *lines = body.splitlines()
+    content = []
+    for line in lines:
+        if line == config.table_url:
+            continue
+        label, separator, value = line.partition('：')
+        content.append(f'**{label}**{separator}{value}' if separator else line)
+    elements = [{'tag': 'markdown', 'content': '\n'.join(content)}]
+    destinations = []
+    if config.system_url:
+        url = config.system_url.rstrip('/') + '/?' + urlencode({'tab': 'updates', 'date': day})
+        host = urlsplit(config.system_url).hostname
+        caption = '查看当日更新明细（本机）' if host in {'127.0.0.1', 'localhost', '::1'} else '查看当日更新明细'
+        destinations.append((caption, url, 'primary'))
+    if config.table_url:
+        destinations.append(('查看飞书多维表 · 新增清单', config.table_url, 'default'))
+    for label, url, style in destinations:
+        elements.append({'tag': 'button', 'text': {'tag': 'plain_text', 'content': label}, 'type': style,
+                         'behaviors': [{'type': 'open_url', 'default_url': url}]})
+    return {'schema': '2.0', 'header': {'title': {'tag': 'plain_text', 'content': '文件同步日预警'},
+                                      'subtitle': {'tag': 'plain_text', 'content': title.split(' · ', 1)[-1]},
+                                      'template': 'orange' if attention else 'blue'},
+            'body': {'elements': elements}}
+
+
+def _send_report(app, config, root_key, now, get_token, *, immediate=False):
+    if not immediate and now.strftime('%H:%M') < config.report_time:
         return
     day = now.date().isoformat()
     with app.db_session() as conn:
         conn.execute('BEGIN IMMEDIATE')
         report = conn.execute('SELECT * FROM feishu_daily_reports WHERE root_key=? AND day=?', (root_key, day)).fetchone()
         if not report:
-            body = _summary(app, conn, root_key, now.date(), config)
+            summary, attention = _summary(app, conn, root_key, now.date(), config)
+            body = json.dumps(_report_card(summary, attention, day, config), ensure_ascii=False)
             conn.execute('INSERT INTO feishu_daily_reports VALUES (?,?,?,?,?,?,NULL)',
-                         (root_key, day, config.chat, str(uuid.uuid4()), body, now.timestamp()))
+                         (root_key, day, config.recipient, str(uuid.uuid4()), body, now.timestamp()))
             report = conn.execute('SELECT * FROM feishu_daily_reports WHERE root_key=? AND day=?', (root_key, day)).fetchone()
     if report['sent_at']:
-        return
-    if report['chat'] != config.chat:
-        raise HTTPException(409, '今日已有待确认的日报，接收群配置已变化。')
+        return 'already_sent'
+    if report['chat'] != config.recipient:
+        raise HTTPException(409, '今日已有待确认的日报，接收对象配置已变化。')
     # Feishu guarantees UUID deduplication for one hour.
     if now.timestamp() - report['prepared_at'] >= 55 * 60:
-        raise HTTPException(502, '今日推送未确认，请先检查飞书接收群。')
-    feishu.call('POST', '/im/v1/messages', token=get_token(), params={'receive_id_type': 'chat_id'},
-                json={'receive_id': config.chat, 'msg_type': 'text', 'uuid': report['send_key'],
-                      'content': json.dumps({'text': report['body']}, ensure_ascii=False)})
+        raise HTTPException(502, '今日推送未确认，请先检查飞书会话。')
+    body = report['body']
+    interactive = body.startswith('{')  # Existing rows store a plain text message.
+    feishu.call('POST', '/im/v1/messages', token=get_token(), params={'receive_id_type': config.recipient_type},
+                json={'receive_id': config.recipient, 'msg_type': 'interactive' if interactive else 'text',
+                      'uuid': report['send_key'],
+                      'content': body if interactive else json.dumps({'text': body}, ensure_ascii=False)})
     with app.db_session() as conn:
         conn.execute('UPDATE feishu_daily_reports SET sent_at=? WHERE root_key=? AND day=?',
                      (time.time(), root_key, day))
+    return 'sent'
+
+
+def send_now(app):
+    config = settings()
+    root_key = app.root_scope_key()
+    if not config.active or config.error or not config.recipient or not root_key:
+        raise HTTPException(422, config.error or '请先启用日报并配置接收对象和文件根目录。')
+    return _send_report(app, config, root_key, datetime.now(ZONE), feishu.tenant_token, immediate=True)
 
 
 def publish(app, now=None):
@@ -254,7 +326,7 @@ def publish(app, now=None):
     jobs = []
     if config.table_key:
         jobs.append(('table', lambda: _publish_files(app, config, root_key, get_token)))
-    if config.chat:
+    if config.recipient:
         jobs.append(('report', lambda: _send_report(app, config, root_key,
                                                     (now or datetime.now(ZONE)).astimezone(ZONE), get_token)))
     for job, action in jobs:
@@ -290,9 +362,10 @@ def status(app):
         pending = conn.execute("""SELECT count(*) FROM feishu_daily_files
             WHERE root_key=? AND table_key=? AND published_at IS NULL""",
             (root_key, config.table_key)).fetchone()[0] if config.table_key else 0
-        preview = _summary(app, conn, root_key, day, config) if config.active and not config.error and root_key else ''
+        preview = _summary(app, conn, root_key, day, config)[0] if config.active and not config.error and root_key else ''
     return {'enabled': config.active, 'configuration_error': config.error if config.active else '',
             'schedule': config.report_time, 'chat_configured': bool(config.chat),
+            'recipient_type': config.recipient_type if config.recipient else '',
             'table_configured': bool(config.table_key), 'table_pending': pending,
             'report_sent_at': (report['sent_at'] or 0) if report else 0,
             'table_error': errors[0][0] if errors[0] else '', 'report_error': errors[1][0] if errors[1] else '',

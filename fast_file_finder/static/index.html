@@ -3260,9 +3260,13 @@ async function search(page = 1) {
     if (dateFrom) p.set('date_from', dateFrom);
     if (dateTo) p.set('date_to', dateTo);
     if (dateField) p.set('date_field', dateField);
+    if (dailyUpdateDate()) p.set('date_zone', 'asia_shanghai');
     const data = await api('/api/search?' + p);
     recordSearchHistory(q);
     renderResults(data);
+    if (!q && dateFrom === dailyUpdateDate() && dateTo === dateFrom && dateFrom && dateField === 'mtime') {
+      $('resultTitle').textContent = dateFrom + ' 更新明细';
+    }
   } catch (e) {
     const msg = e.message || '搜索服务异常';
     toast(msg);
@@ -3468,6 +3472,29 @@ function applyUserUI() {
   document.body.classList.toggle('remote-mode', !isLocalHost());
 }
 
+function dailyUpdateDate() {
+  const params = new URLSearchParams(window.location.search);
+  const date = params.get('date') || '';
+  return params.get('tab') === 'updates' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
+}
+
+function openDailyUpdateDetails() {
+  const date = dailyUpdateDate();
+  if (!date || !currentUser) return;
+  switchNavMode('search');
+  $('q').value = '';
+  clearPortalSearchFilters();
+  dateField = 'mtime';
+  sortMode = 'time_desc';
+  $('resultsSortSelect').value = sortMode;
+  $('dateFromInput').value = date;
+  $('dateToInput').value = date;
+  if (!$('dateFromInput').value) return;
+  refreshDateFieldToggle();
+  onDateFilterChange();
+  search(1);
+}
+
 async function doLogin() {
   const phone = $('loginPhone').value.trim();
   const password = $('loginPassword').value.trim();
@@ -3482,6 +3509,7 @@ async function doLogin() {
     loadArchiveOverview();
 
     loadStatus(); loadRecent();
+    openDailyUpdateDetails();
   } catch (e) {
     $('loginError').textContent = e.message || '登录失败';
   }
@@ -5413,7 +5441,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   const tab = urlParams.get('tab');
   const testScene = urlParams.get('test_scene');
 
-  if (tab === 'sync') {
+  if (tab === 'updates') {
+    openDailyUpdateDetails();
+  } else if (tab === 'sync') {
     switchNavMode('sync');
   } else if (tab === 'approval') {
     switchNavMode('approval');
@@ -5916,7 +5946,7 @@ document.addEventListener('keydown', (e) => {
 
 </script>
 <script src="/static/portal.js?v=20261123-feishu-identity"></script>
-<script src="/static/operations.js?v=20261123-feishu-identity"></script>
+<script src="/static/operations.js?v=20261123-feishu-card"></script>
 <script src="/static/robot-drag.js?v=20261108"></script>
 </body>
 </html>

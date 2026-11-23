@@ -147,20 +147,20 @@ async function loadBackupPanel(){const panel=$('systemBackupPanel');if(!panel ||
 
 function feishuDailyDetails(daily) {
   if (!daily) return '';
-  const report = daily.chat_configured
+  const report = daily.recipient_type
     ? (daily.report_sent_at ? `已发送 · ${portalMonitorTime(daily.report_sent_at)}` : '今日尚未发送')
-    : '未配置接收群';
+    : '未配置接收对象';
   const table = daily.table_configured
     ? (daily.table_pending ? `${daily.table_pending} 条待写入` : '无待写入记录')
     : '未配置数据表';
   const errors = [daily.configuration_error, daily.report_error, daily.table_error].filter(Boolean);
   return `<details class="feishu-daily">
-    <summary>同步日报 · ${daily.enabled ? '已启用' : '未启用'}</summary>
+    <summary>同步日预警 · ${daily.enabled ? '已启用' : '未启用'}</summary>
     ${daily.enabled ? `<dl><div><dt>发送时间</dt><dd>${esc(daily.schedule)}（北京时间）</dd></div>
       <div><dt>日报状态</dt><dd>${esc(report)}</dd></div><div><dt>多维表清单</dt><dd>${esc(table)}</dd></div></dl>
       ${errors.map(error => `<p class="feishu-daily-error" role="status">${esc(error)}</p>`).join('')}
       ${daily.preview ? `<pre>${esc(daily.preview)}</pre>` : ''}`
-    : '<p>在服务环境中配置接收群和多维表格后即可启用。</p>'}
+    : '<p>在服务环境中配置飞书个人或群接收对象后即可启用。</p>'}
   </details>`;
 }
 

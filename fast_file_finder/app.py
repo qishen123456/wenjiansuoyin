@@ -1060,10 +1060,15 @@ def _read_static_html(filename: str) -> str:
 
 
 @app.get("/", response_class=HTMLResponse)
-def home() -> str:
+def home(request: Request) -> str:
     page = _read_static_html("index.html")
     if feishu_integration.configured():
-        return page.replace('data-feishu-login hidden', 'data-feishu-login', 1)
+        page = page.replace('data-feishu-login hidden', 'data-feishu-login', 1)
+        if request.query_params.get('tab') == 'updates':
+            report_date = feishu_integration.clean_report_date(request.query_params.get('date', ''))
+            if report_date:
+                page = page.replace('href="/integrations/feishu/login"',
+                                    f'href="/integrations/feishu/login?report_date={report_date}"', 1)
     return page
 
 
@@ -1073,8 +1078,8 @@ def workbench() -> str:
 
 
 @app.get("/index.html", response_class=HTMLResponse, include_in_schema=False)
-def home_html_alias() -> str:
-    return home()
+def home_html_alias(request: Request) -> str:
+    return home(request)
 
 
 @app.get("/bi_workbench.html", response_class=HTMLResponse, include_in_schema=False)
@@ -1728,6 +1733,7 @@ def search(
     date_from: str = Query(default=""),
     date_to: str = Query(default=""),
     date_field: Literal["mtime", "ctime"] = Query(default="mtime"),
+    date_zone: Literal["local", "asia_shanghai"] = Query(default="local"),
     directory: str = Query(default="",max_length=4096),
     min_size: int | None = Query(default=None,ge=0),
     max_size: int | None = Query(default=None,ge=0),
@@ -1762,16 +1768,17 @@ def search(
     # 日期范围 → Unix 时间戳（含当天全天）
     mtime_from_ts: float | None = None
     mtime_to_ts: float | None = None
+    zone = demo_data.ZONE if date_zone == "asia_shanghai" else None
     if date_from.strip():
         try:
-            mtime_from_ts = datetime.strptime(date_from.strip(), "%Y-%m-%d").timestamp()
+            mtime_from_ts = datetime.strptime(date_from.strip(), "%Y-%m-%d").replace(tzinfo=zone).timestamp()
         except ValueError:
             mtime_from_ts = None
     if date_to.strip():
         try:
             # 截止日期取当天 23:59:59.999，保证包含当天所有文件
             mtime_to_ts = datetime.strptime(date_to.strip(), "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, microsecond=999999
+                hour=23, minute=59, second=59, microsecond=999999, tzinfo=zone
             ).timestamp()
         except ValueError:
             mtime_to_ts = None
