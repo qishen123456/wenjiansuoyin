@@ -7,11 +7,12 @@ import threading
 import uuid
 from collections import deque
 from datetime import date
+from typing import Literal
 from urllib.parse import urlencode, quote
 import httpx
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import directory_access
 import feishu_identity
 
@@ -314,6 +315,11 @@ class Binding(BaseModel):
     open_id: str
 
 
+class DailyRecipient(BaseModel):
+    type: Literal['open_id', 'chat_id', 'off']
+    id: str = Field(default='', max_length=128)
+
+
 def register(app):
     @app.app.get('/integrations/feishu/status')
     def public_status():
@@ -397,6 +403,11 @@ def register(app):
             snapshot = directory_snapshot(conn, include_stored=True)
         return {**snapshot, 'configured': configured(), 'demo_mode': app.DEMO_MODE,
                 'daily': app.feishu_daily.status(app)}
+
+    @app.app.put('/api/system/feishu/daily/recipient')
+    def update_daily_recipient(body: DailyRecipient, request: Request):
+        actor = app._require_super_admin(request)
+        return app.feishu_daily.set_recipient(app, actor['id'], body.type, body.id)
 
     @app.app.post('/api/system/feishu/sync')
     def sync(request: Request):

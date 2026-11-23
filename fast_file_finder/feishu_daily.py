@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import time
+from threading import Lock
 from types import SimpleNamespace
 from urllib.parse import quote, urlencode, urlsplit
 import uuid
@@ -24,6 +25,8 @@ RULE_ERRORS = {'invalid_path', 'no_files', 'no_content', 'calendar_unavailable'}
 SCAN_PHASE = {'complete': '已完成', 'partial': '部分完成', 'error': '失败'}
 BATCH_SIZE = 100
 MAX_BATCHES_PER_TICK = 5
+_RECIPIENT_PREFIXES = {'open_id': 'ou_', 'chat_id': 'oc_'}
+_recipient_lock = Lock()
 
 
 def enabled():
@@ -44,6 +47,7 @@ class Settings:
     report_table: str
     report_url: str
     error: str
+    recipient_source: str
 
     @property
     def recipient(self):
@@ -60,9 +64,27 @@ class Settings:
         return hashlib.sha256(f'{os.getenv("FEISHU_APP_ID", "")}:{self.app_token}:{self.table}'.encode()).hexdigest()
 
 
-def settings():
+def _application_id():
+    return os.getenv('FEISHU_APP_ID', '').strip()
+
+
+def _stored_recipient(conn, root_key):
+    return conn.execute("""SELECT recipient_type, recipient_id FROM feishu_daily_recipients
+                           WHERE root_key=? AND app_id=?""",
+                        (root_key, _application_id())).fetchone()
+
+
+def _member(conn, open_id):
+    return conn.execute('SELECT name, active FROM feishu_members WHERE open_id=?', (open_id,)).fetchone()
+
+
+def settings(conn=None, root_key=''):
     chat = os.getenv('FEISHU_DAILY_CHAT_ID', '').strip()
     open_id = os.getenv('FEISHU_DAILY_OPEN_ID', '').strip()
+    saved = _stored_recipient(conn, root_key) if conn is not None and root_key else None
+    if saved:
+        chat = saved['recipient_id'] if saved['recipient_type'] == 'chat_id' else ''
+        open_id = saved['recipient_id'] if saved['recipient_type'] == 'open_id' else ''
     token = os.getenv('FEISHU_DAILY_BTABLE_APP_TOKEN', '').strip()
     table = os.getenv('FEISHU_DAILY_BTABLE_TABLE_ID', '').strip()
     url = os.getenv('FEISHU_DAILY_BTABLE_URL', '').strip()
@@ -75,9 +97,11 @@ def settings():
         error = '请在接收群和个人接收账号中选择一个。'
     elif open_id and not re.fullmatch(r'ou_[A-Za-z0-9_-]+', open_id):
         error = '个人接收账号应填写该应用的飞书 open_id。'
+    elif chat and not re.fullmatch(r'oc_[A-Za-z0-9_-]+', chat):
+        error = '请填写指定的飞书群 ID。'
     elif bool(token) != bool(table):
         error = '请同时配置多维表格的应用标识和数据表标识。'
-    elif not (chat or open_id or table or report_table):
+    elif not (saved or chat or open_id or table or report_table):
         error = '请配置日报接收人、接收群或新增文件数据表。'
     elif not feishu.app_credentials_configured():
         error = '请先配置飞书企业应用的 ID 和密钥。'
@@ -109,10 +133,42 @@ def settings():
         except ValueError:
             error = '更新明细需配置系统的 HTTP 或 HTTPS 入口地址。'
     return Settings(enabled(), report_time, chat, open_id, token, table, url, system_url,
-                    report_base, report_table, report_url, error)
+                    report_base, report_table, report_url, error, 'system' if saved else 'environment')
+
+
+def set_recipient(app, user_id, kind, recipient_id):
+    root_key = app.root_scope_key()
+    if not root_key or not feishu.app_credentials_configured():
+        raise HTTPException(422, '请先配置文件目录和飞书应用。')
+    recipient_id = recipient_id.strip()
+    if kind == 'off':
+        if recipient_id:
+            raise HTTPException(422, '暂停推送时无需指定接收对象。')
+    elif not re.fullmatch(_RECIPIENT_PREFIXES[kind] + r'[A-Za-z0-9_-]+', recipient_id):
+        raise HTTPException(422, '请选择飞书成员或填写指定飞书群的 ID。')
+    with _recipient_lock, app.db_session() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if kind == 'open_id':
+            member = _member(conn, recipient_id)
+            legacy_open_id = os.getenv('FEISHU_DAILY_OPEN_ID', '').strip()
+            if not ((member and member['active']) or (member is None and recipient_id == legacy_open_id)):
+                raise HTTPException(422, '请选择已同步的在职飞书成员。')
+        conn.execute("""INSERT INTO feishu_daily_recipients
+            (root_key, app_id, recipient_type, recipient_id, updated_at, updated_by) VALUES (?,?,?,?,?,?)
+            ON CONFLICT(root_key, app_id) DO UPDATE SET
+                recipient_type=excluded.recipient_type, recipient_id=excluded.recipient_id,
+                updated_at=excluded.updated_at, updated_by=excluded.updated_by""",
+            (root_key, _application_id(), kind, recipient_id, time.time(), user_id))
+    return status(app)
 
 
 def initialize(conn):
+    conn.execute("""CREATE TABLE IF NOT EXISTS feishu_daily_recipients (
+        root_key TEXT NOT NULL, app_id TEXT NOT NULL,
+        recipient_type TEXT NOT NULL CHECK (recipient_type IN ('open_id','chat_id','off')),
+        recipient_id TEXT NOT NULL, updated_at REAL NOT NULL, updated_by INTEGER NOT NULL,
+        PRIMARY KEY(root_key, app_id)
+    )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS feishu_daily_files (
         id INTEGER PRIMARY KEY, root_key TEXT NOT NULL, day TEXT NOT NULL, item_key TEXT NOT NULL,
         name TEXT NOT NULL, ext TEXT NOT NULL, directory TEXT NOT NULL, added_at REAL NOT NULL,
@@ -300,37 +356,47 @@ def _report_card(body, attention, day, config):
             'body': {'elements': elements}}
 
 
-def _send_report(app, config, root_key, now, get_token, *, immediate=False):
-    if not immediate and now.strftime('%H:%M') < config.report_time:
-        return
-    day = now.date().isoformat()
-    with app.db_session() as conn:
-        conn.execute('BEGIN IMMEDIATE')
-        report = conn.execute('SELECT * FROM feishu_daily_reports WHERE root_key=? AND day=?', (root_key, day)).fetchone()
-        if not report:
-            report_daily.freeze(conn, root_key, day)
-            summary, attention = _summary(app, conn, root_key, now.date(), config)
-            body = json.dumps(_report_card(summary, attention, day, config), ensure_ascii=False)
-            conn.execute('INSERT INTO feishu_daily_reports VALUES (?,?,?,?,?,?,NULL)',
-                         (root_key, day, config.recipient, str(uuid.uuid4()), body, now.timestamp()))
+def _send_report(app, root_key, now, get_token, *, immediate=False):
+    with _recipient_lock:
+        day = now.date().isoformat()
+        with app.db_session() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            config = settings(conn, root_key)
+            if not config.active or config.error or not config.recipient:
+                return 'disabled'
+            if not immediate and now.strftime('%H:%M') < config.report_time:
+                return
             report = conn.execute('SELECT * FROM feishu_daily_reports WHERE root_key=? AND day=?', (root_key, day)).fetchone()
-    if report['sent_at']:
-        return 'already_sent'
-    if report['chat'] != config.recipient:
-        raise HTTPException(409, '今日已有待确认的日报，接收对象配置已变化。')
-    # Feishu guarantees UUID deduplication for one hour.
-    if now.timestamp() - report['prepared_at'] >= 55 * 60:
-        raise HTTPException(502, '今日推送未确认，请先检查飞书会话。')
-    body = report['body']
-    interactive = body.startswith('{')  # Existing rows store a plain text message.
-    feishu.call('POST', '/im/v1/messages', token=get_token(), params={'receive_id_type': config.recipient_type},
-                json={'receive_id': config.recipient, 'msg_type': 'interactive' if interactive else 'text',
-                      'uuid': report['send_key'],
-                      'content': body if interactive else json.dumps({'text': body}, ensure_ascii=False)})
-    with app.db_session() as conn:
-        conn.execute('UPDATE feishu_daily_reports SET sent_at=? WHERE root_key=? AND day=?',
-                     (time.time(), root_key, day))
-    return 'sent'
+            if report and report['sent_at']:
+                return 'already_sent'
+            if config.open_id and config.recipient_source == 'system':
+                member = _member(conn, config.open_id)
+                if member is not None and not member['active']:
+                    raise HTTPException(422, '日报接收人已停用，请重新选择飞书成员。')
+                if member is None and config.open_id != os.getenv('FEISHU_DAILY_OPEN_ID', '').strip():
+                    raise HTTPException(422, '日报接收人已离开通讯录范围，请重新选择飞书成员。')
+            if not report:
+                report_daily.freeze(conn, root_key, day)
+                summary, attention = _summary(app, conn, root_key, now.date(), config)
+                body = json.dumps(_report_card(summary, attention, day, config), ensure_ascii=False)
+                conn.execute('INSERT INTO feishu_daily_reports VALUES (?,?,?,?,?,?,NULL)',
+                             (root_key, day, config.recipient, str(uuid.uuid4()), body, now.timestamp()))
+                report = conn.execute('SELECT * FROM feishu_daily_reports WHERE root_key=? AND day=?', (root_key, day)).fetchone()
+        if report['chat'] != config.recipient:
+            raise HTTPException(409, '今日已有待确认的日报，接收对象配置已变化。')
+        # Feishu guarantees UUID deduplication for one hour.
+        if now.timestamp() - report['prepared_at'] >= 55 * 60:
+            raise HTTPException(502, '今日推送未确认，请先检查飞书会话。')
+        body = report['body']
+        interactive = body.startswith('{')  # Existing rows store a plain text message.
+        feishu.call('POST', '/im/v1/messages', token=get_token(), params={'receive_id_type': config.recipient_type},
+                    json={'receive_id': config.recipient, 'msg_type': 'interactive' if interactive else 'text',
+                          'uuid': report['send_key'],
+                          'content': body if interactive else json.dumps({'text': body}, ensure_ascii=False)})
+        with app.db_session() as conn:
+            conn.execute('UPDATE feishu_daily_reports SET sent_at=? WHERE root_key=? AND day=?',
+                         (time.time(), root_key, day))
+        return 'sent'
 
 
 def _publish_report_table(app, config, root_key, now, get_token):
@@ -346,19 +412,21 @@ def _publish_report_table(app, config, root_key, now, get_token):
 
 
 def send_now(app):
-    config = settings()
     root_key = app.root_scope_key()
+    with app.db_session() as conn:
+        config = settings(conn, root_key)
     if not config.active or config.error or not config.recipient or not root_key:
         raise HTTPException(422, config.error or '请先启用日报并配置接收对象和文件根目录。')
     now = datetime.now(ZONE)
     if config.report_url:
         _publish_report_table(app, config, root_key, now, feishu.tenant_token)
-    return _send_report(app, config, root_key, now, feishu.tenant_token, immediate=True)
+    return _send_report(app, root_key, now, feishu.tenant_token, immediate=True)
 
 
 def publish(app, now=None):
-    config = settings()
     root_key = app.root_scope_key()
+    with app.db_session() as conn:
+        config = settings(conn, root_key)
     if not config.active or config.error or not root_key:
         return
     token = None
@@ -376,7 +444,7 @@ def publish(app, now=None):
     if config.report_url and now.strftime('%H:%M') >= config.report_time:
         jobs.append(('report_table', lambda: _publish_report_table(app, config, root_key, now, get_token)))
     if config.recipient:
-        jobs.append(('report', lambda: _send_report(app, config, root_key, now, get_token)))
+        jobs.append(('report', lambda: _send_report(app, root_key, now, get_token)))
     for job, action in jobs:
         key = f'feishu_daily_error:{job}:{root_key}'
         try:
@@ -399,10 +467,19 @@ def loop(app, stop):
 
 
 def status(app):
-    config = settings()
     root_key = app.root_scope_key()
     day = datetime.now(ZONE).date()
     with app.db_session() as conn:
+        config = settings(conn, root_key)
+        if config.open_id:
+            member = _member(conn, config.open_id)
+            label = member['name'] if member else '已配置的个人账号'
+        elif config.chat:
+            label = '指定飞书群'
+        else:
+            label = '暂停推送' if config.recipient_source == 'system' else '未设置接收人'
+        recipient = {'type': config.recipient_type if config.recipient else 'off',
+                     'id': config.recipient, 'source': config.recipient_source, 'label': label}
         errors = [conn.execute('SELECT value FROM app_meta WHERE key=?', (f'feishu_daily_error:{job}:{root_key}',)).fetchone()
                   for job in ('table', 'report', 'report_table')]
         report = conn.execute('SELECT sent_at FROM feishu_daily_reports WHERE root_key=? AND day=?',
@@ -412,7 +489,7 @@ def status(app):
             (root_key, config.table_key)).fetchone()[0] if config.table_key else 0
         preview = _summary(app, conn, root_key, day, config)[0] if config.active and not config.error and root_key else ''
     return {'enabled': config.active, 'configuration_error': config.error if config.active else '',
-            'schedule': config.report_time, 'chat_configured': bool(config.chat),
+            'schedule': config.report_time, 'chat_configured': bool(config.chat), 'recipient': recipient,
             'recipient_type': config.recipient_type if config.recipient else '',
             'report_table_configured': bool(config.report_url),
             'report_table_error': errors[2][0] if errors[2] else '',

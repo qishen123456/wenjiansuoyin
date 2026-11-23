@@ -11,6 +11,12 @@
 
 [获取飞书访问凭证](https://open.feishu.cn/document/server-docs/api-call-guide/calling-process/get-access-token?lang=zh-CN) · [机器人发消息](https://open.feishu.cn/document/server-docs/im-v1/message/create) · [多维表格批量新增记录](https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-record/batch_create)
 
+## 维护日报接收人
+
+超级管理员可在「人员权限 → 飞书通讯录 → 同步日报」查看和保存接收对象。每个数据源可选择一位已同步的在职飞书成员、一个指定群，或暂停推送。首次配置前沿用环境变量，保存后优先使用当前数据源和飞书应用对应的系统设置。
+
+保存只更新接收对象。当天已成功发送，系统会在下一次定时推送时使用新接收对象。发送时间继续由 `FEISHU_DAILY_TIME` 配置。
+
 ## 统计与归档
 
 - 新增按文件首次写入当前索引的北京时间归档。普通内容更新、重复扫描与同日同一路径重新入索引均不重复计数。新数据源首次全盘扫描用于建立基线，存量文件不进入日报。启用前的历史索引不回填。

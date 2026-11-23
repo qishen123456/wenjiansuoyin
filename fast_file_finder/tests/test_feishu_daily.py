@@ -230,3 +230,75 @@ def test_daily_card_has_three_links_and_uses_one_snapshot(configured_daily, monk
     assert copies == [row]
     assert '1 条异常' in contents[0]['content']
     assert cards[0]['header']['template'] == 'orange'
+
+
+def test_admin_manages_one_daily_recipient_without_sending_on_save(configured_daily, monkeypatch):
+    client, _, _ = configured_daily
+    url = '/api/system/feishu/daily/recipient'
+    messages = []
+    monkeypatch.setattr(feishu, 'call', lambda method, path, **request: messages.append(request))
+    with app.db_session() as conn:
+        conn.executemany('INSERT INTO feishu_members VALUES (?,?,?,?)', [
+            ('ou_report_owner', '日报负责人', '数据组', 1),
+            ('ou_inactive', '已停用成员', '数据组', 0),
+        ])
+
+    assert client.put(url, json={'type': 'off'}).status_code == 401
+    login(client, admin=False)
+    assert client.put(url, json={'type': 'off'}).status_code == 403
+    login(client)
+    initial = client.get('/api/system/permissions').json()['feishu_daily']
+    assert initial['recipient'] == {'type':'chat_id', 'id':'oc_fixture', 'source':'environment', 'label':'指定飞书群'}
+    for body in [
+        {'type':'all', 'id':''}, {'type':'chat_id', 'id':'all'},
+        {'type':'open_id', 'id':'ou_unknown'}, {'type':'open_id', 'id':'ou_inactive'},
+        {'type':'off', 'id':'oc_fixture'},
+    ]:
+        assert client.put(url, json=body).status_code == 422
+    saved = client.put(url, json={'type':'open_id', 'id':'ou_report_owner'}).raise_for_status().json()
+    assert saved['recipient'] == {'type':'open_id', 'id':'ou_report_owner', 'source':'system', 'label':'日报负责人'}
+    assert saved['schedule'] == initial['schedule']
+    assert client.get('/api/system/feishu').json()['daily']['recipient'] == saved['recipient']
+    assert messages == []
+
+    day = datetime.now(daily.ZONE).date()
+    cutoff = datetime.combine(day, daily.wall_time(18), daily.ZONE)
+    daily.publish(app, cutoff)
+    assert len(messages) == 1
+    assert messages[0]['params'] == {'receive_id_type': 'open_id'}
+    assert messages[0]['json']['receive_id'] == 'ou_report_owner'
+    new_target = client.put(url, json={'type':'chat_id', 'id':'oc_specific'}).raise_for_status().json()
+    assert new_target['recipient']['id'] == 'oc_specific'
+    daily.publish(app, cutoff + timedelta(minutes=1))
+    assert len(messages) == 1
+    stopped = client.put(url, json={'type':'off'}).raise_for_status().json()
+    assert stopped['recipient'] == {'type':'off', 'id':'', 'source':'system', 'label':'暂停推送'}
+    daily.publish(app, cutoff + timedelta(days=1))
+    assert len(messages) == 1
+
+
+def test_removed_system_member_does_not_receive_next_daily_message(configured_daily, monkeypatch):
+    client, _, _ = configured_daily
+    with app.db_session() as conn:
+        conn.execute('INSERT INTO feishu_members VALUES (?,?,?,1)', ('ou_former', '原负责人', '原部门'))
+    login(client)
+    client.put('/api/system/feishu/daily/recipient', json={'type':'open_id', 'id':'ou_former'}).raise_for_status()
+    with app.db_session() as conn:
+        conn.execute('DELETE FROM feishu_members WHERE open_id=?', ('ou_former',))
+    monkeypatch.setattr(feishu, 'call', lambda *args, **kwargs: pytest.fail('Former member received a report'))
+    cutoff = datetime.combine(datetime.now(daily.ZONE).date(), daily.wall_time(18), daily.ZONE)
+    daily.publish(app, cutoff)
+    assert '通讯录范围' in daily.status(app)['report_error']
+
+
+def test_system_only_recipient_preserves_new_index_tracking(configured_daily, monkeypatch):
+    client, _, add = configured_daily
+    for var in ('FEISHU_DAILY_CHAT_ID', 'FEISHU_DAILY_BTABLE_APP_TOKEN', 'FEISHU_DAILY_BTABLE_TABLE_ID',
+                'FEISHU_DAILY_BTABLE_URL'):
+        monkeypatch.delenv(var)
+    with app.db_session() as conn:
+        conn.execute('INSERT INTO feishu_members VALUES (?,?,?,1)', ('ou_owner', '业务负责人', '业务组'))
+    login(client)
+    client.put('/api/system/feishu/daily/recipient', json={'type':'open_id', 'id':'ou_owner'}).raise_for_status()
+    add('业务/产品统计表.csv')
+    assert '今日新入索引：1 份文件' in daily.status(app)['preview']

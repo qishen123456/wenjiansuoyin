@@ -2680,8 +2680,16 @@ button:disabled {
 .feishu-daily-heading span{font-size:11px;border:1px solid #dce5f5;border-radius:20px;padding:2px 8px}
 .feishu-daily dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px;margin:12px 0}
 .feishu-daily dt,.feishu-daily p{font-size:12px;color:#536583}
-.feishu-daily dd{font-size:13px;font-weight:600;margin:3px 0 0}
-.feishu-daily details{font-size:12px}
+.feishu-daily dd{font-size:13px;font-weight:600;margin:3px 0 0;overflow-wrap:anywhere}
+.feishu-daily-controls{display:flex;gap:8px 12px;align-items:end;flex-wrap:wrap;padding-top:10px;border-top:1px solid #e0e7f2}
+.feishu-daily-controls label{display:grid;gap:5px;min-width:130px;font-size:12px;color:#536583}
+.feishu-daily-controls label[hidden]{display:none}
+.feishu-daily-controls label:not(:first-child){flex:1 1 210px;max-width:380px}
+.feishu-daily-controls input,.feishu-daily-controls select{box-sizing:border-box;width:100%;min-width:0;height:36px;border:1px solid #dce2ed;border-radius:7px;background:#fff;padding:0 8px;color:#263755;font:inherit}
+.feishu-daily-controls button{min-height:36px}
+.feishu-daily .feishu-daily-note,.feishu-daily .feishu-daily-save-status{margin:7px 0 0;line-height:1.5}
+.feishu-daily .feishu-daily-save-status:empty{display:none}
+.feishu-daily-preview{margin-top:10px;font-size:12px}
 .feishu-daily summary{cursor:pointer;width:fit-content;color:#244c9c}
 .feishu-daily pre{font:inherit;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0}
 .feishu-daily .feishu-daily-error{color:#963a2b}

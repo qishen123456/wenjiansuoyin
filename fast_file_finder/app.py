@@ -814,7 +814,7 @@ def update_index_file(
         file_id = cur.lastrowid
         action = "indexed"
         if track_addition and feishu_daily.enabled():
-            config = feishu_daily.settings()
+            config = feishu_daily.settings(conn, root_key)
             relative = _relative_catalog_path(path_str, _catalog_root_path())
             if not config.error and relative and not any(term in relative for term in SENSITIVE_DIRS):
                 feishu_daily.record_file(conn, root_key=root_key, relative=relative, name=name, ext=ext,
