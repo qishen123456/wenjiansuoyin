@@ -23,16 +23,23 @@ def configured():
     return app_credentials_configured() and bool(os.getenv('FEISHU_REDIRECT_URI', '').strip())
 
 
+class FeishuAPIError(HTTPException):
+    def __init__(self, code):
+        super().__init__(502, '飞书拒绝了请求，请检查应用权限和授权范围。')
+        self.code = code
+
+
 def call(method, path, *, token=None, **kwargs):
     try:
         response = httpx.request(method, BASE + path, headers={'Authorization': 'Bearer ' + token} if token else {},
                                  timeout=12, **kwargs)
-        response.raise_for_status()
         data = response.json()
     except (httpx.HTTPError, ValueError):
         raise HTTPException(502, '飞书接口暂不可用，请检查应用配置和网络。')
-    if not isinstance(data, dict) or data.get('code', 0) != 0 or data.get('error'):
-        raise HTTPException(502, '飞书拒绝了请求，请检查应用权限和授权范围。')
+    if not isinstance(data, dict):
+        raise HTTPException(502, '飞书接口返回了无效响应。')
+    if response.is_error or data.get('code', 0) != 0 or data.get('error'):
+        raise FeishuAPIError(data.get('code'))
     return data
 
 
@@ -46,7 +53,7 @@ def tenant_token():
     return data['tenant_access_token']
 
 
-def pages(path, token, params):
+def page_data(path, token, params):
     cursor = ''
     visited = set()
     while True:
@@ -54,7 +61,7 @@ def pages(path, token, params):
         if cursor:
             query['page_token'] = cursor
         result = call('GET', path, token=token, params=query)['data']
-        yield from result.get('items', [])
+        yield result
         if not result.get('has_more'):
             break
         cursor = result.get('page_token')
@@ -74,26 +81,75 @@ def initialize(conn):
     """)
 
 
-def sync_directory(app):
-    token = tenant_token()
-    queue = deque([('0', '')])
-    departments = {}
+def pages(path, token, params):
+    for page in page_data(path, token, params):
+        yield from page.get('items', [])
+
+
+def _member_record(member, key, department):
+    status = member.get('status') or {}
+    active = not any(status.get(flag) for flag in ('is_resigned', 'is_frozen', 'is_exited', 'is_unjoin'))
+    return key, member.get('name') or f'飞书成员（{key[-6:]}）', department, int(active)
+
+
+def _walk_departments(token, departments, queue):
     members = {}
     while queue:
         dept_id, label = queue.popleft()
-        for dept in pages('/contact/v3/departments/' + quote(dept_id,safe='') + '/children', token,
-                          {'department_id_type':'open_department_id'}):
+        path = '/contact/v3/departments/' + quote(dept_id, safe='') + '/children'
+        for dept in pages(path, token, {'department_id_type': 'open_department_id'}):
             key = dept['open_department_id']
             if key not in departments and key != '0':
-                full = (label + ' / ' if label else '') + dept['name']
+                name = dept.get('name') or f'飞书部门（{key[-6:]}）'
+                full = f'{label} / {name}' if label else name
                 departments[key] = (key, full, dept_id)
                 queue.append((key, full))
         for member in pages('/contact/v3/users/find_by_department', token,
-                            {'department_id':dept_id,'department_id_type':'open_department_id','user_id_type':'open_id'}):
-            status = member.get('status', {})
+                            {'department_id': dept_id, 'department_id_type': 'open_department_id', 'user_id_type': 'open_id'}):
             key = member['open_id']
-            active = not any(status.get(flag) for flag in ('is_resigned','is_frozen','is_exited','is_unjoin'))
-            members[key] = (key, member['name'], label, int(active))
+            members[key] = _member_record(member, key, label)
+    return members
+
+
+def _authorized_directory(token):
+    department_ids, user_ids, group_ids = set(), set(), set()
+    id_options = {'user_id_type': 'open_id', 'department_id_type': 'open_department_id'}
+    for page in page_data('/contact/v3/scopes', token, id_options):
+        department_ids.update(page.get('department_ids') or [])
+        user_ids.update(page.get('user_ids') or [])
+        group_ids.update(page.get('group_ids') or [])
+    if '0' in department_ids:
+        raise HTTPException(502, '飞书拒绝了根部门访问，请检查通讯录数据权限是否已发布。')
+    if group_ids:
+        raise HTTPException(502, '请将通讯录数据权限设置为指定成员或部门，再同步。当前授权包含用户组。')
+
+    departments = {}
+    queue = deque()
+    for key in sorted(department_ids):
+        data = call('GET', '/contact/v3/departments/' + quote(key, safe=''), token=token,
+                    params={'department_id_type': 'open_department_id'})['data']['department']
+        label = data.get('name') or f'飞书部门（{key[-6:]}）'
+        departments[key] = (key, label, data.get('parent_department_id') or '0')
+        queue.append((key, label))
+    members = _walk_departments(token, departments, queue)
+    for key in sorted(user_ids - members.keys()):
+        member = call('GET', '/contact/v3/users/' + quote(key, safe=''), token=token,
+                      params=id_options)['data']['user']
+        if member.get('open_id') not in (None, key):
+            raise HTTPException(502, '飞书返回的成员标识与授权范围不一致。')
+        members[key] = _member_record(member, key, '')
+    return departments, members
+
+
+def sync_directory(app):
+    token = tenant_token()
+    departments = {}
+    try:
+        members = _walk_departments(token, departments, deque([('0', '')]))
+    except FeishuAPIError as exc:
+        if exc.code != 40004:
+            raise
+        departments, members = _authorized_directory(token)
     with app.db_session() as conn:
         conn.execute('DELETE FROM feishu_members')
         conn.execute('DELETE FROM feishu_departments')

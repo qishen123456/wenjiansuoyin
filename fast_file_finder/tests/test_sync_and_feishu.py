@@ -77,3 +77,40 @@ def test_notice_delivery_uses_binding_and_deduplicates(foundation,monkeypatch):
     feishu.deliver_notices(application)
     feishu.deliver_notices(application)
     assert sent==['ou_test']
+
+
+def test_sync_uses_explicit_contacts_when_root_not_authorized(foundation, monkeypatch):
+    import httpx
+
+    client, _, _ = foundation
+    monkeypatch.setattr(feishu, 'tenant_token', lambda: 'test')
+    calls = []
+
+    def request(method, url, **kwargs):
+        path = url.split('/open-apis', 1)[1]
+        calls.append((path, kwargs['params']))
+        if path == '/contact/v3/departments/0/children':
+            return httpx.Response(403, json={'code': 40004})
+        if path == '/contact/v3/scopes':
+            page = kwargs['params'].get('page_token')
+            data = {'user_ids': ['ou_direct'], 'has_more': True, 'page_token': 'second'} if not page else {
+                'department_ids': ['od_pilot'], 'has_more': False}
+        elif path == '/contact/v3/departments/od_pilot':
+            data = {'department': {'name': '试点部门'}}
+        elif path.endswith('/children'):
+            data = {'items': []}
+        elif path.endswith('/find_by_department'):
+            data = {'items': [{'open_id': 'ou_pilot', 'name': '部门成员'}]}
+        elif path == '/contact/v3/users/ou_direct':
+            data = {'user': {'open_id': 'ou_direct'}}
+        else:
+            raise AssertionError(path)
+        return httpx.Response(200, json={'code': 0, 'data': data})
+
+    monkeypatch.setattr(feishu.httpx, 'request', request)
+    login(client)
+    assert client.post('/api/system/feishu/sync').json() == {'users': 2, 'departments': 1}
+    entries = {member['open_id']: member for member in client.get('/api/system/feishu').json()['members']}
+    assert entries['ou_direct']['name'] == '飞书成员（direct）'
+    assert entries['ou_pilot']['department'] == '试点部门'
+    assert all(params.get('department_id') != '0' for path, params in calls if path.endswith('find_by_department'))
