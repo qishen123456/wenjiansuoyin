@@ -69,6 +69,13 @@ class Settings:
         return hashlib.sha256(f'{os.getenv("FEISHU_APP_ID", "")}:{self.app_token}:{self.table}'.encode()).hexdigest()
 
 
+@dataclass(frozen=True)
+class SendConfirmation:
+    revision: float
+    recipient_id: str
+    last_sent_at: float
+
+
 def _application_id():
     return os.getenv('FEISHU_APP_ID', '').strip()
 
@@ -281,18 +288,23 @@ def _migrate_daily_tasks(conn):
                 FROM feishu_recipients_legacy""", (_DEFAULT_TASK, _DEFAULT_NAME))
             conn.execute('DROP TABLE feishu_recipients_legacy')
 
-        cols = {row[1] for row in conn.execute('PRAGMA table_info(feishu_daily_reports)')}
-        old_reports = bool(cols and 'task_id' not in cols)
+        columns = list(conn.execute('PRAGMA table_info(feishu_daily_reports)'))
+        cols = {row[1] for row in columns}
+        old_reports = bool(cols and not any(row[1] == 'send_key' and row[5] for row in columns))
         if old_reports:
             conn.execute('ALTER TABLE feishu_daily_reports RENAME TO feishu_reports_legacy')
         conn.execute("""CREATE TABLE IF NOT EXISTS feishu_daily_reports (
             root_key TEXT NOT NULL, task_id TEXT NOT NULL DEFAULT 'default', day TEXT NOT NULL, chat TEXT NOT NULL,
             send_key TEXT NOT NULL, body TEXT NOT NULL, prepared_at REAL NOT NULL, sent_at REAL,
-            PRIMARY KEY(root_key,task_id,day))""")
+            PRIMARY KEY(root_key,task_id,day,send_key))""")
         if old_reports:
-            conn.execute("""INSERT INTO feishu_daily_reports
-                SELECT root_key,?,day,chat,send_key,body,prepared_at,sent_at FROM feishu_reports_legacy""",
-                (_DEFAULT_TASK,))
+            if 'task_id' in cols:
+                conn.execute("""INSERT INTO feishu_daily_reports
+                    SELECT root_key,task_id,day,chat,send_key,body,prepared_at,sent_at FROM feishu_reports_legacy""")
+            else:
+                conn.execute("""INSERT INTO feishu_daily_reports
+                    SELECT root_key,?,day,chat,send_key,body,prepared_at,sent_at FROM feishu_reports_legacy""",
+                    (_DEFAULT_TASK,))
             conn.execute('DROP TABLE feishu_reports_legacy')
     except Exception:
         conn.execute('ROLLBACK TO daily_tasks_schema')
@@ -485,32 +497,54 @@ def _report_card(body, attention, day, config):
             'body': {'elements': elements}}
 
 
-def _send_report(app, root_key, now, get_token, *, task_id=_DEFAULT_TASK, immediate=False):
+def _last_delivery(conn, root_key, task_id):
+    return conn.execute("""SELECT day, chat, sent_at FROM feishu_daily_reports
+        WHERE root_key=? AND task_id=? AND sent_at IS NOT NULL
+        ORDER BY day DESC, sent_at DESC LIMIT 1""", (root_key, task_id)).fetchone()
+
+
+def _send_report(app, root_key, now, get_token, *, task_id=_DEFAULT_TASK, immediate=False, confirmation=None):
     with _recipient_lock:
         day = now.date().isoformat()
         with app.db_session() as conn:
             conn.execute('BEGIN IMMEDIATE')
             config = settings(conn, root_key, task_id)
-            if not config.task_enabled or config.error or not config.recipient:
+            if confirmation is not None:
+                if not config.recipient:
+                    raise HTTPException(404, '推送任务不存在或尚未指定接收对象。')
+                _check_revision(config, confirmation.revision)
+                if config.recipient != confirmation.recipient_id:
+                    raise HTTPException(409, '接收对象已变更，请刷新任务后重新确认。')
+                if config.error:
+                    raise HTTPException(422, config.error)
+            elif not config.task_enabled or config.error or not config.recipient:
                 return 'disabled'
             if not immediate and now.strftime('%H:%M') < config.report_time:
                 return
-            report = conn.execute('SELECT * FROM feishu_daily_reports WHERE root_key=? AND task_id=? AND day=?', (root_key, task_id, day)).fetchone()
-            if report and report['sent_at']:
-                return 'already_sent'
+            last = _last_delivery(conn, root_key, task_id)
+            if confirmation is None:
+                if last and last['day'] == day:
+                    return 'already_sent'
+            elif confirmation.last_sent_at != (last['sent_at'] if last else 0):
+                if last and last['day'] == day and last['chat'] == config.recipient:
+                    return 'already_sent'
+                raise HTTPException(409, '任务的发送记录已更新，请刷新后重新确认。')
             if config.open_id:
                 member = _member(conn, config.open_id)
                 if member is not None and not member['active']:
                     raise HTTPException(422, '日报接收人已停用，请重新选择飞书成员。')
                 if member is None and (task_id != _DEFAULT_TASK or config.open_id != os.getenv('FEISHU_DAILY_OPEN_ID', '').strip()):
                     raise HTTPException(422, '日报接收人已离开通讯录范围，请重新选择飞书成员。')
+            report = conn.execute("""SELECT * FROM feishu_daily_reports
+                WHERE root_key=? AND task_id=? AND day=? AND sent_at IS NULL
+                ORDER BY prepared_at DESC LIMIT 1""", (root_key, task_id, day)).fetchone()
             if not report:
                 report_daily.freeze(conn, root_key, day)
                 summary, attention = _summary(app, conn, root_key, now.date(), config)
                 body = json.dumps(_report_card(summary, attention, day, config), ensure_ascii=False)
+                report = {'chat': config.recipient, 'send_key': str(uuid.uuid4()), 'body': body, 'prepared_at': now.timestamp()}
                 conn.execute('INSERT INTO feishu_daily_reports VALUES (?,?,?,?,?,?,?,NULL)',
-                             (root_key, task_id, day, config.recipient, str(uuid.uuid4()), body, now.timestamp()))
-                report = conn.execute('SELECT * FROM feishu_daily_reports WHERE root_key=? AND task_id=? AND day=?', (root_key, task_id, day)).fetchone()
+                             (root_key, task_id, day, report['chat'], report['send_key'], body, report['prepared_at']))
         if report['chat'] != config.recipient:
             raise HTTPException(409, '今日已有待确认的日报，接收对象配置已变化。')
         # Feishu guarantees UUID deduplication for one hour.
@@ -534,6 +568,7 @@ def _send_report(app, root_key, now, get_token, *, task_id=_DEFAULT_TASK, immedi
         with app.db_session() as conn:
             conn.execute("""UPDATE feishu_daily_reports SET sent_at=? WHERE root_key=? AND task_id=? AND day=?
                 AND send_key=? AND sent_at IS NULL""", (time.time(), root_key, task_id, day, report['send_key']))
+            conn.execute('DELETE FROM app_meta WHERE key=?', (_report_error_key(root_key, task_id),))
         return 'sent'
 
 
@@ -559,6 +594,12 @@ def send_now(app):
     if config.report_url:
         _publish_report_table(app, config, root_key, now, feishu.tenant_token)
     return _send_report(app, root_key, now, feishu.tenant_token, immediate=True)
+
+
+def send_task_now(app, task_id, confirmation):
+    root_key = _writable_root(app)
+    return _send_report(app, root_key, datetime.now(ZONE), feishu.tenant_token, task_id=task_id,
+                        immediate=True, confirmation=confirmation)
 
 
 def publish(app, now=None):
@@ -629,9 +670,7 @@ def _recipient_label(conn, config):
 def _task_detail(conn, root_key, task_id, now):
     config = settings(conn, root_key, task_id)
     row = _stored_recipient(conn, root_key, task_id)
-    last = conn.execute("""SELECT day, chat, sent_at FROM feishu_daily_reports
-        WHERE root_key=? AND task_id=? AND sent_at IS NOT NULL ORDER BY day DESC LIMIT 1""",
-        (root_key, task_id)).fetchone()
+    last = _last_delivery(conn, root_key, task_id)
     day = now.date().isoformat()
     sent = last if last and last['day'] == day else None
     error = conn.execute('SELECT value FROM app_meta WHERE key=?', (_report_error_key(root_key, task_id),)).fetchone()

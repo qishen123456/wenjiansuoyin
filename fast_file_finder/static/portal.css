@@ -2691,6 +2691,7 @@ button:disabled {
 .notification-state.error { background:#fff0ea; color:#923b27 }
 .notification-actions { display:flex; align-items:center; flex-wrap:wrap; gap:4px 12px }
 .notification-actions button { margin:0; line-height:1.6; white-space:nowrap }
+.notification-actions [data-task-action="send"] { font-weight:650 }
 .notification-actions [data-task-action="delete"] { color:#98463e }
 .notification-table .notification-empty { text-align:center; padding:34px 14px; color:#60718b }
 #notificationListStatus { font-size:13px; margin:0 0 12px; color:#465979 }
@@ -2715,6 +2716,8 @@ button:disabled {
 #notifyCheckGroup { margin-top:8px }
 .notification-dialog [role="alert"],.notification-dialog .notify-danger { color:#a0332d }
 .notification-dialog .notify-danger { border-color:#e6c2be; background:#fff7f6 }
+#notifySendText { overflow-wrap:anywhere }
+#notifySendHint { color:#536780; font-size:13px }
 .notification-dialog :focus-visible { outline:2px solid #416cdb; outline-offset:2px }
 .notification-dialog button:disabled { opacity:.6; cursor:wait }
 @media(max-width:820px) {

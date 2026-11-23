@@ -213,3 +213,92 @@ def test_new_task_runs_without_environment_recipient_or_table(task_client, monke
     daily.publish(app, cutoff)
     daily.publish(app, cutoff + timedelta(minutes=1))
     assert messages == ['oc_standalone']
+
+
+def confirmed_delivery(task):
+    return {key: task[key] for key in ('revision', 'recipient_id', 'last_sent_at')}
+
+
+def test_manual_push_only_targets_the_selected_task_and_deduplicates_the_confirmation(task_client, monkeypatch):
+    client = task_client
+    login(client)
+    create_task(client, task_body('另一个群', 'oc_other', '23:59'))
+    task = create_task(client, task_body('手动发送', 'oc_only', '23:59'))
+    sent = []
+
+    def receive(method, path, *, json, **kwargs):
+        assert (method, path) == ('POST', '/im/v1/messages')
+        sent.append((json['receive_id'], json['uuid']))
+
+    monkeypatch.setattr(feishu, 'call', receive)
+    url = f"{TASKS}/{task['id']}/send"
+    body = confirmed_delivery(task)
+    assert client.post(url, json=body).raise_for_status().json() == {'status': 'sent'}
+    assert client.post(url, json=body).raise_for_status().json() == {'status': 'already_sent'}
+    assert daily._send_report(app, app.root_scope_key(), tick_today(23, 59), feishu.tenant_token,
+                              task_id=task['id']) == 'already_sent'
+    assert [target for target, _ in sent] == ['oc_only']
+    updated = next(row for row in task_list(client) if row['id'] == task['id'])
+    assert updated['last_sent_at'] > 0
+    assert client.post(url, json=confirmed_delivery(updated)).raise_for_status().json() == {'status': 'sent'}
+    assert len(sent) == 2 and all(target == 'oc_only' for target, _ in sent)
+    assert sent[0][1] != sent[1][1]
+
+
+def test_manual_push_checks_role_and_confirmation_and_keeps_paused_task_paused(task_client, monkeypatch):
+    client = task_client
+    login(client)
+    body = {**task_body('暂停中的任务', 'oc_previous', '23:59'), 'enabled': False}
+    task = create_task(client, body)
+    url = f"{TASKS}/{task['id']}/send"
+    login(client, admin=False)
+    assert client.post(url, json=confirmed_delivery(task)).status_code == 403
+    login(client)
+    client.put(f"{TASKS}/{task['id']}", json={
+        **body, 'recipient_id': 'oc_current', 'revision': task['revision']
+    }).raise_for_status()
+    assert client.post(url, json=confirmed_delivery(task)).status_code == 409
+    updated = next(row for row in task_list(client) if row['id'] == task['id'])
+    assert client.post(url, json={**confirmed_delivery(updated), 'recipient_id': 'oc_other'}).status_code == 409
+    attempts = []
+
+    def receive(method, path, *, json, **kwargs):
+        assert (method, path, json['receive_id']) == ('POST', '/im/v1/messages', 'oc_current')
+        attempts.append(json['uuid'])
+        if len(attempts) == 1:
+            raise HTTPException(502, '未收到飞书确认')
+
+    monkeypatch.setattr(feishu, 'call', receive)
+    assert client.post(url, json=confirmed_delivery(updated)).status_code == 502
+    assert client.post(url, json=confirmed_delivery(updated)).raise_for_status().json() == {'status': 'sent'}
+    assert len(attempts) == 2 and attempts[0] == attempts[1]
+    after = next(row for row in task_list(client) if row['id'] == task['id'])
+    assert not after['enabled'] and not after['next_run'] and after['last_sent_at'] > 0
+
+
+def test_manual_push_to_updated_recipient_after_migrating_multi_task_history(task_client, monkeypatch):
+    client = task_client
+    login(client)
+    task = create_task(client, task_body('迁移后的任务', 'oc_new', '23:59'))
+    now = datetime.now(daily.ZONE)
+    with app.db_session() as conn:
+        conn.execute('DROP TABLE feishu_daily_reports')
+        conn.execute("""CREATE TABLE feishu_daily_reports (
+            root_key TEXT, task_id TEXT, day TEXT, chat TEXT, send_key TEXT,
+            body TEXT, prepared_at REAL, sent_at REAL, PRIMARY KEY(root_key,task_id,day)
+        )""")
+        conn.execute('INSERT INTO feishu_daily_reports VALUES (?,?,?,?,?,?,?,?)', (
+            app.root_scope_key(), task['id'], now.date().isoformat(), 'oc_old', 'previous-uuid',
+            '首次日报', now.timestamp(), now.timestamp(),
+        ))
+    app.init_db()
+    migrated = next(row for row in task_list(client) if row['id'] == task['id'])
+    assert migrated['last_sent_at'] == now.timestamp() and not migrated['last_sent_to_current']
+    received = []
+    monkeypatch.setattr(feishu, 'call', lambda method, path, **kw: received.append(kw['json']['receive_id']))
+    client.post(f"{TASKS}/{task['id']}/send", json=confirmed_delivery(migrated)).raise_for_status()
+    assert received == ['oc_new']
+    with app.db_session() as conn:
+        deliveries = conn.execute('SELECT chat FROM feishu_daily_reports WHERE task_id=? ORDER BY sent_at',
+                                  (task['id'],)).fetchall()
+    assert [row['chat'] for row in deliveries] == ['oc_old', 'oc_new']

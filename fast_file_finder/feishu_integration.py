@@ -340,6 +340,12 @@ class NotificationTaskUpdate(NotificationTask):
     revision: float
 
 
+class NotificationTaskSend(BaseModel):
+    revision: float = Field(ge=0)
+    recipient_id: str = Field(min_length=1, max_length=128)
+    last_sent_at: float = Field(ge=0)
+
+
 def register(app):
     @app.app.get('/integrations/feishu/status')
     def public_status():
@@ -451,6 +457,12 @@ def register(app):
         app._require_super_admin(request)
         app.feishu_daily.delete_task(app, task_id, revision=revision)
         return {'ok': True}
+
+    @app.app.post('/api/system/feishu/daily/tasks/{task_id}/send')
+    def send_notification_task(task_id: str, body: NotificationTaskSend, request: Request):
+        app._require_super_admin(request)
+        confirmation = app.feishu_daily.SendConfirmation(**body.model_dump())
+        return {'status': app.feishu_daily.send_task_now(app, task_id, confirmation)}
 
     @app.app.post('/api/system/feishu/daily/group-membership')
     def group_membership(body: ChatLookup, request: Request):

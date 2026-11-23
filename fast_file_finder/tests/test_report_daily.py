@@ -1,5 +1,5 @@
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 from urllib.parse import urlencode
 
@@ -22,7 +22,8 @@ def test_daily_table_and_csv_use_the_same_scope_and_status(foundation, monkeypat
     add('可见/每日.csv')
     add('机密/每日.csv')
     monkeypatch.setattr(app, 'DIRECTORY_ACL_ENABLED', True)
-    now = datetime(2026, 11, 23, 18, 0, tzinfo=report_daily.ZONE)
+    # Startup can write a snapshot for today before the fixture runs.
+    now = (datetime.now(report_daily.ZONE) - timedelta(days=1)).replace(hour=18, minute=0)
     day = now.date().isoformat()
     rows = [saved_row(keep, '库存表', 'normal'), saved_row(keep, '=更新汇总', 'abnormal'),
             saved_row(private, '内部报表', 'abnormal'), saved_row(keep, '等候更新', 'pending')]

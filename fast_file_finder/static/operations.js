@@ -146,7 +146,7 @@ async function loadBackupPanel(){const panel=$('systemBackupPanel');if(!panel ||
 }
 
 const notificationTasksUrl = '/api/system/feishu/daily/tasks';
-const notificationState = { tasks: [], members: [], request: 0, editing: null, deleting: null, saving: false };
+const notificationState = { tasks: [], members: [], request: 0, editing: null, deleting: null, sending: null, saving: false };
 const notificationDate = new Intl.DateTimeFormat('zh-CN', {
   timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
 });
@@ -177,7 +177,8 @@ function notificationRow(task) {
     '<td data-label="最近发送">' + esc(notificationTime(task.last_sent_at) || '暂无成功记录') + original +
       (task.error ? '<small class="notification-error">' + esc(task.error) + '</small>' : '') + '</td>' +
     '<td data-label="状态"><span class="notification-state ' + statusClass + '">' + status + '</span></td>' +
-    '<td data-label="操作"><div class="notification-actions">' + cmd('edit', '编辑') + (task.recipient_id ? cmd(action, task.enabled ? '暂停' : '恢复') : '') +
+    '<td data-label="操作"><div class="notification-actions">' + (task.recipient_id ? cmd('send', '立即推送') : '') +
+      cmd('edit', '编辑') + (task.recipient_id ? cmd(action, task.enabled ? '暂停' : '恢复') : '') +
       cmd('delete', '删除') + '</div></td></tr>';
 }
 
@@ -309,6 +310,7 @@ async function handleNotificationRow(event) {
   if (!task) return;
   const action = button.dataset.taskAction;
   if (action === 'edit') { openNotificationEditor(task); return; }
+  if (action === 'send') { openNotificationSend(task); return; }
   if (action === 'delete') {
     notificationState.deleting = task;
     $('notifyDeleteText').textContent = '删除「' + task.name + '」后，此任务将停止向 ' + (task.recipient_type === 'chat_id' ? task.recipient_id : task.recipient_label || task.recipient_id || '当前接收对象') + ' 推送日报。';
@@ -325,6 +327,43 @@ async function handleNotificationRow(event) {
     await loadNotificationTasks(error.message);
   } finally {
     buttons.forEach(item => item.disabled = false);
+  }
+}
+
+function openNotificationSend(task) {
+  notificationState.sending = task;
+  const recipient = task.recipient_type === 'chat_id'
+    ? '飞书群 ' + task.recipient_id
+    : '飞书成员 ' + (task.recipient_label || task.recipient_id) + '（ID …' + task.recipient_id.slice(-8) + '）';
+  $('notifySendText').textContent = '将「' + task.name + '」的今日日报发送给 ' + recipient + '。';
+  const sentToday = task.report_sent_at && task.last_sent_to_current;
+  $('notifySendHint').textContent = sentToday ? '今日已向此对象发送过，确认后将再次发送。'
+    : task.enabled ? '发送成功后，本任务今日的定时推送会跳过。' : '仅发送这一次，定时任务保持暂停。';
+  $('notifySendStatus').textContent = '';
+  $('notifyConfirmSend').textContent = sentToday ? '确认再次发送' : '确认发送';
+  $('notificationSendDialog').showModal();
+}
+
+async function sendNotificationTask() {
+  const confirm = $('notifyConfirmSend');
+  const cancel = $('notifyCancelSend');
+  if (confirm.disabled) return;
+  const task = notificationState.sending;
+  const status = $('notifySendStatus');
+  confirm.disabled = cancel.disabled = true;
+  status.textContent = '正在发送到飞书…';
+  try {
+    const result = await api(notificationTasksUrl + '/' + encodeURIComponent(task.id) + '/send', {
+      method: 'POST',
+      body: { revision: task.revision, recipient_id: task.recipient_id, last_sent_at: task.last_sent_at },
+      timeoutMs: 40000,
+    });
+    $('notificationSendDialog').close();
+    await loadNotificationTasks(result.status === 'already_sent' ? '已发送至该接收对象' : '飞书日报已发送');
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    confirm.disabled = cancel.disabled = false;
   }
 }
 
@@ -352,6 +391,9 @@ $('notifyCancel').onclick = () => $('notificationTaskDialog').close();
 $('notificationTaskDialog').oncancel = event => { if (notificationState.saving) event.preventDefault(); };
 $('notificationTaskForm').onsubmit = saveNotificationTask;
 $('notificationTaskRows').onclick = handleNotificationRow;
+$('notifyConfirmSend').onclick = sendNotificationTask;
+$('notifyCancelSend').onclick = () => $('notificationSendDialog').close();
+$('notificationSendDialog').oncancel = event => { if ($('notifyConfirmSend').disabled) event.preventDefault(); };
 $('notifyConfirmDelete').onclick = deleteNotificationTask;
 $('notifyCancelDelete').onclick = () => $('notificationDeleteDialog').close();
 $('notificationDeleteDialog').oncancel = event => { if ($('notifyConfirmDelete').disabled) event.preventDefault(); };

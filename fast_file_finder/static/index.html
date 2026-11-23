@@ -1563,7 +1563,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 }
 
 </style>
-<link rel="stylesheet" href="/static/portal.css?v=20261123-notification-tasks">
+<link rel="stylesheet" href="/static/portal.css?v=20261123-notification-manual-send">
 <link rel="stylesheet" href="/static/ui.css?v=20261108-robot">
 </head>
 <body>
@@ -2310,6 +2310,16 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
         <div class="notification-fields"><p id="notifyDeleteText"></p><p id="notifyDeleteStatus" role="alert"></p></div>
         <footer><button id="notifyCancelDelete" type="button" class="portal-button" autofocus>取消</button>
           <button id="notifyConfirmDelete" type="button" class="portal-button notify-danger">确认删除</button></footer>
+      </dialog>
+      <dialog id="notificationSendDialog" class="notification-dialog small" aria-labelledby="notifySendTitle">
+        <header><h2 id="notifySendTitle">立即推送日报</h2></header>
+        <div class="notification-fields">
+          <p id="notifySendText"></p>
+          <p id="notifySendHint"></p>
+          <p id="notifySendStatus" role="status"></p>
+        </div>
+        <footer><button id="notifyCancelSend" type="button" class="portal-button" autofocus>取消</button>
+          <button id="notifyConfirmSend" type="button" class="portal-button primary">确认发送</button></footer>
       </dialog>
     </section>
 
@@ -6104,7 +6114,7 @@ document.addEventListener('keydown', (e) => {
 
 </script>
 <script src="/static/portal.js?v=20261123-notification-tasks"></script>
-<script src="/static/operations.js?v=20261123-notification-tasks"></script>
+<script src="/static/operations.js?v=20261123-notification-manual-send"></script>
 <script src="/static/robot-drag.js?v=20261108"></script>
 </body>
 </html>
