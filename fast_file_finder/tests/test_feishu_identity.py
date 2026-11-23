@@ -74,7 +74,15 @@ def test_phone_matching_drives_department_and_job_access_then_revokes_on_change(
     assert result['sources'][0]['subject_type'] == 'feishu_job'
 
     assert oauth(client, 'ou_member').status_code == 307
-    assert client.get('/api/auth/me').json()['user']['role'] == 'user'
+    identity = client.get('/api/auth/me').json()['user']
+    assert identity['role'] == 'user'
+    assert identity['name'] == '真实员工' and identity['identity_source'] == 'feishu'
+    assert identity['department'] == '飞书财务部 / 利润组' and identity['job_title'] == '成本会计'
+    request = client.post('/api/downloads/requests', json={'file_id':common,'reason':'联调'})
+    assert request.status_code == 200
+    with app.db_session() as conn:
+        log = conn.execute("SELECT user_name, department FROM download_requests WHERE file_id=?", (common,)).fetchone()
+        assert tuple(log) == ('真实员工', '飞书财务部 / 利润组')
     assert client.get(f'/api/file/{common}/preview-data').status_code == 200
     assert client.get(f'/api/file/{job_only}/preview-data').status_code == 200
     assert client.get(f'/api/file/{private}/preview-data').status_code == 404
@@ -146,4 +154,31 @@ def test_profile_edit_invalidates_matching_and_validates_normalized_numbers(foun
     assert client.post('/api/system/feishu/sync').json()['matched'] == 1
     assert oauth(client, 'ou_member').status_code == 307
     user = client.get('/api/auth/me').json()['user']
-    assert user['department'] == '自定义财务组' and user['job_title'] == '业务分析'
+    assert user['department'] == '飞书财务部 / 利润组' and user['job_title'] == ''
+    with app.db_session() as conn:
+        profile = conn.execute('SELECT department,job_title FROM system_users WHERE id=4').fetchone()
+        assert tuple(profile) == ('自定义财务组', '业务分析')
+
+
+def test_demo_administrator_identity_is_displayed_using_its_feishu_member(foundation, monkeypatch):
+    client, _, _ = foundation
+    person = {'open_id':'ou_admin_demo','name':'飞书真实姓名','mobile':'13912345678','department_ids':['0']}
+    setup_feishu(monkeypatch, [person])
+    monkeypatch.setattr(app, 'DEMO_MODE', True)
+    monkeypatch.setattr(app, '_ensure_demo_data', lambda: None)
+    with app.db_session() as conn:
+        conn.execute("UPDATE system_users SET feishu_id='ou_admin_demo' WHERE id=1")
+    login(client)
+    assert client.post('/api/system/feishu/sync').json()['matched'] == 0
+    assert oauth(client, 'ou_admin_demo').status_code == 307
+    user = client.get('/api/auth/me').json()['user']
+    assert user['name'] == '飞书真实姓名' and user['department'] == '根组织'
+    assert user['identity_source'] == 'feishu' and user['role'] == 'super_admin'
+
+    accounts = client.get('/api/system/permissions').json()['users']
+    administrator = next(account for account in accounts if account['id'] == user['id'])
+    assert administrator['display_name'] == user['name'] and administrator['identity_source'] == 'feishu'
+
+    monkeypatch.setattr(app, 'DEMO_MODE', False)
+    assert login(client)['identity_source'] == 'platform'
+    assert oauth(client, 'ou_admin_demo').status_code == 403

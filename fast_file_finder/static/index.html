@@ -4929,6 +4929,8 @@ function renderPermissionUsersTable() {
 
   tbody.innerHTML = permState.users.map(u => {
     const isActive = u.status === 'active';
+    const displayName = u.display_name || u.name;
+    const avatar = u.identity_source === 'feishu' ? displayName.slice(0, 2) : u.avatar || displayName.slice(0, 2);
     const statusPill = `
       <span class="rule-status-toggle ${isActive ? 'active' : 'inactive'}" onclick="toggleUserStatus(${u.id})" title="点击切换启用/停用">
         ${isActive ? '正常' : '已停用'}
@@ -4939,10 +4941,10 @@ function renderPermissionUsersTable() {
       <tr>
         <td>
           <div style="display:flex;align-items:center;gap:9px">
-            <div style="width:28px;height:28px;border-radius:50%;background:#E4E4E7;color:#3F3F46;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center">${esc(u.avatar || u.name.slice(0, 2))}</div>
+            <div style="width:28px;height:28px;border-radius:50%;background:#E4E4E7;color:#3F3F46;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center">${esc(avatar)}</div>
             <div>
-              <div style="font-weight:700;color:#18181B">${esc(u.name)}</div>
-              <div style="font-size:10.5px;color:#71717A">UID: ${u.id}</div>
+              <div style="font-weight:700;color:#18181B">${esc(displayName)}</div>
+              <div style="font-size:10.5px;color:#71717A">${u.identity_source === 'feishu' ? '飞书身份' : '平台身份'} · UID ${u.id}</div>
             </div>
           </div>
         </td>
@@ -4983,7 +4985,7 @@ function openResetPasswordModal(userId) {
   const user = permState.users.find(member => member.id === userId);
   if (!user) return;
   $('resetPasswordUserId').value = userId;
-  $('resetPasswordUserName').textContent = user.name;
+  $('resetPasswordUserName').textContent = user.display_name || user.name;
   $('resetPasswordUserPhone').textContent = user.phone || '';
   $('newPasswordInput').value = '';
   $('resetPasswordModal').classList.remove('hidden');
@@ -5913,8 +5915,8 @@ document.addEventListener('keydown', (e) => {
 
 
 </script>
-<script src="/static/portal.js?v=20261108-robot"></script>
-<script src="/static/operations.js?v=20261123-feishu-login"></script>
+<script src="/static/portal.js?v=20261123-feishu-identity"></script>
+<script src="/static/operations.js?v=20261123-feishu-identity"></script>
 <script src="/static/robot-drag.js?v=20261108"></script>
 </body>
 </html>

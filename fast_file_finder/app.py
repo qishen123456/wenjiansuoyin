@@ -3634,6 +3634,15 @@ _AUTH_OPEN_PATHS = {"/api/auth/login", "/api/health"}
 _ADMIN_ROLES = ("super_admin", "dept_admin")
 
 
+def _with_display_identity(conn, row):
+    user = dict(row)
+    if user.get("feishu_id"):
+        profile = feishu_integration.linked_identities(conn, demo=DEMO_MODE, user_id=user["id"]).get(user["id"])
+        if profile:
+            user.update(name=profile["name"], feishu_profile=profile)
+    return user
+
+
 def _get_session_user(request: Request) -> dict[str, Any] | None:
     """从 ff_session Cookie 解析当前登录用户；会话过期或账号停用一律视为未登录。"""
     token = request.cookies.get("ff_session", "")
@@ -3648,9 +3657,9 @@ def _get_session_user(request: Request) -> dict[str, Any] | None:
             """,
             (token,),
         ).fetchone()
-    if not row or row["expires_at"] < time.time() or row["status"] != "active":
-        return None
-    return dict(row)
+        if not row or row["expires_at"] < time.time() or row["status"] != "active":
+            return None
+        return _with_display_identity(conn, row)
 
 
 def _require_user(request: Request) -> dict[str, Any]:
@@ -3675,8 +3684,12 @@ def _require_super_admin(request: Request) -> dict[str, Any]:
 
 
 def _public_user(u: dict[str, Any]) -> dict[str, Any]:
+    profile = u.get("feishu_profile")
+    organization = profile or u
     return {"id": u["id"], "name": u["name"], "phone": u.get("phone") or "",
-            "role": u["role"], "department": u.get("department") or "", "job_title": u.get("job_title") or "",
+            "role": u["role"], "department": organization.get("department") or "",
+            "job_title": organization.get("job_title") or "",
+            "identity_source": "feishu" if profile else "platform",
             "directory_acl_enabled": DIRECTORY_ACL_ENABLED,
             "demo_mode": DEMO_MODE}
 
@@ -3702,8 +3715,9 @@ def login(req: LoginRequest, response: Response) -> dict[str, Any]:
             "INSERT INTO login_sessions(token, user_id, created_at, expires_at) VALUES(?,?,?,?)",
             (token, row["id"], now, now + SESSION_TTL_HOURS * 3600),
         )
+        user = _with_display_identity(conn, row)
     response.set_cookie("ff_session", token, max_age=int(SESSION_TTL_HOURS * 3600), httponly=True, samesite="lax")
-    return {"ok": True, "user": _public_user(dict(row))}
+    return {"ok": True, "user": _public_user(user)}
 
 
 @app.post("/api/auth/logout")
@@ -3829,7 +3843,7 @@ def create_download_request(req: DownloadRequestCreate, request: Request) -> dic
                                           status, ticket, created_at, reviewed_by, reviewed_at, expires_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
-            (user["id"], user["name"], user.get("department") or "", req.file_id, file_info["name"], file_info["path"],
+            (user["id"], user["name"], (user.get("feishu_profile") or user).get("department") or "", req.file_id, file_info["name"], file_info["path"],
              reason, status, ticket, now, "管理员自助" if is_admin else "", now if is_admin else 0, expires),
         )
     _record_product_event("download_request", request, subject_id=req.file_id, search_event_id=req.search_event_id)
@@ -3965,6 +3979,7 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
     _require_super_admin(request)
     with db_session() as conn:
         directory = feishu_integration.directory_snapshot(conn)
+        identities = feishu_integration.linked_identities(conn, demo=DEMO_MODE)
         users_rows = conn.execute("""
             SELECT id, name, phone, feishu_id, email, department, job_title, role, status, avatar, created_at, updated_at
             FROM system_users
@@ -3978,9 +3993,12 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
         
         users = []
         for u in users_rows:
+            profile = identities.get(u["id"])
             users.append({
                 "id": u["id"],
                 "name": u["name"],
+                "display_name": profile["name"] if profile else u["name"],
+                "identity_source": "feishu" if profile else "platform",
                 "phone": u["phone"] or "--",
                 "feishu_id": u["feishu_id"],
                 "email": u["email"],
@@ -4274,10 +4292,11 @@ def effective_directory_grants(request: Request, user_id: int, path: str):
         target = _validate_grant_target(conn, 'user', str(user_id), path)
         policy = directory_access.load_policy(conn, dict(user), root_scope_key(), _catalog_root_path())
         rows = directory_access.user_grant_rows(conn, dict(user), root_scope_key())
+        user_name = _with_display_identity(conn, user)["name"]
     permissions = {op: policy.decision(target, op) for op in directory_access.OPERATIONS}
     if user['status'] != 'active':
         permissions = dict.fromkeys(directory_access.OPERATIONS, 'deny')
-    return {'user_name': user['name'], 'permissions': permissions, 'super_admin': policy.super_admin,
+    return {'user_name': user_name, 'permissions': permissions, 'super_admin': policy.super_admin,
             'sources': [{**dict(r), 'permissions': directory_access.grant_permissions(r)} for r in rows
                         if directory_access.within(target, r['target_path'])]}
 

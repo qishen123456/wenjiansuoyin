@@ -591,8 +591,10 @@ let grantFeishuSubjects = {};
 let grantFeishuMembersByUser = new Map();
 
 function grantSubjectLabel(type, key) {
-  if (type === 'user') return grantFeishuMembersByUser.get(Number(key))?.name
-    || permState.users.find(user => String(user.id) === key)?.name || `成员 #${key}`;
+  if (type === 'user') {
+    const user = permState.users.find(account => String(account.id) === key);
+    return user?.display_name || user?.name || `成员 #${key}`;
+  }
   if (type === 'department') return key + '（自定义部门）';
   return grantFeishuSubjects[type]?.find(subject => subject.key === key)?.label || `已变更的飞书授权对象 · ${key}`;
 }
@@ -631,7 +633,7 @@ async function loadDirectoryGrantPanel() {
       } else if (type === 'user') {
         grantSubjectOptions = permState.users.filter(user => user.role !== 'super_admin').map(user => {
           const member = grantFeishuMembersByUser.get(user.id);
-          return [String(user.id), `${member?.name || user.name} · ${member?.department || user.department || '未填部门'}`];
+          return [String(user.id), `${user.display_name || user.name} · ${member?.department || user.department || '未填部门'}`];
         });
       } else {
         grantSubjectOptions = (grantFeishuSubjects[type] || []).map(subject => [subject.key, subject.label]);

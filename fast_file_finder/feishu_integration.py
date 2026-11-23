@@ -179,6 +179,24 @@ def directory_snapshot(conn, *, include_stored=False):
     }
 
 
+def linked_identities(conn, *, demo, user_id=None):
+    """Read presentation fields for active, eligible Feishu associations."""
+    if not app_credentials_configured():
+        return {}
+    query = """SELECT u.id, f.name, f.department, coalesce(p.job_title,'') AS job_title
+        FROM system_users u JOIN feishu_members f ON u.feishu_id=f.open_id AND f.active=1
+        LEFT JOIN feishu_member_profiles p ON p.open_id=f.open_id
+        WHERE u.status='active' AND (
+            (p.local_user_id=u.id AND p.match_status='matched')
+            OR (? AND u.feishu_binding_source IN ('','manual'))
+        )"""
+    params = [demo]
+    if user_id is not None:
+        query += ' AND u.id=?'
+        params.append(user_id)
+    return {row['id']: dict(row) for row in conn.execute(query, params)}
+
+
 def _department_display(member, departments):
     names = [departments[key][1] for key in sorted(member.departments & departments.keys())]
     if names:

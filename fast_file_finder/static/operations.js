@@ -176,6 +176,7 @@ function loadFeishuPanel() {
   const members = directory.members;
   const summary = directory.summary;
   const accounts = new Map(permState.users.map(user => [user.id, user]));
+  const roleNames = {super_admin:'超级管理员', dept_admin:'部门管理员', user:'普通成员'};
   const departments = [...new Set(members.flatMap(member => member.department?.split('、') || []).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, 'zh-CN'));
   const labels = {matched:'已核验', no_phone:'手机号不可见', no_account:'待开通平台账号',
@@ -212,7 +213,7 @@ function loadFeishuPanel() {
     const rows = members.filter(member => {
       const local = accounts.get(member.local_user_id || member.bound_user_id);
       return (!department || member.department.split('、').includes(department))
-        && [member.name, member.department, member.job_title, member.phone_tail, local?.name]
+        && [member.name, member.department, member.job_title, member.phone_tail, local?.display_name, local?.name]
           .some(value => value?.toLowerCase().includes(query));
     });
     $('feishuMatchRows').innerHTML = rows.slice(0, 100).map((member, index) => {
@@ -221,8 +222,10 @@ function loadFeishuPanel() {
       const matchLabel = labels[member.match_status] || '待同步';
       const tag = bound && member.match_status !== 'matched' && currentUser.demo_mode
         ? '演示关联 · ' + matchLabel : matchLabel;
+      const localName = local?.display_name || local?.name;
       const account = local && bound && local.id !== bound.id
-        ? `候选 ${local.name} · 当前关联 ${bound.name}` : local?.name || '—';
+        ? `候选 ${localName} · 当前关联 ${roleNames[bound.role] || '平台账号'}`
+        : bound ? roleNames[bound.role] || '已关联平台账号' : localName || '—';
       const review = member.match_status === 'review' && member.local_user_id;
       let action = '';
       if (local) action += `<button type="button" class="tree-tool-btn" data-edit-match-user="${local.id}">编辑账号</button>`;
@@ -288,7 +291,7 @@ function openEditAccountProfile(userId) {
   const input = (id, label, type, value, length) =>
     `<label for="${id}">${label}<input id="${id}" type="${type}" value="${esc(value || '')}" maxlength="${length}"></label>`;
   const form = `<div class="account-profile-grid">
-    ${input('profileName', '姓名', 'text', user.name, 50)}
+    ${input('profileName', '平台账号名称', 'text', user.name, 50)}
     ${input('profilePhone', '登录及匹配手机号', 'tel', user.phone === '--' ? '' : user.phone, 30)}
     ${input('profileDepartment', '自定义部门', 'text', user.department, 100)}
     ${input('profileJob', '自定义岗位', 'text', user.job_title, 80)}
