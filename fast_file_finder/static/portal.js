@@ -602,6 +602,44 @@ function grantSubjectLabel(type, key) {
   return grantFeishuSubjects[type]?.find(subject => subject.key === key)?.label || `已变更的飞书授权对象 · ${key}`;
 }
 
+let permissionAuditRequest = 0;
+
+async function loadPermissionAudit() {
+  const request = ++permissionAuditRequest;
+  const panel = $('permissionAuditPanel');
+  panel.textContent = '正在读取授权记录…';
+  try {
+    const data = await api('/api/system/directory-grants');
+    if (request !== permissionAuditRequest) return;
+    const actions = {save:'设置授权', delete:'撤销授权', batch_merge:'批量调整', batch_revoke:'批量撤销', batch_replace:'批量替换'};
+    grantFeishuSubjects = data.feishu_subjects || {};
+    const users = new Map(permState.users.map(user => [user.id, user.display_name || user.name]));
+    const rows = (data.audit || []).map(row => {
+      let change;
+      try { change = JSON.parse(row.grant_json) || {}; } catch { change = {}; }
+      const target = change.subject_key ? grantSubjectLabel(change.subject_type, String(change.subject_key)) : '—';
+      let previous = change.before, updated = change.after;
+      if (!previous && !updated && change.permissions) {
+        let values = change.permissions;
+        if (typeof values === 'string') {
+          try { values = JSON.parse(values); } catch { values = null; }
+        }
+        if (row.action === 'delete') previous = values;
+        else updated = values;
+      }
+      const detail = [previous && ('原权限 · ' + grantSummary(previous)), updated && ('新权限 · ' + grantSummary(updated))].filter(Boolean);
+      return `<tr><td>${esc(portalMonitorTime(row.created_at))}</td><td>${esc(users.get(row.actor_id) || ('账号 #' + row.actor_id))}</td>
+        <td>${esc(actions[row.action] || '授权变更')}</td><td>${esc(target)}</td><td class="permission-audit-path">${esc(change.target_path || '—')}
+        ${detail.length ? `<details><summary>变更明细</summary>${detail.map(line=>`<p>${esc(line)}</p>`).join('')}</details>` : ''}</td></tr>`;
+    });
+    panel.innerHTML = `<div class="permission-panel-toolbar"><strong>最近的文件夹授权变更</strong><button type="button" class="tree-tool-btn" id="refreshPermissionAudit">刷新</button></div>
+      ${rows.length ? '<div class="permission-roster-scroll"><table class="catalog-table"><thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>授权对象</th><th>文件夹</th></tr></thead><tbody>'+rows.join('')+'</tbody></table></div>' : '<p>暂无授权记录</p>'}`;
+    $('refreshPermissionAudit').onclick = loadPermissionAudit;
+  } catch (error) {
+    if (request === permissionAuditRequest) panel.textContent = '授权记录加载失败：' + error.message;
+  }
+}
+
 async function loadDirectoryGrantPanel() {
   const panel=$('directoryGrantPanel');
   if(!panel || currentUser?.role!=='super_admin')return;
@@ -616,18 +654,18 @@ async function loadDirectoryGrantPanel() {
     grantFolderOptions=[];grantSelectedPaths=new Set();grantSelectedSubjects=new Set();grantBatchRevision='';
     const collect=node=>{if(!node)return;grantFolderOptions.push([node.path,node.path===tree.tree?.path?'整个文件根目录':node.path.replace(tree.tree?.path || '', '').replace(/^\//,'')]);(node.children || []).forEach(collect);};
     collect(tree.tree || tree);
-    panel.innerHTML=`<div class="grant-heading"><div><h3>文件操作权限</h3><p>阅读、上传、下载和更新分别授权。子目录继承，明确禁止优先；多个来源的下载规则以需审批优先。</p></div><button class="tree-tool-btn" id="refreshGrantPanel">刷新</button></div>
+    panel.innerHTML=`<div class="grant-heading"><div><h3>批量授权</h3></div><button class="tree-tool-btn" id="refreshGrantPanel">刷新</button></div>
       ${!permissions.enabled?'<p class="grant-warning">目录权限校验当前已关闭，配置不会拦截文件访问；请开启 DIRECTORY_ACL_ENABLED 后使用。</p>':''}
-      <p>超级管理员拥有根目录内的完整权限。上传与更新还需数据源允许写入，默认只读挂载需由管理员配置。</p>
+      <details class="grant-help"><summary>授权规则说明</summary><p>子目录继承上级授权，明确禁止优先。多个来源的下载规则以需审批优先。超级管理员拥有根目录的完整权限。上传或更新文件还需要数据源可写。</p></details>
       <div class="grant-toolbar"><label>设置方式 <select id="grantDirection"><option value="people">按人员设置</option><option value="folders">按文件夹设置</option></select></label><label>授权对象 <select id="grantSubjectType"><option value="user">成员</option><option value="department">自定义部门</option><option value="feishu_department">飞书部门</option><option value="feishu_job">飞书部门 · 岗位</option></select></label><button id="clearGrantSelection" class="tree-tool-btn">清空选择</button></div>
       <div class="grant-pickers" id="grantPickers"><section id="grantPeoplePane"><h4>选择成员／部门</h4><input id="grantSubjectSearch" placeholder="搜索成员或部门" aria-label="搜索授权对象"><div class="grant-choices" id="grantSubjectChoices"></div></section><section id="grantFolderPane"><h4>选择文件夹（包含子目录）</h4><input id="grantPathSearch" placeholder="搜索文件夹名称或路径" aria-label="搜索文件夹"><div class="grant-choices" id="grantPathChoices"></div><div class="grant-empty-folder"><input id="grantExtraPath" placeholder="填写未入索引或空文件夹的完整路径" aria-label="补充文件夹路径"><button class="tree-tool-btn" id="addGrantPath">加入</button></div></section></div>
       <div class="grant-selection-count" id="grantSelectionCount"></div>
       <div class="grant-toolbar"><label>权限模板 <select id="grantTemplate"><option value="">自定义</option><option value="readonly">只读</option><option value="request">阅读并申请下载</option><option value="submit">阅读并上传新文件</option></select></label></div><div class="grant-actions-grid">${Object.entries(grantActionLabels).map(([key,label])=>`<label>${label}<select id="grantAction_${key}"><option value="">不改动／不配置</option><option value="deny">禁止</option>${key==='download'?'<option value="approval">需审批</option><option value="direct">直接下载</option>':'<option value="allow">允许</option>'}</select></label>`).join('')}</div>
       <div class="grant-toolbar"><label>变更方式 <select id="grantBatchMode"><option value="merge">增加或调整选中权限</option><option value="revoke">撤销选中权限的本级配置</option><option value="replace">替换整组本级配置</option></select></label><button class="tree-tool-btn" id="previewGrantBatch">检查变更</button><button class="btn-archive-primary" id="applyGrantBatch" disabled>确认并应用</button><button class="tree-tool-btn" id="checkEffectiveGrant">查看最终权限</button></div>
-      <p>“替换”会移除未选中的本级配置；“撤销”仍可能继承上级或部门权限，禁止访问请明确选“禁止”。查看最终权限时，请只选择一名成员和一个文件夹。</p>
+      <p id="grantModeHint" hidden></p>
       <div id="directoryGrantStatus" role="status" aria-live="polite"></div><div id="grantBatchPreview"></div><div id="grantEffectiveResult"></div>
-      <details class="grant-existing"><summary>现有授权与继承来源</summary><div id="directoryGrantList" class="directory-grant-list"></div></details>
-      <details class="grant-existing"><summary>最近的权限变更记录</summary><div class="grant-audit">${(permissions.audit||[]).map(row=>`<div>操作人 #${Number(row.actor_id)} · ${esc(portalMonitorTime(row.created_at))} · ${esc(({save:'设置授权',delete:'撤销授权',batch_merge:'批量调整',batch_revoke:'批量撤销',batch_replace:'批量替换'})[row.action]||'权限变更')}<small>${esc(row.grant_json)}</small></div>`).join('') || '<p>暂无记录</p>'}</div></details>`;
+      <details class="grant-existing"><summary>现有授权与继承来源</summary><div id="directoryGrantList" class="directory-grant-list"></div></details>`;
+
     const subjects = () => {
       grantSelectedSubjects.clear();
       const type = $('grantSubjectType').value;
@@ -651,6 +689,13 @@ async function loadDirectoryGrantPanel() {
     $('clearGrantSelection').onclick=()=>{grantSelectedPaths.clear();grantSelectedSubjects.clear();renderGrantChoices('paths');renderGrantChoices('subjects');invalidateGrantPreview();updateGrantSelectionCount();};
     $('addGrantPath').onclick=()=>{const path=$('grantExtraPath').value.trim();if(!path)return;if(!grantFolderOptions.some(x=>x[0]===path))grantFolderOptions.unshift([path,path]);grantSelectedPaths.add(path);$('grantExtraPath').value='';$('grantPathSearch').value='';renderGrantChoices('paths');invalidateGrantPreview();updateGrantSelectionCount();};
     [...Object.keys(grantActionLabels).map(k=>$('grantAction_'+k)),$('grantBatchMode')].forEach(input=>input.onchange=invalidateGrantPreview);
+    $('grantBatchMode').onchange = () => {
+      invalidateGrantPreview();
+      const hint = $('grantModeHint');
+      const mode = $('grantBatchMode').value;
+      hint.hidden = mode === 'merge';
+      hint.textContent = mode === 'replace' ? '替换会清除未选中的本级权限。' : '撤销后仍可能继承上级或部门权限。';
+    };
     $('grantTemplate').onchange=()=>{
       const template=$('grantTemplate').value;
       if(!template)return;

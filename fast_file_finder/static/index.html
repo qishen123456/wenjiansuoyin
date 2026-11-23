@@ -1563,7 +1563,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
 }
 
 </style>
-<link rel="stylesheet" href="/static/portal.css?v=20261123-daily-schedule">
+<link rel="stylesheet" href="/static/portal.css?v=20261123-permission-tabs">
 <link rel="stylesheet" href="/static/ui.css?v=20261108-robot">
 </head>
 <body>
@@ -2242,56 +2242,16 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
     </section>
 
     <section id="permissionView" class="hidden archive-shell">
-      <div class="permission-roster-tabs" aria-label="人员名单来源">
-        <button id="showFeishuRoster" type="button" aria-pressed="false" aria-controls="feishuPanel">飞书通讯录</button>
-        <button id="showPlatformAccounts" type="button" aria-pressed="false" aria-controls="platformAccountsPanel">平台账号</button>
+      <div class="portal-page-heading"><h1>人员权限</h1></div>
+      <div class="permission-tabs" id="permissionTabs" role="tablist" aria-label="人员权限">
+        <button id="showMemberRoster" role="tab" type="button" data-section="members" aria-controls="memberPanel" aria-selected="false" tabindex="0">成员</button>
+        <button id="showFolderGrants" role="tab" type="button" data-section="grants" aria-controls="directoryGrantPanel" aria-selected="false" tabindex="-1">文件夹授权</button>
+        <button id="showGrantHistory" role="tab" type="button" data-section="audit" aria-controls="permissionAuditPanel" aria-selected="false" tabindex="-1">授权记录</button>
       </div>
-      <section id="feishuPanel" class="directory-grant-panel" hidden></section>
-      <section id="platformAccountsPanel" hidden>
-      <!-- 平台账号维护 -->
-      <div class="panel" style="margin-top:16px;padding:20px;border-radius:14px;background:#ffffff;border:1px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.02)">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
-          <div style="display:flex;align-items:center;gap:10px">
-            <div style="width:34px;height:34px;border-radius:10px;background:var(--ink);display:flex;align-items:center;justify-content:center;color:#ffffff;box-shadow:var(--shadow-sm)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg></div>
-            <div>
-              <div style="font-size:14px;font-weight:700;color:#18181B">平台账号</div>
-              <div style="font-size:11.5px;color:#71717A">管理登录账号、系统角色与自定义部门。</div>
-            </div>
-          </div>
-          <button class="btn-archive-primary" onclick="openCreateUserModal()" style="font-weight:600;padding:0 14px;height:34px">
-            <span>+ 新建平台账号</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- 人员权限维护表格 -->
-      <div class="panel" style="margin-top:16px;padding:0;overflow:hidden;border-radius:14px;background:#ffffff;border:1px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.02)">
-        <div style="padding:14px 20px;border-bottom:1px solid #F4F4F5;display:flex;justify-content:space-between;align-items:center;background:#fcfcfd">
-          <div>
-            <div style="font-size:13.5px;font-weight:700;color:#18181B">平台账号列表</div>
-            <div style="font-size:11px;color:#71717A;margin-top:2px">在这里管理成员角色、账号状态和登录凭据。</div>
-          </div>
-          <span style="font-size:11.5px;color:#71717A">仅超级管理员可管理成员</span>
-        </div>
-        <table class="catalog-table">
-          <thead>
-            <tr>
-              <th style="width:16%">成员姓名</th>
-              <th style="width:18%">登录手机号 (账号)</th>
-              <th style="width:16%">密码凭据状态</th>
-              <th style="width:20%">自定义部门／岗位</th>
-              <th style="width:16%">系统权限角色</th>
-              <th style="width:8%">账号状态</th>
-              <th style="width:12%;text-align:right">操作</th>
-            </tr>
-          </thead>
-          <tbody id="permissionUsersTableBody">
-            <tr><td colspan="7" style="text-align:center;padding:40px;color:#71717A">加载成员列表中…</td></tr>
-          </tbody>
-        </table>
-      </div>
-      </section>
-      <section id="directoryGrantPanel" class="directory-grant-panel"></section>
+      <p id="permissionLoadStatus" role="status" hidden></p>
+      <section id="memberPanel" role="tabpanel" aria-labelledby="showMemberRoster" class="directory-grant-panel" hidden></section>
+      <section id="directoryGrantPanel" role="tabpanel" aria-labelledby="showFolderGrants" class="directory-grant-panel" hidden></section>
+      <section id="permissionAuditPanel" role="tabpanel" aria-labelledby="showGrantHistory" class="directory-grant-panel" hidden></section>
     </section>
 
     <section id="syncView" class="hidden">
@@ -2700,7 +2660,7 @@ select.sort-select-pill:focus { border-color: var(--brand); outline: none; }
         <input type="text" id="newUserJob" class="sort-select-pill" style="width:100%" maxlength="80">
       </div>
       <div>
-        <label style="font-size:12.5px;font-weight:700;color:#18181B;display:block;margin-bottom:6px">分配系统权限角色：</label>
+        <label style="font-size:12.5px;font-weight:700;color:#18181B;display:block;margin-bottom:6px">分配角色：</label>
         <select id="newUserRole" class="sort-select-pill" style="width:100%">
           <option value="user">普通用户（报表检索、AI 找表与下载申请）</option>
           <option value="dept_admin">部门管理员 (归档规则维护与审核关闭)</option>
@@ -5069,100 +5029,71 @@ function closeImagePreview() {
 /* -----------------------------------------------------------
  * 人员权限维护与飞书打通控制器 (Permission & Feishu Integration)
  * ----------------------------------------------------------- */
-let permState = { users: [], directory: null, rosterTab: null, daily: null };
+let permState = { users: [], directory: null, section: null };
+let permissionOverviewRequest = 0;
 
-async function initPermissionDashboard() {
-  await loadPermissionOverview();
+function initPermissionDashboard() {
+  return loadPermissionOverview();
 }
 
-function showPermissionRoster(source) {
-  permState.rosterTab = source;
-  const showFeishu = source === 'feishu';
-  $('showFeishuRoster').setAttribute('aria-pressed', String(showFeishu));
-  $('showPlatformAccounts').setAttribute('aria-pressed', String(!showFeishu));
-  $('feishuPanel').hidden = !showFeishu;
-  $('platformAccountsPanel').hidden = showFeishu;
+function showPermissionSection(section, updateUrl = false) {
+  const tabs = [...$('permissionTabs').querySelectorAll('[role="tab"]')];
+  const selected = tabs.find(tab => tab.dataset.section === section);
+  if (!selected) return;
+  permState.section = section;
+  for (const tab of tabs) {
+    const active = tab === selected;
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    $(tab.getAttribute('aria-controls')).hidden = !active;
+  }
+  if (updateUrl) {
+    const url = new URL(location.href);
+    url.searchParams.set('tab', 'permission');
+    url.searchParams.set('section', section);
+    history.replaceState(history.state, '', url);
+  }
+  if (!permState.directory) return;
+  if (section === 'grants' && !$('directoryGrantPanel').hasChildNodes()) loadDirectoryGrantPanel();
+  if (section === 'audit') loadPermissionAudit();
 }
+
+const permissionTabs = $('permissionTabs');
+permissionTabs.onclick = event => {
+  const tab = event.target.closest('[role="tab"]');
+  if (tab && tab.dataset.section !== permState.section) showPermissionSection(tab.dataset.section, true);
+};
+permissionTabs.onkeydown = event => {
+  const tabs = [...permissionTabs.querySelectorAll('[role="tab"]')];
+  const index = tabs.indexOf(event.target);
+  if (index < 0) return;
+  const dest = {ArrowLeft:(index+tabs.length-1)%tabs.length, ArrowRight:(index+1)%tabs.length,
+                Home:0, End:tabs.length-1}[event.key];
+  if (dest === undefined) return;
+  event.preventDefault();
+  tabs[dest].focus();
+  showPermissionSection(tabs[dest].dataset.section, true);
+};
 
 async function loadPermissionOverview() {
+  const request = ++permissionOverviewRequest;
+  const status = $('permissionLoadStatus');
   try {
-    const res = await api('/api/system/permissions');
-    if (!res.ok) return;
+    status.hidden = true;
+    const res = await api('/api/system/permissions?include_daily=false');
+    if (!res.ok || request !== permissionOverviewRequest || currentNavMode !== 'permission') return;
     permState.users = res.users || [];
     permState.directory = res.directory || {source:'local', members:[], summary:{}};
-    permState.daily = res.feishu_daily;
-    $('showFeishuRoster').onclick = () => showPermissionRoster('feishu');
-    $('showPlatformAccounts').onclick = () => showPermissionRoster('local');
-    renderPermissionUsersTable();
-    loadFeishuPanel();
-    showPermissionRoster(permState.rosterTab || permState.directory.source);
-    await loadDirectoryGrantPanel();
-  } catch (e) {
-    console.error('loadPermissionOverview error:', e);
+    renderMemberPanel();
+    $('directoryGrantPanel').replaceChildren();
+    const requested = new URLSearchParams(location.search).get('section');
+    const known = [...permissionTabs.querySelectorAll('[role="tab"]')].some(tab => tab.dataset.section === requested);
+    showPermissionSection(permState.section || (known ? requested : 'members'));
+  } catch (error) {
+    if (request !== permissionOverviewRequest) return;
+    status.textContent = '人员权限加载失败：' + error.message;
+    status.hidden = false;
   }
-}
-
-function renderPermissionUsersTable() {
-  const tbody = $('permissionUsersTableBody');
-  if (!tbody) return;
-
-  if (!permState.users.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:#71717A">暂无受控企业成员，请点击上方“+ 新增成员”</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = permState.users.map(u => {
-    const isActive = u.status === 'active';
-    const displayName = u.display_name || u.name;
-    const avatar = u.identity_source === 'feishu' ? displayName.slice(0, 2) : u.avatar || displayName.slice(0, 2);
-    const statusPill = `
-      <span class="rule-status-toggle ${isActive ? 'active' : 'inactive'}" onclick="toggleUserStatus(${u.id})" title="点击切换启用/停用">
-        ${isActive ? '正常' : '已停用'}
-      </span>
-    `;
-
-    return `
-      <tr>
-        <td>
-          <div style="display:flex;align-items:center;gap:9px">
-            <div style="width:28px;height:28px;border-radius:50%;background:#E4E4E7;color:#3F3F46;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center">${esc(avatar)}</div>
-            <div>
-              <div style="font-weight:700;color:#18181B">${esc(displayName)}</div>
-              <div style="font-size:10.5px;color:#71717A">${u.identity_source === 'feishu' ? '飞书身份' : '平台身份'} · UID ${u.id}</div>
-            </div>
-          </div>
-        </td>
-        <td>
-          <span style="font-size:12.5px;color:#18181B;font-weight:600;font-family:monospace">${esc(u.phone || '--')}</span>
-        </td>
-        <td>
-          <div style="display:flex;align-items:center;gap:6px">
-            <span style="font-size:12px;color:#71717A;font-family:monospace">••••••••</span>
-            <button class="btn-table-action" style="padding:2px 8px;font-size:11px;background:#FAFAFA;border:1px solid #E4E4E7;border-radius:6px;cursor:pointer" onclick="openResetPasswordModal(${u.id})" title="重置登录密码">重置</button>
-          </div>
-        </td>
-        <td><span style="font-size:12px;color:#3F3F46">${esc(u.department || '未分配部门')}</span>
-          ${u.job_title ? `<small class="account-local-job">${esc(u.job_title)}</small>` : ''}
-        </td>
-        <td>
-          <div style="display:flex;align-items:center;gap:6px">
-            <select class="sort-select-pill" style="padding:2px 8px;font-size:11.5px;font-weight:600" onchange="changeUserRole(${u.id}, this.value)">
-              <option value="user" ${u.role === 'user' ? 'selected' : ''}>普通用户</option>
-              <option value="dept_admin" ${u.role === 'dept_admin' ? 'selected' : ''}>部门管理员</option>
-              <option value="super_admin" ${u.role === 'super_admin' ? 'selected' : ''}>系统超管</option>
-            </select>
-          </div>
-        </td>
-        <td>${statusPill}</td>
-        <td style="text-align:right">
-          <div class="table-action-btns" style="justify-content:flex-end">
-            <button class="btn-table-action" type="button" onclick="openEditAccountProfile(${u.id})">编辑资料</button>
-            <button class="btn-table-action" style="color:#ef4444" onclick="deleteUser(${u.id})" title="移除此人员系统权限">移除</button>
-          </div>
-        </td>
-      </tr>
-    `;
-  }).join('');
 }
 
 function openResetPasswordModal(userId) {
@@ -6103,8 +6034,8 @@ document.addEventListener('keydown', (e) => {
 
 
 </script>
-<script src="/static/portal.js?v=20261123-daily-schedule"></script>
-<script src="/static/operations.js?v=20261123-daily-schedule"></script>
+<script src="/static/portal.js?v=20261123-permission-tabs"></script>
+<script src="/static/operations.js?v=20261123-permission-tabs"></script>
 <script src="/static/robot-drag.js?v=20261108"></script>
 </body>
 </html>

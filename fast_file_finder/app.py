@@ -3998,7 +3998,7 @@ def preview_data(file_id: int,request: Request,sheet: str=Query(default='',max_l
 # ============================================================
 
 @app.get("/api/system/permissions")
-def get_system_permissions(request: Request) -> dict[str, Any]:
+def get_system_permissions(request: Request, include_daily: bool = True) -> dict[str, Any]:
     _require_super_admin(request)
     with db_session() as conn:
         directory = feishu_integration.directory_snapshot(conn)
@@ -4043,7 +4043,7 @@ def get_system_permissions(request: Request) -> dict[str, Any]:
         "ok": True,
         "feishu_config": {"configured": feishu_integration.configured()},
         "directory": directory,
-        "feishu_daily": feishu_daily.status(sys.modules[__name__]) if directory['source'] == 'feishu' else None,
+        "feishu_daily": feishu_daily.status(sys.modules[__name__]) if include_daily and directory['source'] == 'feishu' else None,
         "users": users,
         "summary": {
             "total_users": len(users),

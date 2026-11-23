@@ -276,7 +276,6 @@ function wireFeishuDailyRecipient(daily, members) {
       const result = await api('/api/system/feishu/daily/recipient', {
         method:'PUT', body:{type:kind, id, expected_id:saved?.id || '', revision:daily.revision, ...changes},
       });
-      permState.daily = result;
       if (!form.isConnected) return;
       $('feishuDailyPanel').outerHTML = feishuDailyDetails(result, members);
       wireFeishuDailyRecipient(result, members);
@@ -346,127 +345,156 @@ async function loadSyncFeishuTask() {
   }
 }
 
-function loadFeishuPanel() {
-  const panel = $('feishuPanel');
-  if (!panel || currentUser?.role !== 'super_admin') return;
+const memberFilter = { query:'', source:'', department:'', page:1 };
+const memberRoles = {super_admin:'超级管理员', dept_admin:'部门管理员', user:'普通成员'};
+const memberSources = {linked:'飞书 + 平台', feishu:'仅飞书', local:'仅平台'};
+const memberMatchLabels = {
+  review:'待确认关联', conflict:'关联冲突', resync:'待重新同步', no_phone:'手机号不可见',
+  no_account:'待开通', disabled:'账号已停用', inactive:'已离职',
+};
+
+function unifiedMembers(users, members) {
+  const byId = new Map(users.map(user => [user.id, user]));
+  const byFeishu = new Map(users.filter(user => user.feishu_id).map(user => [user.feishu_id, user]));
+  const included = new Set();
+  const rows = members.map(member => {
+    const account = byId.get(member.bound_user_id) || byFeishu.get(member.open_id);
+    if (account) included.add(account.id);
+    return {member, account};
+  });
+  for (const account of users) {
+    if (!included.has(account.id)) rows.push({account});
+  }
+  return rows.map(({member, account}) => {
+    const source = member || account?.feishu_id ? (account ? 'linked' : 'feishu') : 'local';
+    const name = member?.name || account?.display_name || account?.name || '未命名成员';
+    const departments = (member?.department || account?.department || '').split('、').filter(Boolean);
+    const job = member?.job_title || account?.job_title || '';
+    const search = [name, account?.name, account?.phone, member?.phone_tail, ...departments, job].filter(Boolean).join(' ').toLowerCase();
+    return {member, account, source, name, departments, job, search};
+  }).sort((a,b) => a.name.localeCompare(b.name, 'zh-CN'));
+}
+
+function renderMemberPanel() {
   const directory = permState.directory;
-  if (directory.source !== 'feishu') {
-    panel.innerHTML = '<h3>飞书通讯录</h3><p>配置飞书企业应用后即可同步授权范围内的真实成员。</p>';
-    return;
+  const members = unifiedMembers(permState.users, directory.members || []);
+  const departments = [...new Set(members.flatMap(row => row.departments))].sort((a,b) => a.localeCompare(b,'zh-CN'));
+  const connected = directory.source === 'feishu';
+  const panel = $('memberPanel');
+  panel.innerHTML = `<div class="permission-panel-toolbar"><strong>成员名单</strong>
+    <div class="permission-roster-actions">${connected ? '<button id="syncFeishu" class="tree-tool-btn" type="button">同步飞书</button>' : ''}
+      <button id="createMemberAccount" type="button" class="btn-archive-primary">新建平台账号</button></div></div>
+    <div class="permission-roster-filters">
+      <label>查找成员<input type="search" id="memberQuery" placeholder="姓名、手机号或岗位"></label>
+      <label>账号来源<select id="memberSource"><option value="">全部来源</option>
+        ${Object.entries(memberSources).map(([key,label])=>`<option value="${key}">${label}</option>`).join('')}</select></label>
+      <label>部门<select id="memberDept"><option value="">全部部门</option>
+        ${departments.map(dept=>`<option value="${esc(dept)}">${esc(dept)}</option>`).join('')}</select></label>
+    </div>
+    <div class="permission-roster-scroll"><table class="catalog-table permission-members-table"><thead>
+      <tr><th>成员</th><th>账号来源</th><th>部门 / 岗位</th><th>平台角色</th><th>状态</th><th>操作</th></tr>
+      </thead><tbody id="memberRows"></tbody></table></div>
+    <div class="permission-member-footer"><span id="memberCount"></span><div id="memberPaging" hidden>
+      <button type="button" id="memberPrev" class="tree-tool-btn">上一页</button>
+      <button type="button" id="memberNext" class="tree-tool-btn">下一页</button></div></div>
+    <p id="bindingStatus" role="status" aria-live="polite"></p>`;
+  const query = $('memberQuery'), source = $('memberSource'), department = $('memberDept');
+  query.value = memberFilter.query;
+  source.value = memberFilter.source;
+  department.value = departments.includes(memberFilter.department) ? memberFilter.department : '';
+  const pageSize = 25;
+  let visible = [];
+
+  function renderRows() {
+    Object.assign(memberFilter, {query:query.value, source:source.value, department:department.value});
+    const needle = query.value.trim().toLowerCase();
+    const filtered = members.filter(row => (!source.value || source.value === row.source)
+      && (!department.value || row.departments.includes(department.value)) && row.search.includes(needle));
+    const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    memberFilter.page = Math.min(memberFilter.page, pages);
+    visible = filtered.slice((memberFilter.page - 1)*pageSize, memberFilter.page*pageSize);
+    $('memberRows').innerHTML = visible.map(({member:m, account:u, name, source, departments, job}, index) => {
+      const role = u ? `<select aria-label="平台角色" data-role>${Object.entries(memberRoles).map(([k,v])=>
+        `<option value="${k}" ${k === u.role ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '—';
+      const actions = [];
+      if (u) actions.push(['reset','重置密码'], ['status',u.status === 'active' ? '停用账号' : '启用账号']);
+      if (u?.feishu_id) actions.push(['unlink','解除飞书关联']);
+      if (u) actions.push(['delete','移除平台账号']);
+      const candidate = !u && m?.match_status === 'review' && m.local_user_id
+        ? permState.users.find(user => user.id === m.local_user_id) : null;
+      const extra = m && memberMatchLabels[m.match_status];
+      const status = u ? (u.status === 'active' ? '已启用' : '已停用') : (m.active ? '在职' : '已离职');
+      const phone = u?.phone || (m?.phone_tail ? '手机尾号 ' + m.phone_tail : '');
+      return `<tr data-row="${index}"><td><strong>${esc(name)}</strong><small>${esc(phone)}</small></td>
+        <td><span class="member-source" data-source="${source}">${memberSources[source]}</span></td>
+        <td>${esc(departments.join('、') || '—')}<small>${esc(job)}</small></td><td>${role}</td>
+        <td>${status}${extra && status !== extra ? `<small>${esc(extra)}</small>` : ''}${candidate ? `<small>候选账号 · ${esc(candidate.name)}</small>` : ''}</td>
+        <td><div class="permission-roster-actions">${u ? '<button type="button" class="tree-tool-btn" data-action="edit">编辑资料</button>' : ''}
+          ${candidate ? '<button type="button" class="tree-tool-btn" data-action="bind">确认关联</button>' : ''}
+          ${!u && m?.active && m.match_status === 'no_account' ? '<button type="button" class="tree-tool-btn" data-action="create">开通账号</button>' : ''}
+          ${actions.length ? `<select data-more aria-label="更多账号操作"><option value="">更多操作</option>${actions.map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select>` : ''}
+        </div></td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="permission-roster-empty">没有符合条件的成员</td></tr>';
+    $('memberCount').textContent = `共 ${filtered.length} 位成员` + (pages > 1 ? ` · 第 ${memberFilter.page} / ${pages} 页` : '');
+    $('memberPaging').hidden = pages <= 1;
+    $('memberPrev').disabled = memberFilter.page <= 1;
+    $('memberNext').disabled = memberFilter.page >= pages;
   }
 
-  const members = directory.members;
-  const summary = directory.summary;
-  const accounts = new Map(permState.users.map(user => [user.id, user]));
-  const roleNames = {super_admin:'超级管理员', dept_admin:'部门管理员', user:'普通成员'};
-  const departments = [...new Set(members.flatMap(member => member.department?.split('、') || []).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  const labels = {matched:'已核验', no_phone:'手机号不可见', no_account:'待开通平台账号',
-    conflict:'号码或关联冲突', disabled:'平台账号已停用', inactive:'飞书成员不可用',
-    review:'等待确认关联', resync:'待重新同步'};
-  const pending = members.filter(member => member.active && member.match_status === 'no_phone').length;
-  panel.innerHTML = `<div class="grant-heading">
-    <div><h3>飞书通讯录</h3><p>${directory.last_sync ? `最近同步 ${esc(portalMonitorTime(directory.last_sync))}` : '尚未同步'}
-      · ${directory.coverage === 'specified' ? '按飞书指定的成员或部门同步' : '显示当前飞书应用授权范围内的人员'}</p></div>
-    <button id="syncFeishu" type="button" class="btn-archive-primary">同步飞书</button>
-  </div>
-  <div class="permission-roster-metrics">
-    <span><strong>${summary.total}</strong> 飞书成员</span>
-    <span><strong>${summary.active}</strong> 在职成员</span>
-    <span><strong>${summary.departments}</strong> 已授权部门</span>
-    <span><strong>${summary.matched}</strong> 已核验平台账号</span>
-  </div>
-  <div id="rosterFeishuTaskHost"></div>
-  ${pending ? `<p class="grant-warning">${pending} 位在职成员的手机号不可见，请检查飞书的手机号字段权限。</p>` : ''}
-  <div class="permission-roster-filters">
-    <label>查找成员<input id="feishuMemberSearch" type="search" placeholder="姓名、岗位、账号或手机号尾号"></label>
-    <label>飞书部门<select id="feishuDepartmentFilter"><option value="">全部部门</option>
-      ${departments.map(dept => `<option value="${esc(dept)}">${esc(dept)}</option>`).join('')}</select></label>
-  </div>
-  <div class="permission-roster-scroll"><table class="catalog-table permission-feishu-table">
-    <thead><tr><th>飞书成员</th><th>飞书部门</th><th>飞书岗位</th><th>平台账号</th><th>操作</th></tr></thead>
-    <tbody id="feishuMatchRows"></tbody></table></div>
-  <p id="feishuMatchCount" class="permission-roster-count"></p>
-  <p id="bindingStatus" role="status" aria-live="polite"></p>`;
-  if (currentNavMode === 'permission') mountFeishuDailyTask($('rosterFeishuTaskHost'), permState.daily, members);
-
-  const render = () => {
-    const query = $('feishuMemberSearch').value.trim().toLowerCase();
-    const department = $('feishuDepartmentFilter').value;
-    const rows = members.filter(member => {
-      const local = accounts.get(member.local_user_id || member.bound_user_id);
-      return (!department || member.department.split('、').includes(department))
-        && [member.name, member.department, member.job_title, member.phone_tail, local?.display_name, local?.name]
-          .some(value => value?.toLowerCase().includes(query));
-    });
-    $('feishuMatchRows').innerHTML = rows.slice(0, 100).map((member, index) => {
-      const local = accounts.get(member.local_user_id || member.bound_user_id);
-      const bound = accounts.get(member.bound_user_id);
-      const matchLabel = labels[member.match_status] || '待同步';
-      const tag = bound && member.match_status !== 'matched' && currentUser.demo_mode
-        ? '演示关联 · ' + matchLabel : matchLabel;
-      const localName = local?.display_name || local?.name;
-      const account = local && bound && local.id !== bound.id
-        ? `候选 ${localName} · 当前关联 ${roleNames[bound.role] || '平台账号'}`
-        : bound ? roleNames[bound.role] || '已关联平台账号' : localName || '—';
-      const review = member.match_status === 'review' && member.local_user_id;
-      let action = '';
-      if (local) action += `<button type="button" class="tree-tool-btn" data-edit-match-user="${local.id}">编辑账号</button>`;
-      if (review) {
-        action += `<button type="button" class="tree-tool-btn" data-confirm-feishu="${esc(member.open_id)}"
-          data-user-id="${member.local_user_id}">确认关联</button>`;
-      } else if (bound) {
-        action += `<button type="button" class="tree-tool-btn" data-unlink-feishu="${bound.id}">解除关联</button>`;
-      } else if (member.active && member.match_status === 'no_account') {
-        action += `<button type="button" class="tree-tool-btn" data-create-match-user="${index}">新建平台账号</button>`;
-      }
-      return `<tr><td><strong>${esc(member.name)}</strong><small>${esc(member.phone_tail ? '手机尾号 ' + member.phone_tail : '手机号不可见')}</small></td>
-        <td>${esc(member.department || '—')}</td><td>${esc(member.job_title || '—')}</td>
-        <td><span class="feishu-match-status ${member.match_status === 'matched' ? 'matched' : ''}">${esc(tag)}</span><small>${esc(account)}</small></td>
-        <td><div class="permission-roster-actions">${action}</div></td></tr>`;
-    }).join('') || `<tr><td colspan="5" class="permission-roster-empty">${members.length ? '没有符合条件的成员' : '当前尚无同步成员'}</td></tr>`;
-    $('feishuMatchCount').textContent = rows.length > 100 ? `共 ${rows.length} 位，显示前 100 位` : `共 ${rows.length} 位`;
-    $('feishuMatchRows').querySelectorAll('[data-create-match-user]').forEach(button => {
-      button.onclick = () => openCreateUserModal(rows[Number(button.dataset.createMatchUser)]);
-    });
-    $('feishuMatchRows').querySelectorAll('[data-edit-match-user]').forEach(button => {
-      button.onclick = () => openEditAccountProfile(Number(button.dataset.editMatchUser));
-    });
-    $('feishuMatchRows').querySelectorAll('[data-confirm-feishu], [data-unlink-feishu]').forEach(button => {
-      button.onclick = async () => {
-        const unlink = Boolean(button.dataset.unlinkFeishu);
-        const userId = Number(button.dataset.unlinkFeishu || button.dataset.userId);
-        const prompt = unlink ? '解除这位成员的飞书登录关联？' : '确认关联到同手机号的平台账号？';
-        if (!confirm(prompt)) return;
-        button.disabled = true;
-        try {
-          await api('/api/system/feishu/bind', {method:'POST', body:{user_id:userId, open_id:button.dataset.confirmFeishu || ''}});
-          toast(unlink ? '关联已解除' : '关联已生效');
-          await loadPermissionOverview();
-        } catch (error) {
-          $('bindingStatus').textContent = error.message;
-          button.disabled = false;
-        }
-      };
-    });
+  async function act(control, action) {
+    const {member, account} = visible[Number(control.closest('tr').dataset.row)];
+    if (action === 'edit') return openEditAccountProfile(account.id);
+    if (action === 'create') return openCreateUserModal(member);
+    if (action === 'reset') return openResetPasswordModal(account.id);
+    if (action === 'delete') return deleteUser(account.id);
+    if (action === 'status') return toggleUserStatus(account.id);
+    if (action === 'role') return changeUserRole(account.id, control.value);
+    const unlink = action === 'unlink';
+    if (!confirm(unlink ? '解除这个账号的飞书登录关联？' : '确认关联到该候选平台账号？')) return;
+    control.disabled = true;
+    try {
+      await api('/api/system/feishu/bind', {method:'POST', body:{
+        user_id:unlink ? account.id : member.local_user_id, open_id:unlink ? '' : member.open_id}});
+      toast(unlink ? '关联已解除' : '关联已生效');
+      await loadPermissionOverview();
+    } catch (error) {
+      $('bindingStatus').textContent = error.message;
+      control.disabled = false;
+    }
+  }
+  $('memberRows').onclick = event => {
+    const control = event.target.closest('button[data-action]');
+    if (control) act(control, control.dataset.action);
   };
-  $('feishuMemberSearch').oninput = render;
-  $('feishuDepartmentFilter').onchange = render;
-  $('syncFeishu').onclick = async () => {
-    const button = $('syncFeishu');
+  $('memberRows').onchange = event => {
+    const control = event.target;
+    if (control.matches('[data-role]')) return act(control, 'role');
+    if (!control.matches('[data-more]') || !control.value) return;
+    const action = control.value;
+    control.value = '';
+    act(control, action);
+  };
+  $('createMemberAccount').onclick = () => openCreateUserModal();
+  if (connected) $('syncFeishu').onclick = async event => {
+    const button = event.currentTarget;
     button.disabled = true;
-    $('bindingStatus').textContent = '正在读取飞书通讯录并校验平台账号…';
+    $('bindingStatus').textContent = '正在同步飞书通讯录…';
     try {
       const result = await api('/api/system/feishu/sync', {method:'POST', timeoutMs:180000});
-      toast(`已同步 ${result.users} 位成员，核验 ${result.matched} 个平台账号`);
+      toast(`已同步 ${result.users} 位成员`);
       await loadPermissionOverview();
     } catch (error) {
       $('bindingStatus').textContent = error.message;
       button.disabled = false;
     }
   };
-  render();
+  query.oninput = source.onchange = department.onchange = () => {memberFilter.page = 1; renderRows();};
+  $('memberPrev').onclick = () => {memberFilter.page--; renderRows();};
+  $('memberNext').onclick = () => {memberFilter.page++; renderRows();};
+  renderRows();
 }
+
+
 
 function openEditAccountProfile(userId) {
   const user = permState.users.find(member => member.id === userId);
