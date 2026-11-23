@@ -20,7 +20,13 @@ python -m compileall -q fast_file_finder
 pytest -q fast_file_finder/tests
 ```
 
-修改前端 JavaScript 后，应至少执行浏览器实际操作回归；当前 CI 会检查 Python 编译与后端测试，但不能替代浏览器兼容性验证。
+修改前端 JavaScript 后，执行无第三方依赖的前端回归测试，并在浏览器验证受影响流程：
+
+```bash
+node --test fast_file_finder/tests/*.test.cjs
+```
+
+工作区或预览器改动需覆盖文件切换、分页/工作表恢复、关闭后台标签、审批详情打开文件和会话失效。当前 CI 会检查 Python 编译与后端测试，但不能替代浏览器兼容性验证。
 
 ## 3. 内测前检查
 

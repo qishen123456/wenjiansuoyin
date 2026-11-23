@@ -43,7 +43,7 @@ services:
       # 且索引里存的是文件绝对路径；容器内换路径会查不到已有索引、预览也找不到文件。
       FILE_ROOT: /opt/wenjiansuoyin/网盘模拟数据
       INDEX_DB_PATH: /app/data/file_index.db
-      ALLOWED_EXTENSIONS: ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods,.ppt,.pptx,.png,.jpg,.jpeg,.webp"
+      ALLOWED_EXTENSIONS: ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.pdf,.html,.htm"
       APP_ACCESS_TOKEN: ""
       AUTH_REQUIRED: "true"
       DIRECTORY_ACL_ENABLED: "true"

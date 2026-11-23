@@ -154,7 +154,7 @@ function updatePortalStatus(data) {
   document.querySelectorAll('[data-scan-button]').forEach(button => { button.disabled = !!data.running || (!!currentUser?.directory_acl_enabled && currentUser.role !== 'super_admin'); });
   portalText('indexBtn', data.running ? '正在刷新…' : '开始刷新');
   ['sidebarStatusDot', 'portalHomeStatusDot'].forEach(id => {
-    $(id).style.background = warning ? '#f79009' : data.root_configured ? '#12b76a' : '#98a2b3';
+    $(id).style.background = warning ? '#f79009' : data.root_configured ? '#12b76a' : '#9ea397';
   });
   if (data.phase === 'scoped') {
     portalText('portalHomeIndexStatus', `当前账号可访问 ${fmtNumber(data.indexed_files)} 份文件`);
@@ -197,13 +197,13 @@ function renderPortalTrend(months) {
   const valueLabel = value => value >= 10000 ? `${(value/10000).toFixed(value%10000 ? 1 : 0)}万` : fmtNumber(value);
   el.innerHTML = `<div class="trend-readout" aria-live="polite"><span id="portalTrendMonth"></span><strong id="portalTrendValue"></strong><span class="trend-current-note hidden" id="portalTrendPartial">本月进行中</span><select id="portalTrendMonthPicker" class="trend-month-picker" aria-label="选择月份查看数量">${entries.map((item,index)=>`<option value="${index}">${esc(item.month.replace('-','.'))}</option>`).join('')}</select></div>
     <svg viewBox="0 0 640 164" preserveAspectRatio="xMidYMid meet" role="group" aria-label="月度文件分布，聚焦月份可查看数量">
-      <defs><linearGradient id="portalTrendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7c9fff" stop-opacity=".22"/><stop offset="100%" stop-color="#7c9fff" stop-opacity=".01"/></linearGradient></defs>
-      ${[0,.5,1].map(ratio => { const y=bottom-ratio*(bottom-top);return `<path d="M${left},${y}H${right}" stroke="#a9bedb12" stroke-dasharray="${ratio ? '3 5' : '0'}"/><text class="trend-y-label" x="34" y="${y+3}" text-anchor="end" fill="#8e9eb9" font-size="9">${valueLabel(ceiling*ratio)}</text>`; }).join('')}
+      <defs><linearGradient id="portalTrendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--chart-primary)" stop-opacity=".22"/><stop offset="100%" stop-color="var(--chart-primary)" stop-opacity=".01"/></linearGradient></defs>
+      ${[0,.5,1].map(ratio => { const y=bottom-ratio*(bottom-top);return `<path d="M${left},${y}H${right}" stroke="#a8c3ae12" stroke-dasharray="${ratio ? '3 5' : '0'}"/><text class="trend-y-label" x="34" y="${y+3}" text-anchor="end" fill="#999f92" font-size="9">${valueLabel(ceiling*ratio)}</text>`; }).join('')}
       <path d="M${points[0].x},${bottom} ${path.replace(/^M/,'L')} L${points[points.length-1].x},${bottom} Z" fill="url(#portalTrendFill)"/>
-      <path d="${solid}" fill="none" stroke="#85a8ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-      ${dashed ? `<path d="${dashed}" fill="none" stroke="#a7bceb" stroke-width="1.8" stroke-dasharray="4 5" stroke-linecap="round" vector-effect="non-scaling-stroke"/>` : ''}
+      <path d="${solid}" fill="none" stroke="var(--chart-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+      ${dashed ? `<path d="${dashed}" fill="none" stroke="var(--chart-secondary)" stroke-width="1.8" stroke-dasharray="4 5" stroke-linecap="round" vector-effect="non-scaling-stroke"/>` : ''}
       <path class="trend-cursor" id="portalTrendCursor" d="M${points[points.length-1].x},${top}V${bottom}"/>
-      ${points.map((point,index) => `<g class="trend-month-target" data-month-index="${index}" tabindex="0" role="button" aria-label="${esc(entries[index].month)}，${fmtNumber(entries[index].count)} 份${entries[index].month===currentMonth ? '，本月进行中' : ''}" aria-pressed="${index===points.length-1}"><rect x="${Math.max(left-9,point.x-(right-left)/Math.max(1,points.length-1)/2)}" y="${top-3}" width="${Math.min(52,(right-left)/Math.max(1,points.length-1))}" height="${bottom-top+12}" fill="transparent"/><circle class="trend-focus-ring" cx="${point.x}" cy="${point.y}" r="9"/><circle class="trend-point" cx="${point.x}" cy="${point.y}" r="3.5"/>${labels.has(index) ? `<text class="trend-axis-label ${index===0 || index===points.length-1 ? 'edge' : 'middle'}" x="${point.x}" y="156" text-anchor="${index===0 ? 'start' : index===points.length-1 ? 'end' : 'middle'}" fill="#91a1bd" font-size="9.5">${esc(entries[index].month.replace('-','.'))}</text>` : ''}</g>`).join('')}
+      ${points.map((point,index) => `<g class="trend-month-target" data-month-index="${index}" tabindex="0" role="button" aria-label="${esc(entries[index].month)}，${fmtNumber(entries[index].count)} 份${entries[index].month===currentMonth ? '，本月进行中' : ''}" aria-pressed="${index===points.length-1}"><rect x="${Math.max(left-9,point.x-(right-left)/Math.max(1,points.length-1)/2)}" y="${top-3}" width="${Math.min(52,(right-left)/Math.max(1,points.length-1))}" height="${bottom-top+12}" fill="transparent"/><circle class="trend-focus-ring" cx="${point.x}" cy="${point.y}" r="9"/><circle class="trend-point" cx="${point.x}" cy="${point.y}" r="3.5"/>${labels.has(index) ? `<text class="trend-axis-label ${index===0 || index===points.length-1 ? 'edge' : 'middle'}" x="${point.x}" y="156" text-anchor="${index===0 ? 'start' : index===points.length-1 ? 'end' : 'middle'}" fill="#9ca295" font-size="9.5">${esc(entries[index].month.replace('-','.'))}</text>` : ''}</g>`).join('')}
     </svg><div class="trend-footnote">${partial ? '本月尚未结束，虚线表示截至今天的数量。' : '按文件最后修改日期归集。'}悬停或聚焦月份查看明细。</div>`;
   let selected=entries.length-1;
   const showMonth = index => {
@@ -247,7 +247,7 @@ function renderPortalOverview(data) {
   $('portalDeptProgress').style.width = `${departments.length ? active / departments.length * 100 : 0}%`;
   portalText('portalTodayDescription', `共 +${fmtNumber(data.today_added || 0)} 份 · 覆盖 ${fmtNumber(active)} 个业务域`);
   const distribution = data.ext_distribution || [];
-  const colors = ['#7aa2ff', '#4c74d9', '#2f4c9e', '#8c9dc4', '#65759b', '#465777'];
+  const colors = ['#98b39c', '#6b8d78', '#466854', '#b5b99b', '#8f947c', '#626b5c'];
   $('portalFormatBar').innerHTML = distribution.map((item, index) => `<span style="flex:${Math.max(0, Number(item.count) || 0)};background:${colors[index % colors.length]}" title="${esc(item.ext)} · ${fmtNumber(item.count)} 份"></span>`).join('');
   $('portalFormatLegend').innerHTML = distribution.length ? distribution.slice(0, 3).map(item => `<span>${esc(item.ext.replace('.', '').toUpperCase())} ${data.total_files ? Math.round(item.count / data.total_files * 100) : 0}%</span>`).join('') : '<span>暂无格式数据</span>';
   const sorted = [...departments].sort((a, b) => b.today_added - a.today_added || b.total_files - a.total_files).slice(0, 6);

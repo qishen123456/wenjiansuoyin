@@ -1,4 +1,4 @@
-"""Bounded image/slide previews, rendered in a timed subprocess and served via ACL routes."""
+"""Bounded image, slide and PDF previews served as pixels through ACL routes."""
 import hashlib
 import json
 import os
@@ -15,7 +15,8 @@ from fastapi import HTTPException
 
 IMAGE_EXTENSIONS={'.png','.jpg','.jpeg','.webp'}
 SLIDE_EXTENSIONS={'.ppt','.pptx'}
-EXTENSIONS=IMAGE_EXTENSIONS|SLIDE_EXTENSIONS
+PDF_EXTENSIONS={'.pdf'}
+EXTENSIONS=IMAGE_EXTENSIONS|SLIDE_EXTENSIONS|PDF_EXTENSIONS
 _gate=threading.BoundedSemaphore(1)
 MAX_SOURCE=32*1024*1024
 MAX_PAGES=100
@@ -36,8 +37,8 @@ def _prune(folder,active):
 
 
 def render(path,cache_root,page=1):
-    if path.suffix.lower() not in EXTENSIONS:raise HTTPException(415,'此格式不支持图片或幻灯片预览。')
-    if path.stat().st_size>MAX_SOURCE:raise HTTPException(413,'图片与 PPT 预览最多支持 32 MB 原文件。')
+    if path.suffix.lower() not in EXTENSIONS:raise HTTPException(415,'此格式不支持图片、PDF 或幻灯片预览。')
+    if path.stat().st_size>MAX_SOURCE:raise HTTPException(413,'图片、PDF 与 PPT 预览最多支持 32 MB 原文件。')
     if path.stat().st_size==0:raise HTTPException(422,'空文件无法预览。')
     if not 1<=page<=MAX_PAGES:raise HTTPException(422,'仅预览前 100 页。')
     key=_key(path);folder=cache_root/'media_previews';folder.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -82,8 +83,10 @@ def _worker(path,target,page):
             image.thumbnail((1920,1920));image.save(target/'page-1.png','PNG')
         data={'kind':'image','page_count':1,'truncated':False}
     else:
-        pdf=target/'source.pdf'
-        if not pdf.exists():
+        # PDFs go directly to the existing bounded rasterizer. Never serve the
+        # original document or activate its links, scripts or embedded files.
+        pdf=path if ext in PDF_EXTENSIONS else target/'source.pdf'
+        if ext not in PDF_EXTENSIONS and not pdf.exists():
             if ext=='.pptx':
                 with zipfile.ZipFile(path) as archive:
                     if len(archive.infolist())>20000 or sum(x.file_size for x in archive.infolist())>128*1024*1024:
@@ -118,7 +121,11 @@ def _worker(path,target,page):
                 local.unlink(missing_ok=True);shutil.rmtree(profile,ignore_errors=True)
             if not pdf.is_file() or pdf.stat().st_size>128*1024*1024:raise ValueError('文稿转换失败或输出过大。')
         import pypdfium2 as pdfium
-        with pdfium.PdfDocument(pdf) as document:
+        try:
+            document = pdfium.PdfDocument(pdf)
+        except Exception as exc:
+            raise ValueError('无法打开 PDF：文件可能损坏或已加密，请检查后重试。') from exc
+        with document:
             count=min(len(document),MAX_PAGES)
             if not 1<=page<=count:raise ValueError('页码超出预览范围。')
             slide=document[page-1]
@@ -129,7 +136,7 @@ def _worker(path,target,page):
                 try:bitmap.to_pil().convert('RGB').save(target/f'page-{page}.png','PNG')
                 finally:bitmap.close()
             finally:slide.close()
-            data={'kind':'slides','page_count':count,'truncated':len(document)>MAX_PAGES}
+            data={'kind':'pdf' if ext in PDF_EXTENSIONS else 'slides','page_count':count,'truncated':len(document)>MAX_PAGES}
     (target/'manifest.json').write_text(json.dumps(data),encoding='utf-8')
 
 

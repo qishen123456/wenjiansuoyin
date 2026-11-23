@@ -1,0 +1,23 @@
+/* Shared palette: pine, warm stone and paper. Keep brand colors here. */
+:root {
+  --canvas: #eeede8;
+  --surface: #fffefa;
+  --surface-subtle: #f4f4ee;
+  --surface-hover: #edf2ed;
+  --chrome: #e7e8e0;
+  --ink: #292d29;
+  --ink-secondary: #465047;
+  --muted: #5d675e;
+  --subtle: #626b61;
+  --faint: #b8bdb2;
+  --line: #dddfd7;
+  --line-strong: #c8cec4;
+  --line-focus: #6c8c75;
+  --brand: #285649;
+  --brand-hover: #1e443a;
+  --brand-subtle: #edf2ed;
+  --brand-ring: rgb(40 86 73 / 14%);
+  --chart-primary: #98b39c;
+  --chart-secondary: #b7c6ad;
+  --chart-muted: #b8c0b6;
+}

@@ -43,6 +43,7 @@ import scan_pipeline
 import limited_preview
 import file_management
 import media_preview
+import html_preview
 import feishu_integration
 import sys
 from collections import OrderedDict
@@ -166,7 +167,7 @@ logger = logging.getLogger("file_finder")
 logging.getLogger("uvicorn.access").addFilter(governance.RedactQueryStringFilter())
 ALLOWED_EXTENSIONS = {
     x.strip().lower() if x.strip().startswith(".") else "." + x.strip().lower()
-    for x in os.getenv("ALLOWED_EXTENSIONS", ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods,.ppt,.pptx,.png,.jpg,.jpeg,.webp").split(",")
+    for x in os.getenv("ALLOWED_EXTENSIONS", ".xlsx,.xls,.xlsm,.xlsb,.csv,.tsv,.ods,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.pdf,.html,.htm").split(",")
     if x.strip()
 }
 AI_BASE_URL = os.getenv("AI_BASE_URL", "").rstrip("/")
@@ -1042,6 +1043,12 @@ def workbench_html_alias() -> str:
 @app.get("/guide.html", response_class=HTMLResponse, include_in_schema=False)
 def guide_page() -> str:
     return _read_static_html("guide.html")
+
+
+@app.get("/showcase", response_class=HTMLResponse, include_in_schema=False)
+def showcase_page() -> str:
+    """Public interactive demo using synthetic, browser-local state."""
+    return _read_static_html("showcase.html")
 
 
 @app.get("/api/health")
@@ -3864,6 +3871,12 @@ def preview_data(file_id: int,request: Request,sheet: str=Query(default='',max_l
                  page: int=Query(default=1,ge=1),page_size: int=Query(default=100,ge=1,le=200)):
     if AUTH_REQUIRED or DIRECTORY_ACL_ENABLED:_require_user(request)
     info,path=_get_indexed_file(file_id)
+    if path.suffix.lower() in html_preview.EXTENSIONS:
+        if page != 1:
+            raise HTTPException(422, 'HTML 预览只有一页。')
+        data = html_preview.render(path)
+        return JSONResponse({**data, 'ok':True, 'file_id':file_id, 'name':info['name'], 'page':1},
+                            headers={'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff'})
     if path.suffix.lower() in media_preview.EXTENSIONS:
         data, asset = media_preview.render(path, DB_PATH.parent, page)
         return JSONResponse({**data, 'ok':True, 'name':info['name'], 'page':page,

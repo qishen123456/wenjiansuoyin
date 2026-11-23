@@ -24,6 +24,8 @@ docker compose up -d --build
 
 打开 http://127.0.0.1:8080，点“建立 / 更新索引”，然后搜索。生产服务器部署、跨架构构建、令牌与挂载权限见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)。
 
+向客户介绍产品时，打开 http://127.0.0.1:8080/showcase：独立交互演示工作台，无需登录。在同一页体验上传、文件更新与历史副本、辅助找文件、多格式阅读、归档、审批、角色配置与演示状态快照。所有修改只留在当前页面内存，刷新或重置后清除，不调用正式业务 API。PDF/HTML 案例为公开模拟文档；AI 区是本地文件名/标签匹配，不调用外部模型。进入完整系统后才使用原有账号权限与真实业务功能。主系统顶部的“演示总览”可随时返回。
+
 也可以不走 Docker，直接装 Python 依赖（**需要 Python 3.10+**，代码里 `str | None` 注解由 pydantic 在运行时求值，3.9 会启动失败）：
 
 ```bash
@@ -54,6 +56,8 @@ uvicorn app:app --host 127.0.0.1 --port 8080
 - `fast_file_finder/static/index.html`：检索页与轻量 BI 工作区
 - `fast_file_finder/scan_pipeline.py`：动态多线程目录遍历与有界任务队列
 - `fast_file_finder/limited_preview.py`：服务端限行解析，返回分页数据而非原件字节
+- `fast_file_finder/media_preview.py`：图片、PPT 与 PDF 的有界分页图像预览
+- `fast_file_finder/html_preview.py`：HTML / HTM 静态预览清洗与资源隔离
 - `fast_file_finder/directory_access.py`：应用层用户/部门目录授权、拒绝优先与 SQL 可见视图
 - `fast_file_finder/tests/`：扫描、限行预览、AI、目录 ACL、BI、审批等回归测试
 - `fast_file_finder/demo_data/`：虚构样例工作簿

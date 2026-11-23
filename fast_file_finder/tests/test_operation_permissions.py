@@ -166,8 +166,9 @@ def test_empty_folder_permissions_and_invalid_operations(secure,tmp_path):
 def test_local_open_route_is_retired(secure):
     c,root,add=secure;fid=add();login(c)
     assert c.post(f'/api/file/{fid}/open').status_code==404
-    html=(Path(application.APP_DIR)/'static/index.html').read_text()
-    assert 'openFileLocally' not in html and 'btn-open-local' not in html
+    static_dir = Path(application.APP_DIR) / 'static'
+    client_source = '\n'.join((static_dir / name).read_text() for name in ('index.html', 'app.js'))
+    assert 'openFileLocally' not in client_source and 'btn-open-local' not in client_source
 
 
 def test_replaced_file_link_cannot_cross_read_scope(secure):

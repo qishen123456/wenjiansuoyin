@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="文件资产中心交互演示：使用独立模拟数据，在一页内体验上传、搜索、阅读与协作。">
+  <title>文件资产中心 · 交互演示</title>
+  <link rel="stylesheet" href="/static/theme.css?v=20261112">
+  <link rel="stylesheet" href="/static/showcase.css?v=20261113-interactive">
+  <script src="/static/showcase-model.js?v=20261113-interactive" defer></script>
+  <script src="/static/showcase-documents.js?v=20261113-interactive" defer></script>
+  <script src="/static/showcase.js?v=20261113-interactive" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#workArea">跳到操作区</a>
+  <header class="demo-header">
+    <a class="demo-brand" href="#overview"><span class="brand-mark" aria-hidden="true">▤</span>文件资产中心<span class="brand-caption">交互演示</span></a>
+    <div class="header-actions"><span class="demo-badge">独立演示数据</span><button id="resetDemo" type="button">重置演示</button><a class="system-link" href="/">进入完整系统 ↗</a></div>
+  </header>
+  <div class="demo-layout">
+    <aside class="demo-sidebar">
+      <div class="nav-heading">沿着文件的使用过程体验</div>
+      <nav id="sceneNav" aria-label="演示场景"></nav>
+      <div class="sidebar-note"><strong>这里可以直接操作</strong><p>上传与修改仅保留在当前页面。刷新或重置后恢复初始案例。</p><span>不会修改正式系统文件</span></div>
+    </aside>
+    <main id="workArea" tabindex="-1">
+      <header class="work-heading"><div><div id="sceneEyebrow" class="eyebrow"></div><h1 id="sceneTitle"></h1><p id="sceneDescription"></p></div><button type="button" id="nextScene" class="quiet-button">下一场景 →</button></header>
+      <div id="readerTabs" class="reader-tabs" role="group" aria-label="已打开的文件"></div>
+      <div id="sceneContent"></div>
+      <section id="readerArea" hidden aria-label="文件阅读器"><div class="reader-toolbar"><div><strong id="readerTitle"></strong><span id="readerType"></span></div><button type="button" id="backToScene">返回场景</button></div><div id="readerBody"></div></section>
+      <noscript><p class="notice">请启用 JavaScript 后体验上传、搜索与文件预览。</p></noscript>
+    </main>
+  </div>
+  <div id="demoToast" role="status" class="toast" hidden></div>
+  <dialog id="confirmDialog"><form method="dialog"><h2 id="confirmTitle">重置演示？</h2><p id="confirmText"></p><div class="dialog-actions"><button value="cancel">取消</button><button value="confirm" class="primary">确认</button></div></form></dialog>
+</body>
+</html>

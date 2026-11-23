@@ -1,20 +1,71 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>文件预览</title><style>
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,"Microsoft YaHei",sans-serif;color:#4c5e78;background:#f5f7fb;height:100dvh;display:flex;flex-direction:column}header{display:flex;align-items:center;gap:14px;padding:17px 22px;background:#fff;border-bottom:1px solid #e6ecf5}h1{font-size:14px;margin:0;flex:1;overflow-wrap:anywhere}button,a{border:1px solid #dfe6f2;border-radius:7px;background:#fff;color:#72839e;padding:7px 12px;font:inherit;font-size:11px;cursor:pointer;text-decoration:none}button:disabled{opacity:.4;cursor:default}nav{padding:10px 22px;display:flex;gap:7px;overflow:auto}nav button.active{background:#eaf0ff;color:#4e6dc0;border-color:#bdccf6}.notice{font-size:11px;line-height:1.8;color:#8b9bb3;padding:0 22px 12px}.grid{overflow:auto;flex:1;background:white;border-top:1px solid #e4eaf4}table{border-collapse:collapse;font-size:11px;min-width:100%}th,td{padding:9px 12px;border:1px solid #ecf0f6;min-width:110px;max-width:360px;white-space:pre-wrap;overflow-wrap:anywhere;text-align:left}th{position:sticky;top:0;background:#f0f4fb;color:#8a9ab4;font-weight:500}.row{min-width:45px;color:#9ba7b8;background:#f8fafd}footer{display:flex;gap:12px;align-items:center;justify-content:flex-end;padding:13px 22px;background:white;border-top:1px solid #e4eaf4;font-size:11px}.error{padding:40px;color:#9a7e71;font-size:13px}.watermark{position:fixed;pointer-events:none;inset:0;z-index:5;display:grid;grid-template-columns:repeat(3,1fr);align-content:space-around;opacity:.055;overflow:hidden}.watermark span{transform:rotate(-24deg);font-size:15px;text-align:center;white-space:nowrap}@media(max-width:650px){header{flex-wrap:wrap}h1{flex-basis:65%}footer{gap:8px;padding:10px}}
-</style></head><body><header><a href="/">返回文件中心</a><h1 id="title">正在读取文件…</h1><button id="retry">刷新预览</button></header><nav id="sheets"></nav><div id="notice" class="notice">服务端分页预览，仅返回当前页数据。</div><main class="grid" id="grid" aria-live="polite"></main><footer><span id="info"></span><button id="prev">上一页</button><span id="page"></span><button id="next">下一页</button></footer><div id="watermark" class="watermark" aria-hidden="true"></div><script>
-const id=new URLSearchParams(location.search).get('id');let sheet='',page=1,busy=false;
-const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function load(){if(busy||!id)return;busy=true;$('prev').disabled=$('next').disabled=true;$('grid').innerHTML='<div class="error">正在读取当前页…</div>';
- try{const token=sessionStorage.getItem('fileFinderAccessToken')||'';const response=await fetch(`/api/file/${encodeURIComponent(id)}/preview-data?`+new URLSearchParams({sheet,page,page_size:100}),{headers:token?{'X-App-Token':token}:{}});const d=await response.json();if(!response.ok)throw Error(typeof d.detail==='string'?d.detail:'预览失败，请重新登录或重试');
- if(d.kind){$('title').textContent=d.name;document.title=d.name+' · 文件预览';$('sheets').innerHTML='<button id="zoomMedia">放大</button><button id="rotateLeft">向左旋转</button><button id="rotateRight">向右旋转</button>';
- const response=await fetch(d.asset_url,{headers:token?{'X-App-Token':token}:{}});if(!response.ok){const error=await response.json();throw Error(error.detail||'预览加载失败');}const blob=await response.blob();if(window.previewBlob)URL.revokeObjectURL(window.previewBlob);window.previewBlob=URL.createObjectURL(blob);
- $('grid').innerHTML='<div style="padding:20px;text-align:center;overflow:auto;height:100%"><img id="previewMedia" alt="当前页预览" style="max-width:100%;max-height:100%;object-fit:contain"></div>';$('previewMedia').src=window.previewBlob;let zoom=false;$('zoomMedia').onclick=()=>{zoom=!zoom;const image=$('previewMedia');image.style.maxWidth=zoom?'none':'100%';image.style.maxHeight=zoom?'none':'100%';$('zoomMedia').textContent=zoom?'适应窗口':'放大';};let rotation=0;const rotate=delta=>{rotation=(rotation+delta)%360;$('previewMedia').style.transform=`rotate(${rotation}deg)`;};$('rotateLeft').onclick=()=>rotate(-90);$('rotateRight').onclick=()=>rotate(90);
- $('notice').textContent=d.kind==='slides'?'静态幻灯片预览，不播放动画与视频；字体与排版可能与原件不同。'+(d.truncated?'仅展示前 100 页。':''):'图片已缩放为预览图，原件请按下载权限获取。';$('page').textContent=`第 ${page} / ${d.page_count} 页`;$('info').textContent=d.kind==='slides'?'演示文稿':'图片';$('prev').disabled=page<=1;$('next').disabled=page>=d.page_count;return;}
- sheet=d.sheet;$('title').textContent=d.name;document.title=d.name+' · 文件预览';$('sheets').innerHTML=d.sheets.map((name,index)=>`<button data-sheet="${index}" class="${name===sheet?'active':''}">${esc(name)}</button>`).join('');$('sheets').querySelectorAll('button').forEach(button=>button.onclick=()=>{if(busy)return;sheet=d.sheets[Number(button.dataset.sheet)];page=1;load();});
- $('notice').textContent='仅预览前 10,000 行、100 列，单元格最多 2,000 字符；公式显示已保存的计算值，不执行公式。'+(d.truncated?' 此文件已达到预览范围上限。':'')+' 原文件请回文件中心申请下载。';
- $('grid').innerHTML=`<table><thead><tr><th class="row">行</th>${Array.from({length:d.column_count},(_,i)=>`<th>列 ${i+1}</th>`).join('')}</tr></thead><tbody>${d.rows.map((row,i)=>`<tr><td class="row">${d.start_row+i}</td>${Array.from({length:d.column_count},(_,j)=>`<td>${esc(row[j])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
- $('page').textContent=`第 ${page} 页`;$('info').textContent=`${d.rows_truncated?'已读取前':'共'} ${d.row_count} 行 · ${d.column_count} 列`;$('prev').disabled=page<=1;$('next').disabled=!d.has_more;
- }catch(error){$('grid').innerHTML=`<div class="error">${esc(error.message)}<p>可以点击“刷新预览”重试。</p></div>`;}finally{busy=false;}}
-$('retry').onclick=load;$('prev').onclick=()=>{page--;load();};$('next').onclick=()=>{page++;load();};
-fetch('/api/auth/me').then(r=>r.json()).then(d=>{if(d.user)$('watermark').innerHTML=Array.from({length:12},()=>`<span>${esc(d.user.name+' '+d.user.phone+' · 仅供预览')}</span>`).join('');}).catch(()=>{});
-if(id)load();else $('grid').textContent='缺少文件参数';
-</script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>文件预览 · 文件资产中心</title>
+  <link rel="stylesheet" href="/static/theme.css?v=20261112-pine">
+  <link rel="stylesheet" href="/static/preview.css?v=20261112-document-types">
+  <script src="/static/preview.js?v=20261113-document-types" defer></script>
+</head>
+<body>
+  <header class="reader-shell" id="readerShell">
+    <a class="reader-brand" href="/" aria-label="返回文件资产中心">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h6l2 2h8v12H4z"/><path d="M4 10h16"/></svg>
+      文件资产中心
+    </a>
+    <span>文档阅读</span>
+  </header>
+  <main class="reader" id="reader">
+    <a class="reader-back" id="back" href="/">‹ 返回文件中心</a>
+    <section class="file-heading" aria-labelledby="title">
+      <div class="file-symbol" aria-hidden="true">
+        <svg viewBox="0 0 32 38"><path d="M6 2h13l7 7v26H6z"/><path d="M19 2v8h7M11 17h10M11 22h10M11 27h6"/></svg>
+      </div>
+      <div class="file-identity">
+        <h1 id="title">正在读取文件…</h1>
+        <p class="original-name" id="originalName"></p>
+        <div class="file-meta"><span id="fileType">文档预览</span><span id="permission" role="status">正在读取权限</span></div>
+      </div>
+      <div class="reader-actions">
+        <button id="retry" class="button" type="button">刷新预览</button>
+        <a id="standalone" class="button" target="_blank" rel="noopener" hidden>独立窗口 <span aria-hidden="true">↗</span></a>
+        <button id="download" class="button primary" type="button" disabled>下载原件</button>
+      </div>
+    </section>
+    <p id="actionStatus" class="action-status" role="status" hidden></p>
+    <section class="download-request" id="downloadRequest" aria-labelledby="requestTitle" hidden>
+      <div><h2 id="requestTitle">申请下载原件</h2><p>预览权限不包含原件下载，审批通过后可获取完整文件。</p></div>
+      <form id="requestForm">
+        <label for="downloadReason">下载用途</label>
+        <textarea id="downloadReason" name="reason" maxlength="200" required placeholder="请说明用途，方便管理员审批"></textarea>
+        <p class="form-error" id="requestError" role="alert" hidden></p>
+        <div class="reader-actions"><button class="button primary" id="submitRequest" type="submit">提交申请</button><button class="button" id="cancelRequest" type="button">取消</button></div>
+      </form>
+    </section>
+    <section class="document" aria-label="文件内容">
+      <div class="document-toolbar">
+        <nav id="sheets" class="sheet-tabs" aria-label="工作表"></nav>
+        <div id="mediaTools" class="media-tools" aria-label="页面查看操作" hidden>
+          <button id="zoomMedia" class="button" type="button" aria-pressed="false">放大</button>
+          <button id="rotateLeft" class="button" type="button" aria-label="向左旋转 90 度">向左旋转</button>
+          <button id="rotateRight" class="button" type="button" aria-label="向右旋转 90 度">向右旋转</button>
+        </div>
+        <span class="readonly"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="7" rx="1.5"/><path d="M5.5 7V4a2.5 2.5 0 0 1 5 0v3"/></svg>只读预览</span>
+      </div>
+      <div class="document-content">
+        <div class="grid" id="grid" role="region" aria-label="当前页文件内容" aria-busy="true" tabindex="0">
+          <div class="reader-state"><span class="loading-mark" aria-hidden="true"></span><p>正在读取文件内容…</p></div>
+        </div>
+        <div id="watermark" class="watermark" aria-hidden="true"></div>
+      </div>
+      <footer class="document-footer">
+        <span id="info" role="status">正在准备预览</span>
+        <div class="pagination"><button id="prev" class="button" type="button" disabled>上一页</button><span id="page" aria-live="polite">—</span><button id="next" class="button" type="button" disabled>下一页</button></div>
+      </footer>
+    </section>
+    <div class="preview-note"><span class="note-mark" aria-hidden="true">i</span><p id="notice">仅加载当前页内容，原始文件保持不变。</p></div>
+  </main>
+</body>
+</html>

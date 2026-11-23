@@ -31,7 +31,7 @@ def test_candidate_limit_and_ai_cannot_escape_active_facets(foundation,monkeypat
 
 def test_added_media_formats_filter_search_results(foundation, monkeypatch):
     client, root, add = foundation
-    extensions = {'.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.webp'}
+    extensions = {'.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.webp', '.pdf', '.html', '.htm'}
     monkeypatch.setattr(application, 'ALLOWED_EXTENSIONS', extensions | {'.csv'})
     for extension in extensions:
         add('预览/素材示例' + extension)
