@@ -1,3 +1,5 @@
+import pytest
+
 from test_product_foundation import foundation, login
 import app
 import feishu_integration as feishu
@@ -84,6 +86,80 @@ def test_first_feishu_login_prepares_review_for_administrator_without_a_session(
     client.cookies.clear()
     assert oauth(client, 'ou_first_admin').status_code == 307
     assert client.get('/api/auth/me').json()['user']['role'] == 'super_admin'
+
+
+def test_server_configured_feishu_super_admin_can_sign_in_without_frontend_binding(foundation, monkeypatch):
+    client, _, _ = foundation
+    monkeypatch.setenv('FEISHU_SUPER_ADMIN_OPEN_ID', 'ou_configured_luke')
+    monkeypatch.setenv('FEISHU_SUPER_ADMIN_USER_ID', '1')
+    setup_feishu(monkeypatch, [
+        {'open_id': 'ou_configured_luke', 'name': '卢克', 'department_ids': ['od_ledger']},
+        {'open_id': 'ou_other_luke', 'name': '卢克', 'department_ids': ['0']},
+    ])
+
+    assert oauth(client, 'ou_configured_luke').status_code == 307
+    user = client.get('/api/auth/me').json()['user']
+    assert (user['id'], user['role'], user['name']) == (1, 'super_admin', '卢克')
+    assert user['identity_source'] == 'feishu'
+    client.post('/api/system/feishu/sync').raise_for_status()
+    members = {member['open_id']: member for member in client.get('/api/system/feishu').json()['members']}
+    assert members['ou_configured_luke']['bound_user_id'] == 1
+    assert members['ou_configured_luke']['match_status'] == 'matched'
+    assert members['ou_other_luke']['bound_user_id'] is None
+
+    client.cookies.clear()
+    assert oauth(client, 'ou_other_luke').status_code == 403
+    assert 'ff_session' not in client.cookies
+    assert oauth(client, 'ou_configured_luke').status_code == 307
+
+    client.post('/api/system/feishu/bind', json={'user_id': 1, 'open_id': 'ou_configured_luke'}).raise_for_status()
+    assert client.get('/api/auth/me').status_code == 200
+    monkeypatch.delenv('FEISHU_SUPER_ADMIN_OPEN_ID')
+    monkeypatch.delenv('FEISHU_SUPER_ADMIN_USER_ID')
+    app.init_db()
+    assert client.get('/api/auth/me').status_code == 401
+    assert oauth(client, 'ou_configured_luke').status_code == 403
+    assert login(client)['role'] == 'super_admin'
+
+
+def test_server_super_admin_configuration_cannot_overwrite_existing_link(foundation, monkeypatch):
+    client, _, _ = foundation
+    monkeypatch.setenv('FEISHU_SUPER_ADMIN_OPEN_ID', 'ou_new_luke')
+    monkeypatch.setenv('FEISHU_SUPER_ADMIN_USER_ID', '1')
+    setup_feishu(monkeypatch, [
+        {'open_id': 'ou_new_luke', 'name': '卢克', 'department_ids': ['0']},
+        {'open_id': 'ou_current_admin', 'mobile': '13800100001', 'department_ids': ['0']},
+    ])
+    with app.db_session() as conn:
+        conn.execute("UPDATE system_users SET feishu_id='ou_current_admin', feishu_binding_source='manual' WHERE id=1")
+
+    assert oauth(client, 'ou_new_luke').status_code == 403
+    assert 'ff_session' not in client.cookies
+    assert oauth(client, 'ou_current_admin').status_code == 307
+    assert client.get('/api/auth/me').json()['user']['role'] == 'super_admin'
+
+
+@pytest.mark.parametrize(('user_id', 'member_status'), [
+    (4, {}),
+    (1, {'is_resigned': True}),
+    (1, None),
+])
+def test_server_configuration_requires_existing_super_admin_and_active_feishu_member(
+    foundation, monkeypatch, user_id, member_status,
+):
+    client, _, _ = foundation
+    monkeypatch.setenv('FEISHU_SUPER_ADMIN_OPEN_ID', 'ou_luke')
+    monkeypatch.setenv('FEISHU_SUPER_ADMIN_USER_ID', str(user_id))
+    people = [
+        {'open_id': 'ou_luke', 'name': '卢克', 'department_ids': ['0'], 'status': member_status},
+    ] if member_status is not None else []
+    setup_feishu(monkeypatch, people)
+
+    assert oauth(client, 'ou_luke').status_code == 403
+    assert 'ff_session' not in client.cookies
+    with app.db_session() as conn:
+        assert conn.execute('SELECT count(*) FROM system_users WHERE feishu_id=?', ('ou_luke',)).fetchone()[0] == 0
+        assert conn.execute('SELECT role FROM system_users WHERE id=4').fetchone()[0] == 'user'
 
 
 def test_failed_first_logins_cannot_override_conflicts_or_repeat_the_directory_refresh(foundation, monkeypatch):

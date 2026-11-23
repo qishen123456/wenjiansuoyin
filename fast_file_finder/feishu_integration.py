@@ -206,11 +206,13 @@ def linked_identities(conn, *, demo, user_id=None, open_id=None):
     query = """SELECT u.id, f.name, f.department, coalesce(p.job_title,'') AS job_title
         FROM system_users u JOIN feishu_members f ON u.feishu_id=f.open_id AND f.active=1
         LEFT JOIN feishu_member_profiles p ON p.open_id=f.open_id
-        WHERE u.status='active' AND (
+        WHERE u.status='active'
+          AND (u.feishu_binding_source<>'configured' OR (u.role='super_admin' AND u.id=? AND u.feishu_id=?))
+          AND (
             (p.local_user_id=u.id AND p.match_status='matched')
             OR (? AND u.feishu_binding_source IN ('','manual'))
         )"""
-    params = [demo]
+    params = [*(feishu_identity.configured_super_admin() or (0, '')), demo]
     if user_id is not None:
         query += ' AND u.id=?'
         params.append(user_id)
@@ -436,12 +438,15 @@ def register(app):
         if not isinstance(identity, str) or not identity:
             raise HTTPException(502, '无法读取飞书身份，请检查应用授权。')
         with app.db_session() as conn:
-            recognized = linked_identities(conn, demo=app.DEMO_MODE, open_id=identity)
+            # Server configuration should also match a legacy demo identity without relying on demo mode.
+            admin = feishu_identity.configured_super_admin()
+            legacy_demo = app.DEMO_MODE and (not admin or admin[1] != identity)
+            recognized = linked_identities(conn, demo=legacy_demo, open_id=identity)
         if not recognized:
             _refresh_directory_for_login(app)
         with app.db_session() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            matches = linked_identities(conn, demo=app.DEMO_MODE, open_id=identity)
+            matches = linked_identities(conn, demo=legacy_demo, open_id=identity)
             if len(matches) != 1:
                 return _unmatched_login(conn, identity)
             user_id = next(iter(matches))
@@ -551,7 +556,8 @@ def register(app):
         app._require_super_admin(request)
         with app.db_session() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            target = conn.execute('SELECT id,status FROM system_users WHERE id=?', (body.user_id,)).fetchone()
+            target = conn.execute('SELECT id,status,feishu_id,feishu_binding_source FROM system_users WHERE id=?',
+                                  (body.user_id,)).fetchone()
             if not target:
                 raise HTTPException(404, '本地成员不存在。')
             if not body.open_id:
@@ -559,6 +565,8 @@ def register(app):
                 return {'ok': True}
             if target['status'] != 'active':
                 raise HTTPException(422, '请选择已启用的平台账号。')
+            if target['feishu_binding_source'] == 'configured' and target['feishu_id'] == body.open_id:
+                return {'ok': True}
             member = conn.execute("""SELECT m.active, p.local_user_id, p.match_status
                 FROM feishu_members m LEFT JOIN feishu_member_profiles p ON p.open_id=m.open_id
                 WHERE m.open_id=?""", (body.open_id,)).fetchone()

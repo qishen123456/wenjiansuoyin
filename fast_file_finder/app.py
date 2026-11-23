@@ -668,6 +668,8 @@ def init_db() -> None:
             conn.execute("UPDATE system_users SET phone = '13800100005', password = '123456' WHERE id = 5 AND (phone = '' OR phone IS NULL)")
 
 
+        feishu_identity.revoke_stale_super_admin_links(conn)
+
         # 飞书打通配置预置（可选，默认空）
         feishu_meta = conn.execute("SELECT value FROM app_meta WHERE key = 'feishu_config'").fetchone()
         if not feishu_meta:
